@@ -117,3 +117,15 @@ test('UX09-01 public attachments validate before acceptance, replay safely and w
  }
  assert.equal(d.one('SELECT COUNT(*) n FROM intakes').n,1);
 });
+
+test('BUG-QA-006/007/008 auth and retry audit faults preserve prior state and recovery commits once',async t=>{
+ const a=await setup(t),d=a.domain;
+ const snapshot=table=>d.all('SELECT * FROM '+table);
+ const fault=action=>d.db.exec(`CREATE TEMP TRIGGER reject_auth_retry BEFORE INSERT ON audit WHEN NEW.action='${action}' BEGIN SELECT RAISE(ABORT,'simulated durable audit failure'); END;`);
+ fault('login');const beforeLogin=snapshot('sessions');let r=await a.request('/api/login','OPR','POST',{email:a.users.OPR.email,password:'synthetic-test-password'});assert.equal(r.status,500);assert.equal(r.headers.get('set-cookie'),null);assert.deepEqual(snapshot('sessions'),beforeLogin);assert.equal((await a.request('/api/me','OPR')).status,200);d.db.exec('DROP TRIGGER reject_auth_retry');
+ r=await a.request('/api/login','OPR','POST',{email:a.users.OPR.email,password:'synthetic-test-password'});assert.equal(r.status,200);const rotated=r.headers.get('set-cookie').split(';')[0];assert.notEqual(rotated,a.sessions.OPR);assert.equal((await a.request('/api/me','OPR')).status,401);a.sessions.OPR=rotated;assert.equal((await a.request('/api/me','OPR')).status,200);
+ fault('logout');const count=d.one('SELECT COUNT(*) n FROM sessions').n;r=await a.request('/api/logout','OPR','POST');assert.equal(r.status,500);assert.equal(r.headers.get('set-cookie'),null);assert.equal(d.one('SELECT COUNT(*) n FROM sessions').n,count);assert.equal((await a.request('/api/me','OPR')).status,200);assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='logout'").n,0);d.db.exec('DROP TRIGGER reject_auth_retry');
+ r=await a.request('/api/logout','OPR','POST');assert.equal(r.status,200);assert.match(r.headers.get('set-cookie'),/Max-Age=0/);assert.equal((await a.request('/api/me','OPR')).status,401);assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='logout'").n,1);
+ d.run("INSERT INTO outbox(event_key,state,attempts,next_at,error) VALUES('retry-fault','dead',5,123,'Mock unavailable')");const oid=d.one("SELECT id FROM outbox WHERE event_key='retry-fault'").id;fault('outbox.retry');const beforeRetry=snapshot('outbox');r=await a.request('/api/outbox/'+oid+'/retry','ADM','POST');assert.equal(r.status,500);assert.deepEqual(snapshot('outbox'),beforeRetry);assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='outbox.retry'").n,0);d.db.exec('DROP TRIGGER reject_auth_retry');
+ r=await a.request('/api/outbox/'+oid+'/retry','ADM','POST');assert.equal(r.status,200);assert.equal(d.one('SELECT state FROM outbox WHERE id=?',oid).state,'pending');assert.equal(d.one('SELECT attempts FROM outbox WHERE id=?',oid).attempts,0);assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='outbox.retry'").n,1);assert.equal((await a.request('/api/outbox/'+oid+'/retry','ADM','POST')).status,409);
+});
