@@ -6,3 +6,6 @@
 - SLA menit kerja dan jeda, KB/macro fixture, dashboard, laporan maker-checker dan CSV masked, outbox retry/dedup mock.
 - Uji HTTP produk dan backup SQLite lokal; file aplikasi/deploy legacy dipertahankan.
 - QA/UX independen dan rekonsiliasi PM masih diperlukan. Gap milestone tercatat di docs/DEPLOY.md.
+- Koreksi QA-001/002/003: masking telepon berformat dan proyeksi laporan/CSV, validasi tanggal kalender ketat.
+- Koreksi UX09 prioritas tinggi: field intake merchant/PIC/taksonomi, penyebab resolusi, pratinjau rekonsiliasi lokal dengan sumber eksternal tidak tersedia, draft sementara di memori.
+- Regresi revisi source yang sudah disetujui pada preview/CSV dan upgrade SQLite additive; acceptance browser/QA independen tetap belum disahkan.

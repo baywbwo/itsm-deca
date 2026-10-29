@@ -1,0 +1,31 @@
+
+> dob-itsm-platform@0.1.0 test
+> node --test app/test/*.test.js
+
+✔ AC-001/002/003 intake atomic replay and asynchronous worker (674.114384ms)
+✔ session HttpOnly, RBAC, expiry, CSRF, logout (584.287093ms)
+✔ role matrix denies all unspecified action cells and audits reads (4.774638ms)
+✔ ticket lifecycle triage, concurrent claim, private notes, pause/resume and reports (620.251159ms)
+✔ CSV export period, identity unavailable, injection and fixture exclusion (597.419229ms)
+✔ attachment magic bytes, whitelist, download and access (588.556926ms)
+✔ outbox backoff, dead state, manual retry and deduplicated delivery (2.953667ms)
+✔ SLA Friday across weekend; holidays; CSV dangerous prefixes; scrypt (12.882164ms)
+✔ audit append-only, identity redaction and backup/restore integrity (78.699831ms)
+✔ intake validation, rate limit, security headers and generic unknown login (660.653157ms)
+✔ E-05 revision invalidates reviewed source and rejects stale approval; audit failure rolls back (571.313678ms)
+✔ AC-016 auto-close is atomic, invalidates approved source and emits one outbox event (78.450697ms)
+✔ BUG-QA-001/002 masked projections cover formatted phones, messages, audit, reports and CSV (606.991388ms)
+✔ BUG-QA-003 strict calendar rejects normalization and accepts leap date (588.635564ms)
+✔ UX09-01 intake validates merchant/PIC taxonomy and retains fields through worker and triage (577.39594ms)
+✔ UX09-02 resolution requires cause and failed validation leaves source version intact (570.000111ms)
+✔ UX09-03 preview reconciles source IDs and export count, external absence stays incomplete (575.99455ms)
+✔ UX09-05 approved source revision is draft in preview/export and needs fresh checker sequence (586.711435ms)
+✔ additive ticket schema upgrade preserves existing ticket and intake data (18.236022ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 8145.942102
