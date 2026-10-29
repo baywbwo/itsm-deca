@@ -55,3 +55,59 @@ Risiko implementasi: palet terang menurunkan kontras; pergantian font mengubah w
 Audit ini hanya dokumen; rollback tidak menyentuh database/proses. Untuk delta visual mendatang: stop bila diperlukan, simpan backup sesuai DEPLOY.md, kembali ke archive32695f6 dan restart dengan DB salinan yang sama kompatibel; tidak melakukan downgrade schema, mengembalikan approval atau deploy legacy secara otomatis. Push dapat auto-deploy, sehingga tetap dilarang sebelum integrasi review UIUX+QA delta+PM kompatibilitas/rollback. Tidak push, merge, deploy atau mengubah automation/live.
 
 Gap F1 tetap menurut STATUS_F1.md: SLA pinning/reopen/alerts/auto-escalation, config maker-checker, merge/pagination, dashboard/metrik/manifest/CIF, seluruh matriks akses dan runtime UX yang belum diuji. Revamp visual tidak menutupnya. PM perlu melanjutkan handoff12; task implementasi tetap pending, bukan selesai karena audit sudah dibuat.
+
+## IMPLEMENTASI — menggantikan status dependency audit di atas
+
+Handoff UX12 tersedia dan dibaca penuh pada assignment lanjutan3007c34a. BR12-01..10 diterapkan pada layer presentasi dengan batas review di bawah. Baseline delta639aea3 (source32695f6); branch sama. Tidak ada perubahan business rules/backend/API/schema/permissions/lifecycle. Status implementasi **siap review**, bukan visual PASS atau izin push.
+
+### Changed files dan provenance
+
+- app/public/style.css: token lima warna resmi, primary green/sapphire + hover Eco, border sapphire, nav mint/sapphire aktif dengan weight+indikator, focus3px, font16/metadata14/heading28/24, radius8/12, shell240/190/mobile, header wrap, cards, KPI4/2/1, typography/wrapping/state/component styling.
+- app/public/app.js: data-field pada label untuk grid intake, kelas intake/receipt/knowledge, komposer data-visibility+label status eksplisit mengikuti pilihan dan draft yang dipulihkan. Event select hanya mengubah presentasi. Handler submit/logout/epoch/KB/router tetap.
+- app/test/ui.test.js: assertion komposer internal terlabel dan tetap internal sesudah draft direkonstruksi; suite terarah lama tetap dipakai.
+- Evidence TAP dan dokumen ini. Tidak ada font/image/logo baru, CDN atau CSP diubah. Nunito,system-ui,sans-serif hanya preferensi font; fallback aktual tidak diklaim Nunito. Logo NOT AVAILABLE; nama produk teks biasa. Brand PARTIAL menurut BR12-02/03, diizinkan handoff PM.
+
+### Matriks route/state dan acceptance
+
+| Route/komponen | Implementasi presentasi | Verifikasi / batas |
+|---|---|---|
+| #login | kartu max480 konten, primary penuh, input/alert/fokus jelas | regresi logout/expiry DOM suite; browser NOT RUN |
+| #intake | konten max720, merchant/PIC/type/category grid2→1, native file, receipt mint/token wrap | lost-response/schema retry/draft/file HTTP/DOM lulus; receipt polling tetap notice lama (UX09-07 open) |
+| #tickets/#mine/#triage | toolbar wrap, link judul, row fleksibel→stack, status/SLA teks | query/filter/nav DOM lulus subset; pagination/label rinci lama tetap gap |
+| #ticket/id | detail2:1→1, kartu/meta/riwayat/lampiran, komposer publik vs internal | macro append+RAM/visibility restored/regresi lifecycle lulus; permission backend tetap |
+| #knowledge | search area max720, article75ch, section/badge/error/empty | KB retry/query/filter/stale/empty DOM lulus |
+| #dashboard | metric4→2→1, green accent/sapphire angka, status list | hitungan business rules tidak berubah; browser/overflow NOT RUN |
+| #reports | kartu record/checker/export/preview, warning/error menetap dan period/stale tetap | preview late-response/export/checker HTTP/DOM lulus; nested section existing tetap, sumber eksternal incomplete |
+| #outbox | event wrap, status badge/attempt/retry berizin | auth/retry fault HTTP lulus; tidak ada indikator live palsu |
+| unknown route | heading+nav existing, token global | source retained; browser NOT RUN |
+| semua state | error merah, empty muted, banner mint, disabled readable, focus/reduced-motion | loading/receipt/draft/expiry teks dipertahankan; seluruh state×role tidak dinyatakan teruji |
+
+BR12-01: implemented; kontras final sapphire/green5.41, sapphire/Eco7.50, sapphire/mint10.71, white/sapphire12.02, error/bg6.80 dan warning/bg6.37 (sRGB; lihat hasil hitung final di bawah bila pembulatan berbeda). Link sapphire/white12.02. Selected focus memakai inset sapphire di mint; rail focus putih. Biru hanya border/aksen, bukan normal small text. Disabled #334155/#e2e8f0 dipertahankan. Kontras token tidak membuktikan WCAG/browser.
+BR12-02/03: PARTIAL/fallback tanpa aset rekaan. BR12-04/05/07/08/09: implemented pada route/component yang ada, regressions subset. BR12-06: **NOT RUN**, screenshot320/375/768/1024/1440, keyboard200%, native focus/scroll/zoom memerlukan browser nyata. BR12-10: gap lama tetap terbuka.
+
+### Perintah, output dan reviewer
+
+Node24.22.1. `npm test > docs/evidence/dev-brand-14-suite.tap 2>&1`: exit0,32 PASS/0 FAIL/0 SKIP. Setelah assertion tambahan komposer, `node --test app/test/ui.test.js > docs/evidence/dev-brand-14-ui.tap 2>&1`: exit0,9 PASS/0 FAIL. Tests ini mengeksekusi HTTP/SQLite dan renderer DOM double; bukan screenshot atau layout engine. `node --check app/public/app.js`, `git diff --check` lulus. Tidak perlu tes yang sekadar mengunci string CSS. SHA256 source/output tercatat pada bagian berikut. QA delta dan UIUX visual independen SHA commit baru belum dilakukan.
+
+### Deployment, fixture dan rollback delta
+
+Deployment contract audit di atas tetap. Aset perubahan hanya CSS/ES module yang sudah dilayani server Node; tidak ada endpoint/aset baru, dependency atau migrasi. Legacy index.html/api/deploy unchanged terhadap37a9bba. Push tetap ditahan sampai UIUX+QA+PM merekonsiliasi gate; tidak perlu approval owner ulang setelah gate, tetapi gate belum lulus pada handoff ini.
+
+Tidak menyalakan fixture persisten atau memodifikasi preview-32695f6. Tidak ada URL aktif baru yang bisa dibuktikan terikat SHA ini; browser screenshots belum ada. Blocker konkret review: Browser tab perlu pemetaan yang didukung ke layanan loopback disposable pada environment source, beserta provisioning fixture aman menurut REVIEW.md. Percobaan awal task terdahulu loopback ditolak surface; tidak membuktikan semua browser tidak tersedia. Tidak mengubah jaringan/membuka port publik untuk mengatasinya. Review bisa mulai archive SHA immutable, sementara PM menyelesaikan akses Browser tab yang didukung; preview statis lama bukan bukti login/role/API produk baru.
+
+Rollback visual: stop proses bila mengganti checkout, backup sesuai DEPLOY.md, gunakan archive639aea3/source32695f6 dan restart. Schema tetap; tidak restore approval/DB untuk sekadar mengembalikan CSS. Ini mengembalikan style lama dan menghilangkan label presentasi komposer; tidak menghapus koreksi business rules baseline. Gap F1 pada STATUS_F1.md tetap berlaku; styling bukan penutupan SLA/config/merge/pagination/dashboard/manifest/CIF atau seluruh UX09.
+
+### Hash output final
+
+- f08120fdc1ada894993c2b8cc17436b1acba4ebdda18b31b48281055267d14b8 app/public/style.css
+- 5e9497f002b4634babe0f1a5f2d57cb53acaeb71f6eaa9b95b934a7fbc4fd1f5 app/public/app.js
+- 3f55475f9d560f690cb4b270a4b23177651dcb8a860de09cf768b24082a23f21 docs/evidence/dev-brand-14-ui.tap
+- 3e0263f4d42cf245d3907e9ca898df2f373a67f2e864acf4f3db5415fd83c048 docs/evidence/dev-brand-14-suite.tap
+
+Kontras final terhitung (mengoreksi estimasi naratif bila berbeda):
+- #003571/#04CA02: 5.41:1
+- #003571/#58EA60: 7.64:1
+- #003571/#D5FDC8: 10.71:1
+- #991B1B/#FEE2E2: 6.80:1
+- #92400E/#FEF3C7: 6.37:1
+- #334155/#e2e8f0: 8.40:1
