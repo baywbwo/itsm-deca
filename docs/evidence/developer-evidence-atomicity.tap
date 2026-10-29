@@ -1,0 +1,33 @@
+
+> dob-itsm-platform@0.1.0 test
+> node --test app/test/*.test.js
+
+✔ AC-001/002/003 intake atomic replay and asynchronous worker (655.330667ms)
+✔ session HttpOnly, RBAC, expiry, CSRF, logout (573.65503ms)
+✔ role matrix denies all unspecified action cells and audits reads (4.018829ms)
+✔ ticket lifecycle triage, concurrent claim, private notes, pause/resume and reports (580.463104ms)
+✔ CSV export period, identity unavailable, injection and fixture exclusion (582.523737ms)
+✔ attachment magic bytes, whitelist, download and access (562.068917ms)
+✔ outbox backoff, dead state, manual retry and deduplicated delivery (2.588399ms)
+✔ SLA Friday across weekend; holidays; CSV dangerous prefixes; scrypt (11.941245ms)
+✔ audit append-only, identity redaction and backup/restore integrity (78.025881ms)
+✔ intake validation, rate limit, security headers and generic unknown login (641.513827ms)
+✔ E-05 revision invalidates reviewed source and rejects stale approval; audit failure rolls back (557.773547ms)
+✔ AC-016 auto-close is atomic, invalidates approved source and emits one outbox event (85.643413ms)
+✔ BUG-QA-001/002 masked projections cover formatted phones, messages, audit, reports and CSV (574.900977ms)
+✔ BUG-QA-003 strict calendar rejects normalization and accepts leap date (569.005338ms)
+✔ UX09-01 intake validates merchant/PIC taxonomy and retains fields through worker and triage (562.43242ms)
+✔ UX09-02 resolution requires cause and failed validation leaves source version intact (567.496148ms)
+✔ UX09-03 preview reconciles source IDs and export count, external absence stays incomplete (599.523475ms)
+✔ UX09-05 approved source revision is draft in preview/export and needs fresh checker sequence (592.471978ms)
+✔ additive ticket schema upgrade preserves existing ticket and intake data (16.774533ms)
+✔ BUG-QA-004 evidence mutations atomically roll back audit, invalidation and outbox faults (615.113006ms)
+✔ UX09-01 public attachments validate before acceptance, replay safely and worker rolls back on audit fault (581.602901ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 9151.96047

@@ -9,3 +9,8 @@
 - Koreksi QA-001/002/003: masking telepon berformat dan proyeksi laporan/CSV, validasi tanggal kalender ketat.
 - Koreksi UX09 prioritas tinggi: field intake merchant/PIC/taksonomi, penyebab resolusi, pratinjau rekonsiliasi lokal dengan sumber eksternal tidak tersedia, draft sementara di memori.
 - Regresi revisi source yang sudah disetujui pada preview/CSV dan upgrade SQLite additive; acceptance browser/QA independen tetap belum disahkan.
+
+### Koreksi DEV-F1-11 (lokal, belum dirilis)
+- Atomikkan evidence lampiran/pesan dengan audit, versi sumber, invalidasi approval dan outbox; rollback fault injection.
+- Lengkapi lampiran intake publik dan validasi kontak/judul; worker intake atomik dan replay aman.
+- Tegaskan batas akses satu service desk DOB dan gap F1 yang belum selesai.

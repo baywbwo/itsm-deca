@@ -81,3 +81,39 @@ test('additive ticket schema upgrade preserves existing ticket and intake data',
  const dir=mkdtempSync(join(tmpdir(),'dob-upgrade-')),path=join(dir,'legacy.sqlite');let d=createDomain(path);
  try{d.intake({merchant:'Synthetic',pic:'Synthetic PIC',category:'QRIS',type:'Incident',title:'Existing',description:'Synthetic',contact:'test@example.test'},id());d.processIntakes();d.db.exec('ALTER TABLE tickets DROP COLUMN intake_fields; ALTER TABLE tickets DROP COLUMN resolution_cause');d.db.close();d=createDomain(path);assert.equal(d.ticket(1).title,'Existing');assert.equal(d.ticket(1).intake_fields,'{}');assert.equal(d.ticket(1).resolution_cause,null);assert.equal(d.one('SELECT COUNT(*) n FROM intakes').n,1);assert.equal(d.one('PRAGMA integrity_check').integrity_check,'ok');}finally{d.db.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('BUG-QA-004 evidence mutations atomically roll back audit, invalidation and outbox faults',async t=>{
+ const a=await setup(t),d=a.domain,tid=await a.submit();
+ d.run('UPDATE tickets SET complaint=1,triaged=created WHERE id=?',tid);d.promote(a.users.OPR,tid);
+ const snapshot=()=>Object.fromEntries(['tickets','reports','messages','attachments','audit','outbox'].map(table=>[table,d.all('SELECT * FROM '+table)]));
+ for(const kind of ['reply','internal','attachment'])for(const status of ['REVIEWED','DISETUJUI_MANUSIA']){
+  d.run('UPDATE reports SET status=?,checker=?,note=?',status,a.users.CMR.id,'Reviewed fixture');
+  const mutation=()=>a.request('/api/tickets/'+tid+(kind==='attachment'?'/attachments':'/messages'),'OPR','POST',kind==='attachment'?{name:'atomic.txt',data:Buffer.from('synthetic evidence').toString('base64')}:{kind,body:'Synthetic evidence'});
+  for(const fault of ['mutation-audit','invalidation-audit','outbox']){
+   const action=kind==='attachment'?'attachment.add':'message.'+kind;
+   const table=fault==='outbox'?'outbox':'audit';
+   const condition=fault==='outbox'?'':" WHEN NEW.action='"+(fault==='mutation-audit'?action:'report.invalidated')+"'";
+   d.db.exec(`CREATE TEMP TRIGGER reject_evidence BEFORE INSERT ON ${table}${condition} BEGIN SELECT RAISE(ABORT,'injected evidence fault'); END;`);
+   const before=snapshot();assert.equal((await mutation()).status,500,kind+'/'+status+'/'+fault);assert.deepEqual(snapshot(),before,'no partial evidence: '+kind+'/'+fault);d.db.exec('DROP TRIGGER reject_evidence');
+  }
+  const previous=d.one('SELECT * FROM reports'),ticket=d.ticket(tid);const count=d.one("SELECT COUNT(*) n FROM audit WHERE action='report.invalidated'").n;
+  assert.equal((await mutation()).status,201);const r=d.one('SELECT * FROM reports');assert.equal(r.status,'DATA_DRAFT');assert.equal(r.checker,null);assert.equal(r.note,null);assert.equal(r.version,previous.version+1);assert.equal(d.ticket(tid).version,ticket.version+1);
+  assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='report.invalidated'").n,count+1);
+  assert.equal(d.one('SELECT COUNT(*) n FROM outbox WHERE event_key=?','ticket:'+tid+':v'+(ticket.version+1)).n,1);
+  assert.equal((await a.request('/api/reports/'+r.id+'/approve','CMR','POST',{version:previous.version,note:'Stale'})).status,409);
+  if(kind==='reply')assert.ok(d.ticket(tid).first_response);else assert.equal(d.ticket(tid).first_response,ticket.first_response);
+ }
+});
+
+test('UX09-01 public attachments validate before acceptance, replay safely and worker rolls back on audit fault',async t=>{
+ const a=await setup(t),d=a.domain,key=id(),body={title:'Synthetic',description:'Synthetic chronology',contact:'test@example.test',attachments:[{name:'receipt.txt',data:Buffer.from('Synthetic receipt').toString('base64')}]};
+ const r=await a.request('/api/intake',null,'POST',body,{'Idempotency-Key':key});assert.equal(r.status,202);const receipt=await r.json();
+ assert.equal((await a.request('/api/intake',null,'POST',body,{'Idempotency-Key':key})).status,200);
+ d.db.exec("CREATE TEMP TRIGGER reject_intake_attachment BEFORE INSERT ON audit WHEN NEW.action='attachment.add' BEGIN SELECT RAISE(ABORT,'worker audit fault'); END;");
+ assert.throws(()=>d.processIntakes(),/worker audit fault/);assert.equal(d.one('SELECT COUNT(*) n FROM tickets').n,0);assert.equal(d.one('SELECT COUNT(*) n FROM attachments').n,0);assert.equal(d.one('SELECT ticket_id FROM intakes WHERE id=?',receipt.intake_id).ticket_id,null);
+ d.db.exec('DROP TRIGGER reject_intake_attachment');d.processIntakes();d.processIntakes();assert.equal(d.one('SELECT COUNT(*) n FROM attachments').n,1);const attachment=d.one('SELECT * FROM attachments');assert.equal(Buffer.from(attachment.data).toString(),'Synthetic receipt');assert.equal((await a.request('/api/attachments/'+attachment.id,'L3')).status,403);
+ for(const delta of [{contact:'invalid-contact'},{title:'x'.repeat(201)},{description:' '},{attachments:[{name:'unsafe.exe',data:'YWJj'}]},{attachments:[{name:'unsafe.txt',data:Buffer.from('1234567890123456').toString('base64')}]},{attachments:Array(6).fill(body.attachments[0])}]){
+  a.advance(61000);assert.equal((await a.request('/api/intake',null,'POST',{...body,...delta},{'Idempotency-Key':id()})).status,400);
+ }
+ assert.equal(d.one('SELECT COUNT(*) n FROM intakes').n,1);
+});

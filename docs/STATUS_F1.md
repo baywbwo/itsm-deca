@@ -44,3 +44,18 @@ Repo: docs/REVIEW.md (perintah seed akun sintetis melalui password input tersemb
 Tidak ada push/PR remote, merge, deploy automation atau data live berubah. PM menyelesaikan pemetaan Browser tab ke fixture yang didukung sebelum UX. Rollback delta ke 2a68ccb dengan proses dihentikan dan DB disalin setelah backup; schema v1 tetap, approval yang dibatalkan tidak dikembalikan otomatis. Rollback mengembalikan celah invalidasi baseline.
 
 Sumber internal: PM 04 ADR/Fase; BA 08 §4/7; UX 07 §3/4 dan 08 kritis 1–5; Compliance 06 §6.2 A-01/E-05 dan §6.4. Rujukan S08/S09 melalui adaptasi acceptance lokal, bukan verifikasi hukum atau klaim pengesahan sumber. Detail sumber snapshot belum diverifikasi ulang ke kondisi live.
+
+## DEV-F1-11 — Delta atas 22747b9 (menggantikan status lama yang bertentangan)
+
+Input PM: BUG-QA-004 pada QA11; keputusan invalidasi konservatif untuk reply/internal note/lampiran; UX09-01. Requirement REQ-001/008/015/032/034, AC-F1-001–010/015/041/050. Status **implemented + tested Developer**, bukan penutupan QA independen.
+
+- Lampiran: insert+audit+versi tiket+invalidasi approval+outbox sekarang satu transaksi. Pesan reply/internal memakai kebijakan sama. REVIEWED/DISETUJUI_MANUSIA menjadi DATA_DRAFT, checker/note NULL, report version +1 tepat sekali; tiket version +1; stale approval 409. Reply mengisi first_response sekali, note/lampiran tidak mengubahnya. Bahkan internal note membatalkan approval karena evidence pelaporan.
+- Fault injection HTTP pada 3 mutasi × 2 status × 3 titik gagal (audit mutasi, audit invalidasi, insert outbox) membuktikan snapshot tickets/reports/messages/attachments/audit/outbox identik sebelum/sesudah gagal. Sukses dan stale approval juga diuji.
+- UX09-01: field merchant/PIC/taxonomy dari 22747b9 dipertahankan; validasi email/WhatsApp, judul maksimum 200 tanpa pemotongan diam-diam, kronologi wajib maksimum 10000, kontak maksimum 254. Lampiran publik opsional maksimum 5/total 5 MB, allowlist/magic/pola identitas sama dengan upload operator. Intake idempoten menyimpan payload; worker menghasilkan tiket+lampiran+audit+outbox atomik, replay/job ulang tidak menggandakan berkas. Uji audit worker gagal lalu retry PASS. UI tidak menyimpan File ke draft atau Web Storage; setelah navigasi berkas perlu dipilih ulang.
+- Scope akses internal F1: **satu service desk DOB**. Tidak ada isolasi per tim/merchant; proyeksi masked L3/CMR/AUD dan penolakan raw attachment tetap berlaku. Ini batas implementasi, bukan klaim multi-tenant.
+
+Bukti `docs/evidence/developer-evidence-atomicity.tap`; `npm test`, Node 24.22.1. Browser/a11y/expiry/navigation UX09-01/04 dan QA independen SHA baru masih NOT RUN. BUG-QA-001–003 sudah regresi Developer pada koreksi sebelumnya, belum dianggap ditutup independen oleh dokumen ini.
+
+Audit gap F1 tersisa: pengelolaan role/config maker-checker; merge; SLA calendar/version pinning dan reopen; response/triage alerts dan escalation queue; pagination/filter/saved state; dashboard periode/severity/aging/MTTR; metadata manifest ekspor; CIF mock; audit atomicity login/logout/manual retry; correlation denial; seluruh matriks endpoint×role/IDOR; pemindaian malware/minimisasi binary; performance/200 oracle SLA; UX09-06..15 dan runtime/visual. Preview rekonsiliasi periode sudah ada sejak 22747b9 tetapi sumber eksternal tetap unavailable/incomplete. Gap tersebut tidak otomatis ditunda ke F2.
+
+Deferred resmi tetap: problem/change, katalog penuh, email/integrasi live, retensi final sesuai keputusan PM. Tidak push/deploy/PR pada task koreksi ini. Tidak mengubah file legacy atau jaringan fixture.
