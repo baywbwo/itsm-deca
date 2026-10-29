@@ -1,0 +1,22 @@
+
+> dob-itsm-platform@0.1.0 test
+> node --test app/test/*.test.js
+
+✔ AC-001/002/003 intake atomic replay and asynchronous worker (684.865083ms)
+✔ session HttpOnly, RBAC, expiry, CSRF, logout (604.164325ms)
+✔ role matrix denies all unspecified action cells and audits reads (3.78773ms)
+✔ ticket lifecycle triage, concurrent claim, private notes, pause/resume and reports (606.096239ms)
+✔ CSV export period, identity unavailable, injection and fixture exclusion (596.329855ms)
+✔ attachment magic bytes, whitelist, download and access (595.177105ms)
+✔ outbox backoff, dead state, manual retry and deduplicated delivery (2.345415ms)
+✔ SLA Friday across weekend; holidays; CSV dangerous prefixes; scrypt (12.662214ms)
+✔ audit append-only, identity redaction and backup/restore integrity (79.716114ms)
+✔ intake validation, rate limit, security headers and generic unknown login (684.723713ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4000.778564
