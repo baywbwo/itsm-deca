@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DECA Support Desk</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--sap:#003571;--volt:#0077FF;--qg:#58EA60;--eco:#04CA02;--mint:#D5FDC8;--ink:#0F172A;--mut:#64748B;--line:#E3E8EF;--bg:#F6F8FB}
+body{font-family:Nunito,system-ui,sans-serif;background:var(--bg);color:var(--ink);font-size:13px}
+button{font-family:inherit;cursor:pointer;border:0;background:none}
+input,select,textarea{font-family:inherit;font-size:13px}
+.hide{display:none!important}
+
+/* login */
+#login{min-height:100vh;display:grid;grid-template-columns:1.1fr .9fr}
+#login .left{background:linear-gradient(160deg,#00264d,var(--sap));color:#fff;padding:56px;display:flex;flex-direction:column;justify-content:space-between}
+#login h1{font-size:34px;line-height:1.2;font-weight:800;margin-top:18px}
+#login .left p{color:#B9CBE4;margin-top:14px;font-size:13.5px;max-width:420px;line-height:1.6}
+.badge{display:inline-block;background:rgba(88,234,96,.16);color:var(--qg);border:1px solid rgba(88,234,96,.35);border-radius:20px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:.4px}
+#login .right{display:flex;align-items:center;justify-content:center;padding:32px}
+.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:26px;width:100%;max-width:380px;box-shadow:0 10px 30px rgba(15,23,42,.06)}
+.card h2{font-size:18px;font-weight:800}
+.card .sub{color:var(--mut);font-size:12px;margin:6px 0 18px}
+label{display:block;font-size:11px;font-weight:800;letter-spacing:.4px;color:#475569;margin:12px 0 6px;text-transform:uppercase}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:#fff;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--volt);box-shadow:0 0 0 3px rgba(0,119,255,.12)}
+.btn{background:var(--eco);color:#fff;font-weight:800;border-radius:9px;padding:11px 16px;font-size:13px}
+.btn:hover{filter:brightness(.95)}
+.btn.block{width:100%;display:block;margin-top:16px}
+.btn.ghost{background:#fff;border:1px solid var(--line);color:#334155}
+.btn.sm{padding:7px 11px;font-size:11.5px;border-radius:7px}
+.err{background:#FEF2F2;border:1px solid #FECACA;color:#B91C1C;border-radius:9px;padding:9px 11px;font-size:12px;margin-top:12px}
+
+/* app */
+#app{display:grid;grid-template-columns:246px 1fr;min-height:100vh}
+aside{background:var(--sap);color:#fff;padding:18px 14px;display:flex;flex-direction:column;gap:4px}
+aside .brand{font-weight:800;font-size:15px;padding:4px 8px 14px}
+aside .brand span{color:var(--qg)}
+aside .lbl{font-size:10px;letter-spacing:1px;color:#8FA9C9;font-weight:800;margin:14px 8px 6px}
+aside a{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;color:#DCE6F2;text-decoration:none;font-size:12.5px;font-weight:600}
+aside a:hover{background:rgba(255,255,255,.07)}
+aside a.on{background:var(--qg);color:#00332B;font-weight:800}
+aside a b{background:rgba(255,255,255,.14);border-radius:10px;padding:1px 8px;font-size:11px}
+aside a.on b{background:#00332B22}
+aside .who{margin-top:auto;border-top:1px solid rgba(255,255,255,.12);padding-top:12px;font-size:11.5px;color:#B9CBE4}
+
+main{padding:18px 22px}
+.top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.top h2{font-size:19px;font-weight:800}
+.top .meta{color:var(--mut);font-size:12px}
+.top .sp{flex:1}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.kpi .n{font-size:22px;font-weight:800}
+.kpi .l{color:var(--mut);font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+thead th{background:#EEF3F9;text-align:left;font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:#475569;padding:10px 12px}
+tbody td{padding:11px 12px;border-top:1px solid var(--line);font-size:12.5px;vertical-align:top}
+tbody tr:hover{background:#F8FAFF;cursor:pointer}
+.pill{display:inline-block;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800}
+.pill.s1,.pill.s2{background:#FEE2E2;color:#B91C1C}
+.pill.s3{background:#FEF3C7;color:#92400E}
+.pill.s4{background:#E0F2FE;color:#075985}
+.pill.st{background:var(--mint);color:#065F46}
+.pill.st2{background:#E2E8F0;color:#334155}
+.sla{font-weight:800;font-size:11.5px}
+.sla.ok{color:#047857}.sla.warn{color:#B45309}.sla.bad{color:#B91C1C}
+
+/* drawer */
+#drawer{position:fixed;inset:0;background:rgba(15,23,42,.45);display:flex;justify-content:flex-end}
+#drawer .pane{width:min(760px,100%);background:var(--bg);height:100%;overflow:auto;padding:20px}
+.pane .head{display:flex;align-items:flex-start;gap:10px;margin-bottom:14px}
+.pane h3{font-size:17px;font-weight:800}
+.box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+.box h4{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:#475569;margin-bottom:10px}
+.kv{display:grid;grid-template-columns:150px 1fr;gap:6px 10px;font-size:12.5px}
+.kv div:nth-child(odd){color:var(--mut)}
+.thread .art{border-left:3px solid var(--line);padding:8px 0 8px 12px;margin-bottom:8px}
+.thread .art.me{border-color:var(--eco)}
+.thread .art .who{font-size:11px;color:var(--mut);margin-bottom:3px}
+.thread .art .bd{white-space:pre-wrap;line-height:1.55}
+textarea{resize:vertical;min-height:74px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.note{background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.5}
+
+/* modal */
+#modal{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:20px}
+#modal .m{background:#fff;border-radius:16px;width:min(520px,100%);padding:22px;max-height:92vh;overflow:auto}
+#modal h3{font-size:17px;font-weight:800;margin-bottom:4px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.toast{position:fixed;right:18px;bottom:18px;background:#0F172A;color:#fff;padding:11px 15px;border-radius:10px;font-size:12.5px;font-weight:700;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+@media(max-width:900px){
+  #login{grid-template-columns:1fr}#login .left{display:none}
+  #app{grid-template-columns:1fr}aside{flex-direction:row;overflow-x:auto;padding:10px}
+  aside .brand,aside .lbl,aside .who{display:none}
+  .kpis{grid-template-columns:1fr 1fr}main{padding:12px}
+  table{display:block;overflow-x:auto;white-space:nowrap}
+}
+</style></head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<div id="login">
+  <div class="left">
+    <div>
+      <span class="badge">QASH · SUPPORT DESK</span>
+      <h1>Kelola tiket merchant,<br>tanpa kehilangan jejak.</h1>
+      <p>Satu tempat untuk pengaduan QRIS, settlement, top up, dan akses akun — terhubung ke Zammad, Base CS (PADG 32/2026), dan Base Sales.</p>
+    </div>
+    <div style="font-size:11.5px;color:#8FA9C9">Portal internal · akses khusus admin & tim operasional · aktivitas tercatat di audit trail</div>
+  </div>
+  <div class="right">
+    <form class="card" id="loginForm">
+      <h2>Masuk ke Support Desk</h2>
+      <div class="sub">Gunakan akun agen yang terdaftar.</div>
+      <label>Email</label>
+      <input id="u" type="email" value="admin@deca.co.id" autocomplete="username">
+      <label>Password</label>
+      <input id="p" type="password" placeholder="••••••••" autocomplete="current-password">
+      <button class="btn block" type="submit">Masuk</button>
+      <div id="loginErr" class="err hide"></div>
+      <div style="margin-top:14px;font-size:11.5px;color:var(--mut)">Belum punya akses? Hubungi IT Support.</div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div id="app" class="hide">
+  <aside>
+    <div class="brand">deca <span>support</span></div>
+    <div class="lbl">INBOX</div>
+    <a href="#" data-f="all" class="on">Semua <b id="c-all">0</b></a>
+    <a href="#" data-f="new">Baru <b id="c-new">0</b></a>
+    <a href="#" data-f="open">Ditangani <b id="c-open">0</b></a>
+    <a href="#" data-f="pending">Menunggu Pelapor <b id="c-pending">0</b></a>
+    <a href="#" data-f="closed">Teratasi <b id="c-closed">0</b></a>
+    <div class="lbl">OPERASIONAL</div>
+    <a href="#" id="btnNew">+ Buat Tiket</a>
+    <a href="#" id="btnHealth">Healthcheck</a>
+    <div class="lbl">LAPORAN</div>
+    <a href="#" id="btnBI">Kepatuhan BI</a>
+    <div class="who">Masuk sebagai <b id="whoAmI">—</b><br><span id="whoMail" style="font-size:10.5px"></span></div>
+  </aside>
+  <main>
+    <div class="top">
+      <h2>Inbox</h2>
+      <span class="meta" id="metaCount">0 tiket · wilayah DOB</span>
+      <div class="sp"></div>
+      <input id="q" placeholder="Cari nomor / judul tiket…" style="max-width:260px">
+      <button class="btn sm" id="btnNew2">+ Tiket Baru</button>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="n" id="k1">0</div><div class="l">Tiket aktif</div></div>
+      <div class="kpi"><div class="n" id="k2">0</div><div class="l">Lewat SLA</div></div>
+      <div class="kpi"><div class="n" id="k3">0</div><div class="l">Prioritas tinggi</div></div>
+      <div class="kpi"><div class="n" id="k4">0</div><div class="l">Belum di-assign</div></div>
+    </div>
+    <table>
+      <thead><tr><th>Tiket</th><th>Pelapor</th><th>Kanal</th><th>Kategori</th><th>Severity</th><th>Status</th><th>SLA</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" style="color:#64748B">Memuat…</td></tr></tbody>
+    </table>
+  </main>
+</div>
+
+<div id="drawer" class="hide"><div class="pane">
+  <div class="head">
+    <div style="flex:1"><h3 id="d-title">—</h3><div class="meta" id="d-sub"></div></div>
+    <button class="btn ghost sm" id="d-close">Tutup</button>
+  </div>
+  <div class="box"><h4>Kronologi</h4><div class="thread" id="d-thread"></div>
+    <textarea id="d-reply" placeholder="Tulis balasan ke pelapor…"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn sm" id="d-send">Kirim balasan</button>
+      <button class="btn ghost sm" id="d-note">Catatan internal</button>
+      <select id="d-state" style="max-width:170px">
+        <option value="open">Ditangani</option><option value="pending">Menunggu Pelapor</option>
+        <option value="closed">Teratasi</option><option value="new">Baru</option>
+      </select>
+      <button class="btn ghost sm" id="d-apply">Ubah status</button>
+    </div>
+  </div>
+  <div class="box"><h4>Kepatuhan &amp; Laporan BI (PADG 32/2026)</h4>
+    <div class="kv" id="d-bi"></div>
+    <div class="note" style="margin-top:10px">Wajib isi <b>Penyebab</b> + petakan <b>Status Pengaduan</b> sebelum tiket ditutup.</div>
+  </div>
+</div></div>
+
+<div id="modal" class="hide"><div class="m">
+  <h3>Tiket baru</h3>
+  <div class="sub" style="color:#64748B;font-size:12px;margin-bottom:6px">Data merchant otomatis diambil dari CIF bila email terdaftar.</div>
+  <label>Nama merchant / usaha</label><input id="f-merchant" placeholder="Toko Kopdes2">
+  <div class="grid2">
+    <div><label>Email akun terdaftar</label><input id="f-email" type="email" placeholder="merchant@email.com"></div>
+    <div><label>No. WhatsApp</label><input id="f-wa" placeholder="08xx"></div>
+  </div>
+  <div class="grid2">
+    <div><label>Nama PIC</label><input id="f-name" placeholder="Nama PIC"></div>
+    <div><label>Kategori</label><select id="f-cat"><option>QRIS</option><option>Settlement</option><option>Top up</option><option>Akses akun</option><option>Lainnya</option></select></div>
+  </div>
+  <label>Kronologi</label><textarea id="f-body" placeholder="Waktu kejadian, nominal, ID merchant…"></textarea>
+  <div class="err hide" id="mErr"></div>
+  <div class="row" style="margin-top:14px;justify-content:flex-end">
+    <button class="btn ghost sm" id="m-cancel">Batal</button>
+    <button class="btn sm" id="m-save">Kirim tiket</button>
+  </div>
+</div></div>
+
+<script>
+const API="";
+let AUTH="", TICKETS=[], FILTER="all", CUR=null;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const clean=s=>String(s??"").replace(/<br\s*\/?>/gi,"\n").replace(/<\/(p|div|li)>/gi,"\n").replace(/<[^>]+>/g,"").replace(/\n{3,}/g,"\n\n").trim();
+const SEV={1:"S1 - Critical",2:"S2 - High",3:"S3 - Medium",4:"S4 - Low"};
+const ST={new:"Baru",open:"Ditangani",pending:"Menunggu Pelapor",closed:"Teratasi",merged:"Digabung"};
+const BI={new:"Dalam Investigasi",open:"Belum terselesaikan",pending:"Informasi",closed:"Transaksi Berhasil Diselesaikan",merged:"Dieskalasikan"};
+const SLAH={1:4,2:8,3:48,4:120};
+
+async function api(path,opts={}){
+  const r=await fetch(API+path,{...opts,headers:{Authorization:"Basic "+AUTH,"Content-Type":"application/json",...(opts.headers||{})}});
+  if(r.status===401) throw new Error("Sesi berakhir, silakan login ulang.");
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return r.json();
+}
+function toast(msg){const d=document.createElement("div");d.className="toast";d.textContent=msg;document.body.appendChild(d);setTimeout(()=>d.remove(),2600);}
+function slaInfo(t){
+  const sev=Math.min(4,Math.max(1,t.priority_id||3)), due=new Date(t.created_at).getTime()+SLAH[sev]*3600e3;
+  if(t.state_id===4||t.state_id===3||["closed"].includes(stateName(t))) return {txt:"Selesai",cls:"ok"};
+  const diff=due-Date.now(), h=Math.round(Math.abs(diff)/3600e3);
+  if(diff<0) return {txt:"Lewat "+h+" jam",cls:"bad"};
+  if(diff<8*3600e3) return {txt:h+" jam lagi",cls:"warn"};
+  return {txt:h+" jam lagi",cls:"ok"};
+}
+function stateName(t){return (t.state||"").toLowerCase().includes("closed")?"closed":(t.state||"").toLowerCase().includes("pending")?"pending":(t.state||"").toLowerCase().includes("new")?"new":"open";}
+
+/* ---------- login ---------- */
+$("#loginForm").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const u=$("#u").value.trim(), p=$("#p").value;
+  const token=btoa(u+":"+p);
+  try{
+    const r=await fetch("/api/v1/users/me",{headers:{Authorization:"Basic "+token}});
+    if(!r.ok) throw new Error("Email atau password salah.");
+    const me=await r.json();
+    AUTH=token; sessionStorage.setItem("deca_auth",token);
+    $("#whoAmI").textContent=((me.firstname||"")+" "+(me.lastname||"")).trim()||me.login;
+    $("#whoMail").textContent=me.email||me.login;
+    $("#login").classList.add("hide"); $("#app").classList.remove("hide");
+    loadTickets();
+  }catch(err){ $("#loginErr").textContent=err.message; $("#loginErr").classList.remove("hide"); }
+});
+
+/* ---------- list ---------- */
+async function loadTickets(){
+  $("#rows").innerHTML='<tr><td colspan="8" style="color:#64748B">Memuat…</td></tr>';
+  try{
+    const d=await api("/api/v1/tickets?per_page=60&expand=true&sort_by=created_at&order_by=desc");
+    TICKETS=d.tickets||d||[];
+    render();
+  }catch(e){ $("#rows").innerHTML='<tr><td colspan="8" style="color:#B91C1C">Gagal memuat: '+esc(e.message)+'</td></tr>'; }
+}
+function counts(){const c={all:TICKETS.length,new:0,open:0,pending:0,closed:0};
+  TICKETS.forEach(t=>{const s=stateName(t);c[s]=(c[s]||0)+1;});return c;}
+function render(){
+  const c=counts();
+  $("#c-all").textContent=c.all;$("#c-new").textContent=c.new;$("#c-open").textContent=c.open;
+  $("#c-pending").textContent=c.pending;$("#c-closed").textContent=c.closed;
+  $("#k1").textContent=TICKETS.filter(t=>stateName(t)!=="closed").length;
+  $("#k2").textContent=TICKETS.filter(t=>slaInfo(t).cls==="bad").length;
+  $("#k3").textContent=TICKETS.filter(t=>(t.priority_id||3)<=2).length;
+  $("#k4").textContent=TICKETS.filter(t=>!t.owner_id).length;
+  $("#metaCount").textContent=c.all+" tiket · wilayah DOB · sinkron Base CS & Sales";
+  const q=($("#q").value||"").toLowerCase();
+  const rows=TICKETS.filter(t=>(FILTER==="all"||stateName(t)===FILTER) &&
+      (!q||String(t.number).includes(q)||(t.title||"").toLowerCase().includes(q)));
+  $("#rows").innerHTML = rows.length? rows.map(t=>{
+    const s=stateName(t), sl=slaInfo(t), sev=Math.min(4,Math.max(1,t.priority_id||3));
+    return `<tr data-id="${t.id}">
+      <td><b>${esc(String(t.number))}</b><div style="color:#64748B;font-size:11.5px">${esc((t.title||"").slice(0,52))}</div></td>
+      <td>${esc(t.customer_id?"customer #"+t.customer_id:"—")}</td>
+      <td>${esc(t.article_count!=null?"Web / Email":"Website Form")}</td>
+      <td>${esc((t.title||"").split("]")[0].replace("[","")||"—")}</td>
+      <td><span class="pill s${sev}">${SEV[sev].split(" -")[0]} ${SEV[sev].split("- ")[1]}</span></td>
+      <td><span class="pill ${s==="closed"?"st":"st2"}">${ST[s]||s}</span></td>
+      <td><span class="sla ${sl.cls}">${sl.txt}</span></td>
+      <td><button class="btn ghost sm" data-open="${t.id}">Buka</button></td></tr>`;
+  }).join("") : '<tr><td colspan="8" style="color:#64748B">Tidak ada tiket pada filter ini.</td></tr>';
+}
+
+$("#rows").addEventListener("click",e=>{
+  const b=e.target.closest("[data-open]"); const tr=e.target.closest("tr[data-id]");
+  const id=b?b.dataset.open:tr?tr.dataset.id:null;
+  if(id) openTicket(id);
+});
+document.querySelectorAll("aside a[data-f]").forEach(a=>a.addEventListener("click",e=>{
+  e.preventDefault(); FILTER=a.dataset.f;
+  document.querySelectorAll("aside a[data-f]").forEach(x=>x.classList.remove("on"));
+  a.classList.add("on"); render();
+}));
+$("#q").addEventListener("input",render);
+
+/* ---------- detail ---------- */
+async function openTicket(id){
+  $("#drawer").classList.remove("hide");
+  $("#d-title").textContent="Memuat…"; $("#d-thread").innerHTML=""; $("#d-bi").innerHTML="";
+  try{
+    const t=await api("/api/v1/tickets/"+id+"?expand=true");
+    CUR=t;
+    const s=stateName(t), sev=Math.min(4,Math.max(1,t.priority_id||3)), sl=slaInfo(t);
+    $("#d-title").textContent=t.title||("Tiket "+t.number);
+    $("#d-sub").textContent="#"+t.number+" · "+ST[s]+" · "+SEV[sev]+" · SLA "+sl.txt;
+    $("#d-state").value=s;
+    let arts=[];
+    try{ const a=await api("/api/v1/ticket_articles/by_ticket/"+id); arts=Array.isArray(a)?a:(a.assets?[]:[]); }catch(_){}
+    $("#d-thread").innerHTML = arts.length? arts.map(a=>{
+      const me=!a.internal && a.sender_id && t.owner_id && a.sender_id===t.owner_id;
+      return `<div class="art ${me?"me":""}"><div class="who">${esc(a.from||(me?"Agen":"Pelapor"))} · ${esc((a.created_at||"").slice(0,16).replace("T"," "))}${a.internal?" · catatan internal":""}</div><div class="bd">${esc(clean(a.body))}</div></div>`;
+    }).join("") : '<div style="color:#64748B;font-size:12px">Belum ada percakapan.</div>';
+    $("#d-bi").innerHTML=`
+      <div>Status Pengaduan</div><div><b>${BI[s]||"—"}</b></div>
+      <div>Unit Penerima</div><div>KP (Kantor Pusat)</div>
+      <div>Tanggal Penerima</div><div>${esc((t.created_at||"").slice(0,10))}</div>
+      <div>Tanggal Penyelesaian</div><div>${s==="closed"?esc((t.updated_at||"").slice(0,10)):"—"}</div>
+      <div>Nilai Pengaduan</div><div>—</div>
+      <div>Merchant (CIF)</div><div><span style="color:#B45309">mode stub — kredensial CIF belum ada</span></div>`;
+  }catch(e){ $("#d-title").textContent="Gagal memuat tiket"; }
+}
+$("#d-close").onclick=()=>$("#drawer").classList.add("hide");
+$("#d-send").onclick=()=>sendArticle(false);
+$("#d-note").onclick=()=>sendArticle(true);
+async function sendArticle(internal){
+  if(!CUR) return;
+  const body=$("#d-reply").value.trim(); if(!body) return toast("Tulisan balasan masih kosong");
+  try{
+    await api("/api/v1/tickets/"+CUR.id,{method:"PUT",body:JSON.stringify({article:{body,type:"web",internal}})});
+    $("#d-reply").value=""; toast(internal?"Catatan internal tersimpan":"Balasan terkirim"); openTicket(CUR.id);
+  }catch(e){ toast("Gagal: "+e.message); }
+}
+$("#d-apply").onclick=async()=>{
+  if(!CUR) return;
+  try{
+    await api("/api/v1/tickets/"+CUR.id,{method:"PUT",body:JSON.stringify({state_id:{"new":1,"open":2,"pending":3,"closed":4}[$("#d-state").value]})});
+    toast("Status diperbarui"); $("#drawer").classList.add("hide"); loadTickets();
+  }catch(e){ toast("Gagal: "+e.message); }
+};
+
+/* ---------- create ---------- */
+function openModal(){ $("#modal").classList.remove("hide"); $("#mErr").classList.add("hide"); }
+$("#btnNew").onclick=e=>{e.preventDefault();openModal();};
+$("#btnNew2").onclick=openModal;
+$("#m-cancel").onclick=()=>$("#modal").classList.add("hide");
+$("#m-save").onclick=async()=>{
+  const p={merchant:$("#f-merchant").value.trim(),email:$("#f-email").value.trim(),wa:$("#f-wa").value.trim(),
+           name:$("#f-name").value.trim(),category:$("#f-cat").value,body:$("#f-body").value.trim()};
+  if(!p.merchant||!p.email||!p.body){ $("#mErr").textContent="Merchant, email, dan kronologi wajib diisi."; $("#mErr").classList.remove("hide"); return; }
+  try{
+    const r=await fetch("/help/api/ticket",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(p)});
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.error||("HTTP "+r.status));
+    $("#modal").classList.add("hide"); toast("Tiket "+d.ticket+" dibuat · laporan BI: "+(d.laporan_bi?"terisi":"—"));
+    loadTickets();
+  }catch(e){ $("#mErr").textContent=e.message; $("#mErr").classList.remove("hide"); }
+};
+
+/* ---------- health & BI ---------- */
+$("#btnHealth").onclick=async e=>{
+  e.preventDefault();
+  try{ const h=await fetch("/help/api/health").then(r=>r.json());
+    toast("Zammad & bridge OK · "+new Date().toLocaleTimeString("id-ID"));
+  }catch(_){ toast("Healthcheck gagal"); }
+};
+$("#btnBI").onclick=e=>{e.preventDefault();toast("Laporan BI: lihat Base CS › Laporan Penanganan Pengaduan");};
+
+/* ---------- auto login ---------- */
+(async()=>{
+  const saved=sessionStorage.getItem("deca_auth");
+  if(saved){ try{ const r=await fetch("/api/v1/users/me",{headers:{Authorization:"Basic "+saved}});
+      if(r.ok){ const me=await r.json(); AUTH=saved;
+        $("#whoAmI").textContent=((me.firstname||"")+" "+(me.lastname||"")).trim()||me.login;
+        $("#whoMail").textContent=me.email||me.login;
+        $("#login").classList.add("hide"); $("#app").classList.remove("hide"); loadTickets(); } }catch(_){}}
+})();
+</script>
+</body></html>
