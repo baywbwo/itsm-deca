@@ -24,7 +24,7 @@ function harness(fetch){
  const window={addEventListener(){},confirm:()=>true};const location={hash:'#intake'};
  const context=vm.createContext({document:{querySelector:s=>body.querySelector(s),createElement:t=>new Element(t),body,title:''},window,location,fetch,FormData,crypto:globalThis.crypto,Event:class{constructor(type,opts={}){this.type=type;Object.assign(this,opts);}},createDraftState,URL,URLSearchParams,console,setTimeout:()=>0});
  let source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8').replace("import {createDraftState} from './draft-state.js';",'');source=source.slice(0,source.indexOf("window.addEventListener('hashchange'"));
- vm.runInContext(source+"\nglobalThis.ui={intake,tickets,ticket,reports,shell,error,form,draftState,setUser(u){me=u;version={version:'0.1.0',commit:'test'};config={};}};",context);
+ vm.runInContext(source+"\nglobalThis.ui={intake,tickets,ticket,reports,knowledge,skipToMain,shell,error,form,draftState,setUser(u){adoptUser(u);version={version:'0.1.0',commit:'test'};config={};}};",context);
  return {ui:context.ui,root,body,window,location,Element,input(f,name,value){const n=f.elements.namedItem(name);n.value=value;n.dispatchEvent(new context.Event('input',{bubbles:true}));},submit:f=>f.onsubmit({preventDefault(){}})};
 }
 test('D10-01/03 intake receipt loss, navigation, retry one HTTP intake; schema failure is recoverable',async t=>{
@@ -54,4 +54,30 @@ test('D10-05 macro appends text and synchronizes RAM draft across form reconstru
  h.ui.setUser({id:'operator',role:'L3',permissions:['note']});h.location.hash='#ticket/1';
  // ticket is bound below by harness exports, same unmodified renderer.
  const m=new h.Element('main');await h.ui.ticket(m,1);const f=m.querySelector('form');h.input(f,'body','Existing draft');const macro=f.elements.namedItem('macro');macro.value='1';macro.onchange();assert.equal(f.elements.namedItem('body').value,'Existing draft\n\nSynthetic macro');assert.equal(h.ui.draftState.drafts.get('operator|#ticket/1|Simpan pesan').body,'Existing draft\n\nSynthetic macro');const next=new h.Element('main');await h.ui.ticket(next,1);assert.equal(next.querySelector('form').elements.namedItem('body').value,'Existing draft\n\nSynthetic macro');
+});
+test('UX11-01 late intake success/rejection cannot clear new-account drafts or revive old intents',async()=>{
+ for(const outcome of ['success','rejection'])for(const transition of ['logout','account']){
+  let release;const h=harness(async path=>{if(path==='/api/intake-schema')return new Response(JSON.stringify({types:['Incident'],categories:['QRIS'],limits:{merchant:100,pic:100}}));if(path==='/api/logout')return new Response('{"ok":true}');if(path==='/api/intake')return new Promise((resolve,reject)=>{release=()=>outcome==='success'?resolve(new Response('{"intake_id":"old-receipt"}')):reject(Error('late network failure'));});throw Error(path);});
+  h.ui.setUser({id:'old',role:'OPR',permissions:[]});await h.ui.intake();const f=h.root.querySelector('form');h.input(f,'title','Old synthetic draft');const pending=h.submit(f);while(!release)await new Promise(r=>setImmediate(r));
+  if(transition==='logout'){h.ui.shell();await h.root.querySelectorAll('button').find(n=>n.textContent==='Keluar').onclick();assert.equal(h.ui.draftState.dirty,false);}
+  h.ui.setUser({id:'new',role:'OPR',permissions:[]});h.ui.draftState.drafts.set('new|#intake|Kirim laporan',{title:'New draft'});const newIntent=h.ui.draftState.intent('new|#intake|Kirim laporan');release();await pending;
+  assert.equal(h.ui.draftState.drafts.size,1,outcome+'/'+transition);assert.equal(h.ui.draftState.drafts.get('new|#intake|Kirim laporan').title,'New draft');assert.equal(h.ui.draftState.intent('new|#intake|Kirim laporan'),newIntent);assert.doesNotMatch(h.root.textContent,/old-receipt/);
+  // Detached old form event must not write RAM after the lifecycle changed.
+  h.input(f,'title','Detached stale input');await h.submit(f);assert.equal(h.ui.draftState.drafts.size,1);
+ }
+});
+test('UX11-01 expiry retains same-account draft and intent; account switch discards them',async()=>{
+ let expired=true;const keys=[];const h=harness(async path=>{if(path==='/api/intake-schema')return new Response(JSON.stringify({types:['Incident'],categories:['QRIS'],limits:{merchant:100,pic:100}}));if(path==='/api/intake'){keys.push(h.ui.draftState.intent('original|#intake|Kirim laporan'));return new Response(JSON.stringify(expired?{error:'expired'}:{intake_id:'receipt'}),{status:expired?401:200});}throw Error(path);});
+ h.ui.setUser({id:'original',permissions:[]});await h.ui.intake();let f=h.root.querySelector('form');h.input(f,'title','Recoverable synthetic');await h.submit(f);assert.match(h.root.textContent,/Sesi berakhir/);assert.equal(h.ui.draftState.dirty,true);
+ h.ui.setUser({id:'original',permissions:[]});expired=false;await h.ui.intake();f=h.root.querySelector('form');assert.equal(f.elements.namedItem('title').value,'Recoverable synthetic');await h.submit(f);assert.equal(keys[0],keys[1]);assert.equal(h.ui.draftState.dirty,false);
+ h.ui.draftState.drafts.set('original|draft',{body:'private'});h.ui.setUser({id:'other',permissions:[]});assert.equal(h.ui.draftState.dirty,false);
+});
+test('UX09-12 restored KB query survives initial error and retry; empty state replaces loading',async()=>{
+ const queries=[];let fail=true;const h=harness(async path=>{queries.push(path);return new Response(JSON.stringify(fail?{error:'mock unavailable'}:[]),{status:fail?500:200});});h.ui.setUser({id:'opr',permissions:[]});h.location.hash='#knowledge';h.ui.draftState.drafts.set('opr|#knowledge|Cari',{q:'QRIS synthetic'});const m=new h.Element('main');await h.ui.knowledge(m);assert.match(m.textContent,/Gagal memuat pengetahuan/);assert.doesNotMatch(m.textContent,/Memuat pengetahuan…/);fail=false;await m.querySelectorAll('button').find(n=>n.textContent==='Coba lagi').onclick();assert.match(m.textContent,/Belum ada artikel/);assert.equal(queries.length,2);for(const q of queries)assert.equal(new URL('http://local'+q).searchParams.get('q'),'QRIS synthetic');
+});
+test('UX09-13 skip focuses main and prevents fragment/router navigation (DOM double)',()=>{
+ const h=harness(async()=>new Response('{}'));h.ui.setUser({id:'opr',role:'OPR',permissions:[]});h.location.hash='#tickets';h.ui.shell();let prevented=false;h.ui.skipToMain({preventDefault(){prevented=true;}});assert.equal(prevented,true);assert.equal(h.location.hash,'#tickets');assert.equal(h.root.querySelector('#main').focused,true);assert.equal(h.root.querySelector('#main').getAttribute('tabindex'),'-1');
+});
+test('UX11-01 failed logout leaves pending-submit recovery active',async()=>{
+ const h=harness(async()=>new Response('{"error":"audit fault"}',{status:500}));h.ui.setUser({id:'opr',role:'OPR',permissions:[]});const m=new h.Element('main');let reject;const f=h.ui.form(m,'Simpan pesan',()=>new Promise((_,r)=>reject=r));const input=new h.Element('textarea');input.setAttribute('name','body');f.append(input);f.finish();h.input(f,'body','Recover after fault');const pending=h.submit(f);h.ui.shell();await h.root.querySelectorAll('button').find(n=>n.textContent==='Keluar').onclick();assert.match(h.root.textContent,/Keluar gagal/);reject(Error('late failure'));await pending;assert.equal([...h.ui.draftState.drafts.values()][0].body,'Recover after fault');
 });
