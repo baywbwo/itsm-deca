@@ -40,3 +40,15 @@ test('AC-016 auto-close is atomic, invalidates approved source and emits one out
  d.db.exec("CREATE TRIGGER reject_close BEFORE INSERT ON audit WHEN NEW.action='auto.close' BEGIN SELECT RAISE(ABORT,'audit failure'); END;");assert.throws(()=>d.jobs(),/audit failure/);assert.equal(d.ticket(1).status,'Teratasi');assert.equal(d.one('SELECT status FROM reports').status,'REVIEWED');d.db.exec('DROP TRIGGER reject_close');d.jobs();d.jobs();assert.equal(d.ticket(1).status,'Ditutup');assert.equal(d.one('SELECT status FROM reports').status,'DATA_DRAFT');assert.equal(d.one("SELECT COUNT(*) n FROM audit WHERE action='auto.close'").n,1);assert.equal(d.one('SELECT COUNT(*) n FROM outbox WHERE event_key=?','ticket:1:v'+(t.version+1)).n,1);
  }finally{d.db.close();}
 });
+test('BUG-QA-001/002 masked projections cover formatted phones, messages, audit, reports and CSV',async t=>{
+ const a=await setup(t),tid=await a.submit();const pii='person@example.test +62 812-3456-7890';
+ a.domain.run('UPDATE tickets SET title=?,description=?,complaint=1,triaged=created WHERE id=?',pii,pii,tid);a.domain.promote(a.users.OPR,tid);
+ await a.request('/api/tickets/'+tid+'/messages','OPR','POST',{kind:'internal',body:pii});a.domain.audit(a.users.OPR.id,'synthetic',tid,{text:pii});
+ for(const role of ['L3','CMR','AUD'])for(const path of ['/api/tickets','/api/tickets/'+tid]){const r=await a.request(path,role);assert.equal(r.status,200);const text=await r.text();assert.ok(!text.includes('person@example.test'));assert.ok(!text.includes('+62 812-3456-7890'));}
+ for(const path of ['/api/tickets/'+tid+'/messages','/api/audit','/api/reports']){const r=await a.request(path,path.endsWith('messages')?'L3':'CMR');assert.equal(r.status,200);const text=await r.text();assert.ok(!text.includes('person@example.test'));assert.ok(!text.includes('+62 812-3456-7890'));}
+ for(const role of ['SUP','L2','CMR']){const r=await a.request('/api/export',role,'POST',{from:'2026-10-26',until:'2026-10-27',reason:'regression',purpose:'local'});assert.equal(r.status,200);const text=await r.text();assert.ok(!text.includes('person@example.test'));assert.ok(!text.includes('+62 812-3456-7890'));}
+});
+test('BUG-QA-003 strict calendar rejects normalization and accepts leap date',async t=>{
+ const a=await setup(t);for(const [from,until] of [['2026-02-30','2026-03-05'],['2026-02-29','2026-03-01'],['2026-04-31','2026-05-02'],['2026-01-01','2026-02-30'],['2026-13-01','2027-01-01']])assert.equal((await a.request('/api/export','SUP','POST',{from,until,reason:'test',purpose:'local'})).status,400);
+ assert.equal((await a.request('/api/export','SUP','POST',{from:'2028-02-29',until:'2028-03-01',reason:'test',purpose:'local'})).status,200);
+});

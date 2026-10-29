@@ -9,7 +9,8 @@ export const transitions={Baru:['Diproses','Digabung'],Diproses:['Menunggu Pelap
 export function fail(status,message){throw Object.assign(new Error(message),{status});}
 export const id=()=>randomBytes(24).toString('hex');
 export const hash=s=>createHash('sha256').update(s).digest('hex');
-export const mask=s=>String(s).replace(/[\w.+-]+@[\w.-]+/g,'[email masked]').replace(/\b\d{8,}\b/g,'[masked]');
+export const mask=s=>String(s).replace(/[\w.+-]+@[\w.-]+/g,'[email masked]').replace(/(?:\+?\d[\d ().-]{6,}\d)/g,value=>value.replace(/\D/g,'').length>=8?'[masked]':value);
+export function calendarDate(value){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value))fail(400,'Periode tidak valid');const parsed=new Date(value+'T00:00:00Z');if(!Number.isFinite(parsed.getTime())||parsed.toISOString().slice(0,10)!==value)fail(400,'Periode tidak valid');return Date.parse(value+'T00:00:00+07:00');}
 export const redact=s=>String(s).replace(/\b\d{16}\b/g,'[identitas dihapus]');
 export function password(value,salt=randomBytes(16).toString('hex')){return salt+':'+scryptSync(value,salt,64).toString('hex');}
 export function verify(value,stored){const [salt,key]=stored.split(':');return timingSafeEqual(Buffer.from(key,'hex'),Buffer.from(password(value,salt).split(':')[1],'hex'));}
