@@ -1,0 +1,11 @@
+PASS 240 independent second/window boundary oracle comparisons
+PASS old snapshot/new calendar/severity pinned and response immutable through repeated reopen
+PASS audit and outbox fault each rollback reopened ticket atomically
+MIGRATION complete {"used_minutes":15,"resolution_minutes":960,"remaining_minutes":945,"paused":false,"response_remaining_minutes":-360,"calendar_version":"4f1ce941f0bb4ec4ca8678f61a8fcfb27a17f732a17c01714f1ab68339ef5c55","policy_origin":"legacy-baseline","reopen_count":1,"history_complete":true,"history_warning":"Kalender historis tidak tersedia; memakai baseline migrasi","assumption":"Default internal lokal; bukan SLA regulator"}
+PASS legacy complete history flagged or reconstructed
+MIGRATION missing {"used_minutes":null,"resolution_minutes":960,"remaining_minutes":null,"paused":false,"response_remaining_minutes":-360,"calendar_version":"4f1ce941f0bb4ec4ca8678f61a8fcfb27a17f732a17c01714f1ab68339ef5c55","policy_origin":"legacy-history-incomplete","reopen_count":0,"history_complete":false,"history_warning":"Riwayat SLA tidak lengkap; perlu rekonsiliasi","assumption":"Default internal lokal; bukan SLA regulator"}
+PASS legacy missing history flagged or reconstructed
+MIGRATION partial {"used_minutes":null,"resolution_minutes":960,"remaining_minutes":null,"paused":false,"response_remaining_minutes":-360,"calendar_version":"4f1ce941f0bb4ec4ca8678f61a8fcfb27a17f732a17c01714f1ab68339ef5c55","policy_origin":"legacy-history-incomplete","reopen_count":0,"history_complete":false,"history_warning":"Riwayat SLA tidak lengkap; perlu rekonsiliasi","assumption":"Default internal lokal; bukan SLA regulator"}
+PASS legacy partial history flagged or reconstructed
+PASS legacy restart idempotent
+{"passed":7,"failed":0}

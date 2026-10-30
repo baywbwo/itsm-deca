@@ -43,16 +43,23 @@ export function createDomain(path=':memory:',now=()=>Date.now()){
  function ticket(tid){const t=one('SELECT * FROM tickets WHERE id=?',tid);if(!t)fail(404,'Tiket tidak ditemukan');return t;}
  function policySnapshot(origin='created'){
   const policy={timezone:taxonomy.timezone,businessHours:taxonomy.businessHours,severities:taxonomy.severities,assumption:taxonomy.assumption};
-  return JSON.stringify({...policy,calendar_version:hash(JSON.stringify(policy)),origin});
+  return JSON.stringify({...policy,calendar_version:hash(JSON.stringify(policy)),origin,history_revision:2});
  }
  // Historical configuration is unavailable: explicitly label the migration baseline.
  transaction(()=>{
  for(const [name,type] of [['intake_fields',"TEXT DEFAULT '{}'"],['resolution_cause','TEXT'],['sla_policy','TEXT'],['stopped_minutes','REAL NOT NULL DEFAULT 0'],['reopen_count','INTEGER NOT NULL DEFAULT 0']])if(!db.prepare('PRAGMA table_info(tickets)').all().some(c=>c.name===name))db.exec('ALTER TABLE tickets ADD COLUMN '+name+' '+type);
- for(const t of all('SELECT * FROM tickets WHERE sla_policy IS NULL')){
-  let stopped=0,reopens=0,start=null,incomplete=false;
-  for(const event of all("SELECT * FROM audit WHERE object=? AND action='status' ORDER BY id",String(t.id))){
+ for(const t of all('SELECT * FROM tickets')){
+  const old=t.sla_policy?JSON.parse(t.sla_policy):null;
+  if(old&&(old.origin==='created'||old.history_revision===2))continue;
+  let stopped=0,reopens=0,start=null,incomplete=false,state='Baru',last=t.created;
+  if(!one("SELECT id FROM audit WHERE object=? AND action='ticket.created'",String(t.id)))incomplete=true;
+  for(const event of all("SELECT * FROM audit WHERE object=? AND action IN ('status','auto.close') ORDER BY id",String(t.id))){
+   if(!Number.isFinite(event.created)||event.created<last||event.created>t.updated){incomplete=true;continue;}last=event.created;
+   if(event.action==='auto.close'){if(state!=='Teratasi')incomplete=true;state='Ditutup';continue;}
    // Legacy masking replaced numeric timestamps with unquoted [masked].
    let change;try{change=JSON.parse(event.detail.replace(/:\[masked\]/g,':null'));}catch{incomplete=true;continue;}const status=change.after?.status;
+   if(change.before?.status!==state||!transitions[state]?.includes(status))incomplete=true;
+   state=status;
    if(status==='Teratasi'&&start===null)start=event.created;
    if(status==='Diproses'&&['Teratasi','Ditutup'].includes(change.before?.status)){
     const from=start??change.before.resolved;
@@ -60,13 +67,14 @@ export function createDomain(path=':memory:',now=()=>Date.now()){
     reopens++;start=null;
    }
   }
+  if(state!==t.status)incomplete=true;
   run('UPDATE tickets SET sla_policy=?,stopped_minutes=?,reopen_count=? WHERE id=?',policySnapshot(incomplete?'legacy-history-incomplete':'legacy-baseline'),stopped,reopens,t.id);
-  if(start!==null&&['Teratasi','Ditutup'].includes(t.status))run('UPDATE tickets SET resolved=? WHERE id=?',start,t.id);
+  if(!incomplete&&start!==null&&['Teratasi','Ditutup'].includes(t.status))run('UPDATE tickets SET resolved=? WHERE id=?',start,t.id);
  }});
  function policy(t){return JSON.parse(t.sla_policy);}
  function sla(t){const pinned=policy(t),calendar=pinned.businessHours,end=t.resolved??now(),paused=t.paused_minutes+(t.paused_at!==null?businessMinutes(t.paused_at,end,calendar):0);
   const used=Math.max(0,businessMinutes(t.created,end,calendar)-paused-t.stopped_minutes),target=pinned.severities[t.severity];
-  return {used_minutes:used,resolution_minutes:target.resolution,remaining_minutes:target.resolution-used,paused:t.paused_at!==null,response_remaining_minutes:target.response-businessMinutes(t.created,t.first_response??now(),calendar),calendar_version:pinned.calendar_version,policy_origin:pinned.origin,reopen_count:t.reopen_count,assumption:pinned.assumption};}
+  return {used_minutes:pinned.origin==='legacy-history-incomplete'?null:used,resolution_minutes:target.resolution,remaining_minutes:pinned.origin==='legacy-history-incomplete'?null:target.resolution-used,paused:t.paused_at!==null,response_remaining_minutes:target.response-businessMinutes(t.created,t.first_response??now(),calendar),calendar_version:pinned.calendar_version,policy_origin:pinned.origin,reopen_count:t.reopen_count,history_complete:pinned.origin!=='legacy-history-incomplete',history_warning:pinned.origin==='legacy-history-incomplete'?'Riwayat SLA tidak lengkap; perlu rekonsiliasi':pinned.origin==='legacy-baseline'?'Kalender historis tidak tersedia; memakai baseline migrasi':null,assumption:pinned.assumption};}
 
  function visible(t,u){const result={...t,sla:sla(t),reply_channel:t.contact.includes('@')?'email belum terverifikasi — simulasi lokal':'balasan manual',identity:'tidak tersedia'};if(['CMR','AUD','L3'].includes(u.role)){result.contact='[masked]';result.description=mask(result.description);result.title=mask(result.title);result.intake_fields=mask(result.intake_fields);result.resolution_cause=result.resolution_cause===null?null:mask(result.resolution_cause);}return result;}
  function enqueue(key){run('INSERT OR IGNORE INTO outbox(event_key,next_at) VALUES(?,?)',key,now());}
@@ -84,6 +92,6 @@ export function createDomain(path=':memory:',now=()=>Date.now()){
  function message(u,tid,kind,body){allow(u,kind==='internal'?'note':'reply');if(!['internal','reply'].includes(kind)||typeof body!=='string'||!body.trim()||body.length>10000)fail(400,'Pesan tidak valid');ticket(tid);return transaction(()=>{run('INSERT INTO messages(ticket_id,actor,kind,body,created) VALUES(?,?,?,?,?)',tid,u.id,kind,redact(body),now());if(kind==='reply'){run('UPDATE tickets SET first_response=COALESCE(first_response,?) WHERE id=?',now(),tid);enqueue('reply:'+tid+':'+id());}audit(u.id,'message.'+kind,tid);evidenceChanged(u,tid);return {ok:true};});}
  function promote(u,tid){allow(u,'promote');const t=ticket(tid);if(!t.complaint||!t.triaged)fail(409,'Triase dan flag complaint wajib');return transaction(()=>{if(one('SELECT id FROM reports WHERE ticket_id=?',tid))fail(409,'Sudah diajukan');run('INSERT INTO reports(ticket_id,maker) VALUES(?,?)',tid,u.id);audit(u.id,'report.promote',tid);return {ok:true};});}
  function approve(u,rid,b){allow(u,'approve');return transaction(()=>{const r=one('SELECT * FROM reports WHERE id=?',rid);if(!r)fail(404,'Record tidak ditemukan');if(r.maker===u.id)fail(403,'Maker harus berbeda checker');if(r.version!==b.version)fail(409,'Versi berubah');const next={DATA_DRAFT:'REVIEWED',REVIEWED:'DISETUJUI_MANUSIA'}[r.status];if(!next||!b.note?.trim())fail(400,'Catatan checker wajib');run('UPDATE reports SET status=?,checker=?,note=?,version=version+1 WHERE id=?',next,u.id,redact(b.note),rid);audit(u.id,'report.'+next,rid);return {ok:true};});}
- function jobs(failMock=false){processIntakes();for(const o of all("SELECT * FROM outbox WHERE state='pending' AND next_at<=?",now())){transaction(()=>{if(failMock){const n=o.attempts+1;run('UPDATE outbox SET attempts=?,state=?,next_at=?,error=? WHERE id=?',n,n>=5?'dead':'pending',now()+1000*2**n,'Mock unavailable',o.id);}else{run('INSERT OR IGNORE INTO mock_deliveries VALUES(?,?)',o.event_key,now());run("UPDATE outbox SET state='delivered',attempts=attempts+1,error=NULL WHERE id=?",o.id);}});}for(const t of all("SELECT * FROM tickets WHERE status NOT IN ('Ditutup','Digabung','Teratasi')")){const ratio=sla(t).used_minutes/sla(t).resolution_minutes;for(const n of [0.75,1])if(ratio>=n)run('INSERT OR IGNORE INTO alerts VALUES(?,?,?)',t.id,String(n),now());}for(const t of all("SELECT * FROM tickets WHERE status='Teratasi' AND resolved<=?",now()-3*86400000)){transaction(()=>{run("UPDATE tickets SET status='Ditutup',version=version+1,updated=? WHERE id=?",now(),t.id);audit('worker','auto.close',t.id);invalidateReport({id:'worker'},t.id);enqueue('ticket:'+t.id+':v'+(t.version+1));});}}
+ function jobs(failMock=false){processIntakes();for(const o of all("SELECT * FROM outbox WHERE state='pending' AND next_at<=?",now())){transaction(()=>{if(failMock){const n=o.attempts+1;run('UPDATE outbox SET attempts=?,state=?,next_at=?,error=? WHERE id=?',n,n>=5?'dead':'pending',now()+1000*2**n,'Mock unavailable',o.id);}else{run('INSERT OR IGNORE INTO mock_deliveries VALUES(?,?)',o.event_key,now());run("UPDATE outbox SET state='delivered',attempts=attempts+1,error=NULL WHERE id=?",o.id);}});}for(const t of all("SELECT * FROM tickets WHERE status NOT IN ('Ditutup','Digabung','Teratasi')")){const metrics=sla(t);if(!metrics.history_complete)continue;const ratio=metrics.used_minutes/metrics.resolution_minutes;for(const n of [0.75,1])if(ratio>=n)run('INSERT OR IGNORE INTO alerts VALUES(?,?,?)',t.id,String(n),now());}for(const t of all("SELECT * FROM tickets WHERE status='Teratasi' AND resolved<=?",now()-3*86400000)){transaction(()=>{run("UPDATE tickets SET status='Ditutup',version=version+1,updated=? WHERE id=?",now(),t.id);audit('worker','auto.close',t.id);invalidateReport({id:'worker'},t.id);enqueue('ticket:'+t.id+':v'+(t.version+1));});}}
  return {db,now,all,one,run,transaction,audit,allow,userCreate,ticket,sla,visible,intake,processIntakes,update,message,evidenceChanged,promote,approve,jobs};
 }

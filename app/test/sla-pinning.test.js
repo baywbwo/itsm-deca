@@ -1,6 +1,7 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
-import {mkdtempSync,rmSync,mkdirSync,writeFileSync,copyFileSync} from 'node:fs';
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync,copyFileSync,readFileSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -44,7 +45,7 @@ test('legacy additive migration reconstructs resolved interval from audit; resta
  d=createDomain(path);assert.equal(d.ticket(tid).sla_policy,pinned);assert.equal(d.ticket(tid).reopen_count,1);assert.equal(d.one('PRAGMA integrity_check').integrity_check,'ok');
  // Run the actual previous domain against the pre-migration backup, without changing checkout.
  mkdirSync(join(dir,'app'));mkdirSync(join(dir,'config'));copyFileSync('config/taxonomy.json',join(dir,'config/taxonomy.json'));
- const previous=spawnSync('git',['show','27aafb0:app/domain.js'],{encoding:'utf8'});assert.equal(previous.status,0);writeFileSync(join(dir,'app','domain.mjs'),previous.stdout);
+ const previous=readFileSync(new URL('./fixtures/domain-27aafb0.txt',import.meta.url));assert.equal(createHash('sha256').update(previous).digest('hex'),'335893a78a1a298f2bd5211e5bfad09a618361749daca937f0ee2900518d74aa');writeFileSync(join(dir,'app','domain.mjs'),previous);
  const recovery=spawnSync(process.execPath,['--input-type=module','-e',"import {createDomain} from './app/domain.mjs';const d=createDomain('./before.sqlite');if(d.ticket(1).title!=='Synthetic'||d.one('PRAGMA integrity_check').integrity_check!=='ok')process.exit(1);d.db.close();"],{cwd:dir,encoding:'utf8'});assert.equal(recovery.status,0,recovery.stderr);
  const restored=createDomain(backup);assert.equal(restored.ticket(tid).title,'Synthetic');assert.equal(restored.ticket(tid).reopen_count,1);restored.db.close();
  }finally{if(d.db.isOpen)d.db.close();rmSync(dir,{recursive:true,force:true});}
@@ -78,4 +79,24 @@ test('legacy closed timestamp repaired from audit; unreadable history explicitly
  d.db.exec('ALTER TABLE tickets DROP COLUMN sla_policy; ALTER TABLE tickets DROP COLUMN stopped_minutes; ALTER TABLE tickets DROP COLUMN reopen_count');d.db.close();d=createDomain(path);
  assert.equal(d.ticket(tid).resolved,resolved);assert.equal(d.sla(d.ticket(tid)).used_minutes,15);assert.equal(d.sla(d.ticket(broken)).policy_origin,'legacy-history-incomplete');
  }finally{if(d.db.isOpen)d.db.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('QA20-D01 missing, partial, malformed and zero-event histories remain unverified across restart',()=>{
+ for(const kind of ['missing','partial','malformed','gap','zero','new']){
+ const dir=mkdtempSync(join(tmpdir(),'sla-incomplete-')),path=join(dir,'db');const f=fixture(path);let d=f.d;try{
+ const tid=f.submit();const status=status=>f.update(tid,{action:'status',status,resolution_cause:'Synthetic'});
+ if(!['zero','new'].includes(kind)){status('Diproses');f.set('2026-10-30T16:45:00');status('Teratasi');f.set('2026-11-02T08:30:00');status('Ditutup');f.set('2026-11-03T08:30:00');status('Diproses');}
+ d.db.exec('DROP TRIGGER audit_no_delete');
+ if(kind==='missing')d.run("DELETE FROM audit WHERE action='status'");
+ if(kind==='partial')d.run("DELETE FROM audit WHERE id=(SELECT MAX(id) FROM audit WHERE action='status')");
+ if(kind==='gap')d.run("DELETE FROM audit WHERE id=(SELECT MIN(id) FROM audit WHERE action='status')");
+ if(kind==='malformed')d.run("INSERT INTO audit(actor,action,object,detail,created) VALUES('fixture','status',?,'{}',?)",String(tid),stamp('2026-11-03T08:30:00'));
+ if(kind==='zero')d.run("UPDATE tickets SET status='Diproses' WHERE id=?",tid);
+ const audit=d.all('SELECT * FROM audit');
+ d.db.exec('ALTER TABLE tickets DROP COLUMN sla_policy; ALTER TABLE tickets DROP COLUMN stopped_minutes; ALTER TABLE tickets DROP COLUMN reopen_count');d.db.close();
+ d=createDomain(path,()=>stamp('2026-11-03T08:30:00'));const metrics=d.sla(d.ticket(tid));
+ assert.equal(metrics.history_complete,kind==='new',kind);
+ if(kind!=='new'){assert.equal(metrics.used_minutes,null);assert.equal(metrics.remaining_minutes,null);assert.match(metrics.history_warning,/rekonsiliasi/);d.jobs();assert.equal(d.one('SELECT COUNT(*) n FROM alerts').n,0);}
+ assert.deepEqual(d.all('SELECT * FROM audit'),audit);const snapshot=d.ticket(tid);d.db.close();d=createDomain(path);assert.deepEqual(d.ticket(tid),snapshot);
+ }finally{if(d.db.isOpen)d.db.close();rmSync(dir,{recursive:true,force:true});}
+ }
 });
