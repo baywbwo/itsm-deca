@@ -1,0 +1,38 @@
+
+> dob-itsm-platform@0.1.0 test
+> node --test app/test/*.test.js
+
+✔ AC-001/002/003 intake atomic replay and asynchronous worker (689.888087ms)
+✔ session HttpOnly, RBAC, expiry, CSRF, logout (586.580151ms)
+✔ role matrix denies all unspecified action cells and audits reads (4.416787ms)
+✔ ticket lifecycle triage, concurrent claim, private notes, pause/resume and reports (617.293624ms)
+✔ CSV export period, identity unavailable, injection and fixture exclusion (599.412809ms)
+✔ attachment magic bytes, whitelist, download and access (591.13812ms)
+✔ outbox backoff, dead state, manual retry and deduplicated delivery (2.839971ms)
+✔ SLA Friday across weekend; holidays; CSV dangerous prefixes; scrypt (12.08266ms)
+✔ audit append-only, identity redaction and backup/restore integrity (84.699087ms)
+✔ intake validation, rate limit, security headers and generic unknown login (634.185896ms)
+✔ E-05 revision invalidates reviewed source and rejects stale approval; audit failure rolls back (585.829254ms)
+✔ AC-016 auto-close is atomic, invalidates approved source and emits one outbox event (78.202379ms)
+✔ BUG-QA-001/002 masked projections cover formatted phones, messages, audit, reports and CSV (587.601802ms)
+✔ BUG-QA-003 strict calendar rejects normalization and accepts leap date (572.749101ms)
+✔ UX09-01 intake validates merchant/PIC taxonomy and retains fields through worker and triage (597.474954ms)
+✔ UX09-02 resolution requires cause and failed validation leaves source version intact (589.725843ms)
+✔ UX09-03 preview reconciles source IDs and export count, external absence stays incomplete (593.266931ms)
+✔ UX09-05 approved source revision is draft in preview/export and needs fresh checker sequence (594.360124ms)
+✔ additive ticket schema upgrade preserves existing ticket and intake data (15.412869ms)
+✔ BUG-QA-004 evidence mutations atomically roll back audit, invalidation and outbox faults (665.098364ms)
+✔ UX09-01 public attachments validate before acceptance, replay safely and worker rolls back on audit fault (603.944317ms)
+✔ BUG-QA-006/007/008 auth and retry audit faults preserve prior state and recovery commits once (686.816891ms)
+✔ D10-01/03 intake receipt loss, navigation, retry one HTTP intake; schema failure is recoverable (106.878182ms)
+✔ D10-02 logout cancellation/failure retain draft; success clears RAM; D10-05 errors clear on input (3.167698ms)
+✔ D10-04 restored search drives query; preview periods and changed-filter stale responses (22.427988ms)
+✔ D10-05 macro appends text and synchronizes RAM draft across form reconstruction (3.757107ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10133.586975

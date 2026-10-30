@@ -1,0 +1,18 @@
+✔ D10-01/03 intake receipt loss, navigation, retry one HTTP intake; schema failure is recoverable (111.151668ms)
+✔ D10-02 logout cancellation/failure retain draft; success clears RAM; D10-05 errors clear on input (3.368537ms)
+✔ D10-04 restored search drives query; preview periods and changed-filter stale responses (22.075356ms)
+✔ D10-05 macro appends text and synchronizes RAM draft across form reconstruction (4.962828ms)
+✔ UX11-01 late intake success/rejection cannot clear new-account drafts or revive old intents (13.678938ms)
+✔ UX11-01 expiry retains same-account draft and intent; account switch discards them (3.33888ms)
+✔ UX09-12 restored KB query survives initial error and retry; empty state replaces loading (2.235161ms)
+✔ UX09-13 skip focuses main and prevents fragment/router navigation (DOM double) (1.324943ms)
+✔ UX11-01 failed logout leaves pending-submit recovery active (1.989724ms)
+✔ UX11-01 logout success must keep RAM empty when an older submit fails late (8.671049ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 276.761664
