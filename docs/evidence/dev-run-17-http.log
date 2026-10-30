@@ -1,0 +1,10 @@
+PASS startup /healthz /version SHA a727f14c086d8e850add595d8758488d77a19e4f
+PASS login HTTP cookie
+PASS internal/public persisted distinct kinds
+PASS attachment upload/download bytes
+PASS public intake real background worker creates ticket
+PASS online backup integrity and SIGTERM exit0
+PASS restart restored snapshot session/tickets/messages/attachment retained
+PASS logout session invalidated
+PASS restored process shutdown
+PASS review fixture running loopback3103; credentials ephemeral discarded
