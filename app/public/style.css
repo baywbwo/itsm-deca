@@ -128,3 +128,8 @@ input[type=file] { width:100%; white-space:normal; font-size:14px }
   .composer { padding:12px }
 }
 @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto; animation:none!important; transition:none!important } }
+
+/* UX13 B13-01/02: structural boundary and lossless wrapping. */
+.composer { border-color:var(--brand-sapphire) }
+.composer[data-visibility=internal] { border-color:var(--brand-sapphire); border-left-color:var(--warning) }
+.card p,.card small,.card label,.card li { overflow-wrap:anywhere; min-width:0 }
