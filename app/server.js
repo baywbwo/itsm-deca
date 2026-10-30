@@ -1,10 +1,11 @@
+import {userService} from './users.js';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createDomain,fail,id,hash,verify,csvCell,redact,taxonomy,mask,calendarDate,validateAttachment } from './domain.js';
 export function createApp({dbPath=':memory:',now=()=>Date.now(),secure=false,fixture=false}={}){
  if(fixture&&process.env.NODE_ENV==='production')throw new Error('Fixture disabled in production');
- const d=createDomain(dbPath,now),limits=new Map();d.dummyPassword=password(id());
+ const d=createDomain(dbPath,now),limits=new Map(),accounts=userService(d);d.dummyPassword=password(id());
  function limit(key,max,window=60000){const entry=limits.get(key);if(!entry||entry.at+window<=now()){limits.set(key,{at:now(),n:1});return;}if(++entry.n>max)fail(429,'Terlalu banyak percobaan; coba kembali nanti');if(limits.size>10000)for(const [k,v] of limits)if(v.at+window<now())limits.delete(k);}
  const server=http.createServer(async(req,res)=>{
  const requestId=id();res.setHeader('X-Request-ID',requestId);res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -24,14 +25,19 @@ export function createApp({dbPath=':memory:',now=()=>Date.now(),secure=false,fix
  if(method==='GET'&&p.startsWith('/api/intake/')){limit('poll:'+req.socket.remoteAddress,120);const intake=d.one('SELECT * FROM intakes WHERE id=?',p.split('/').pop());if(!intake||intake.created<now()-7*86400000)fail(404,'Intake tidak ditemukan');return send(200,intake.ticket_id?{status:'TIKET_DIBUAT',ticket_no:intake.ticket_id}:{status:'DITERIMA'});}
  if(method==='POST'&&p==='/api/login'){
  limit('login:'+req.socket.remoteAddress+':'+String(b.email).slice(0,200),5,15*60000);limit('login-ip:'+req.socket.remoteAddress,50,15*60000);
- const user=d.one('SELECT * FROM users WHERE email=?',String(b.email||''));let valid=false;if(typeof b.password==='string'&&b.password.length<=1024){if(user)valid=verify(b.password,user.password);else verify(b.password,d.dummyPassword);}if(!valid){d.audit(null,'login.failed','auth');fail(401,'Email atau password salah');}
- const token=id(),cookie=req.headers.cookie?.match(/(?:^|; )sid=([a-f0-9]+)/)?.[1];d.transaction(()=>{if(cookie)d.run('DELETE FROM sessions WHERE token=?',hash(cookie));d.run('INSERT INTO sessions VALUES(?,?,?,?)',hash(token),user.id,now()+8*3600000,now());d.audit(user.id,'login','auth');});res.setHeader('Set-Cookie',`sid=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${secure?'; Secure':''}`);return send(200,{id:user.id,email:user.email,role:user.role});}
+ const user=d.one('SELECT * FROM users WHERE email=?',String(b.email||''));let valid=false;if(typeof b.password==='string'&&b.password.length<=1024){if(user)valid=verify(b.password,user.password);else verify(b.password,d.dummyPassword);}if(!valid||!user?.active){d.audit(null,'login.failed','auth');fail(401,'Email atau password salah');}
+ const token=id(),cookie=req.headers.cookie?.match(/(?:^|; )sid=([a-f0-9]+)/)?.[1];d.transaction(()=>{if(cookie)d.run('DELETE FROM sessions WHERE token=?',hash(cookie));d.run('INSERT INTO sessions VALUES(?,?,?,?)',hash(token),user.id,now()+8*3600000,now());d.audit(user.id,'login','auth');});res.setHeader('Set-Cookie',`sid=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${secure?'; Secure':''}`);return send(200,{id:user.id,email:user.email,role:user.role,must_change_password:!!user.must_change_password});}
  if(method==='GET'&&['/','/app.js','/draft-state.js','/style.css'].includes(p)){const f=p==='/'?'index.html':p.slice(1);return send(200,readFileSync(new URL('./public/'+f,import.meta.url),'utf8'),f.endsWith('.js')?'text/javascript':f.endsWith('.css')?'text/css':'text/html');}
- const token=req.headers.cookie?.match(/(?:^|; )sid=([a-f0-9]+)/)?.[1];const user=token&&d.one('SELECT u.id,u.email,u.role,s.last_seen,s.expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?',hash(token));if(!user||user.expires<=now()||user.last_seen<now()-(['CMR','L3'].includes(user.role)?15:30)*60000)fail(401,'Sesi berakhir; masuk kembali');d.run('UPDATE sessions SET last_seen=? WHERE token=?',now(),hash(token));
- if(method==='GET'&&p==='/api/me')return send(200,{id:user.id,email:user.email,role:user.role,fixture,permissions:Object.keys(awaitRights).filter(k=>(awaitRights[k]||[]).includes(user.role))});
+ const token=req.headers.cookie?.match(/(?:^|; )sid=([a-f0-9]+)/)?.[1];const user=token&&d.one('SELECT u.id,u.email,u.role,u.active,u.must_change_password,s.last_seen,s.expires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?',hash(token));if(!user||!user.active||user.expires<=now()||user.last_seen<now()-(['CMR','L3'].includes(user.role)?15:30)*60000)fail(401,'Sesi berakhir; masuk kembali');d.run('UPDATE sessions SET last_seen=? WHERE token=?',now(),hash(token));
+ if(method==='GET'&&p==='/api/me')return send(200,{id:user.id,email:user.email,role:user.role,must_change_password:!!user.must_change_password,fixture,permissions:Object.keys(awaitRights).filter(k=>(awaitRights[k]||[]).includes(user.role))});
  if(method==='POST'&&p==='/api/logout'){d.transaction(()=>{d.run('DELETE FROM sessions WHERE token=?',hash(token));d.audit(user.id,'logout','auth');});res.setHeader('Set-Cookie','sid=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return send(200,{ok:true});}
+ if(method==='POST'&&p==='/api/password/change'){limit('password-change:'+user.id,5,15*60000);return send(200,accounts.change(user,b.current_password,b.new_password,hash(token)));}
+ if(user.must_change_password)fail(403,'Ganti password sebelum melanjutkan');
+ if(p==='/api/admin/users'){if(method==='GET')return send(200,accounts.list(user));if(method==='POST')return send(201,accounts.create(user,b));}
+ const userRoute=p.match(/^\/api\/admin\/users\/([a-f0-9]+)(?:\/(reset-password))?$/);
+ if(userRoute){const uid=userRoute[1];if(method==='GET'&&!userRoute[2])return send(200,accounts.get(user,uid));if(method==='PATCH'&&!userRoute[2])return send(200,accounts.update(user,uid,b));if(method==='POST'&&userRoute[2])return send(200,accounts.reset(user,uid,b.password));}
  if(method==='GET'&&p==='/api/config')return send(200,taxonomy);
- if(method==='GET'&&p==='/api/users'){d.allow(user,'assign');return send(200,d.all("SELECT id,email,role FROM users WHERE role IN ('OPR','SUP','L2','L3')"));}
+ if(method==='GET'&&p==='/api/users'){d.allow(user,'assign');return send(200,d.all("SELECT id,email,role FROM users WHERE active=1 AND role IN ('OPR','SUP','L2','L3')"));}
  if(method==='GET'&&p==='/api/tickets'){
  d.allow(user,'tickets');const q=(url.searchParams.get('q')||'').slice(0,200),status=url.searchParams.get('status')||'',mine=url.searchParams.get('mine')==='1',triage=url.searchParams.get('triage')==='1';const rows=d.all('SELECT * FROM tickets WHERE (title LIKE ? OR CAST(id AS TEXT)=?) AND (?=\'\' OR status=?) AND (?=0 OR owner=?) AND (?=0 OR triaged IS NULL) ORDER BY updated DESC LIMIT 200','%'+q+'%',q,status,status,+mine,user.id,+triage);return send(200,{items:rows.map(t=>d.visible(t,user)),limit:200});}
  const match=p.match(/^\/api\/tickets\/(\d+)(?:\/(messages|history|promote|attachments))?$/);

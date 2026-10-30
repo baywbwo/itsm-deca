@@ -54,3 +54,7 @@ Draft SPA berada di memori halaman; logout menghapusnya, reload/menutup halaman 
 ### DEV-F1-11 rollback compatibility
 
 Tidak ada schema baru. Intake publik sekarang dapat membawa attachment base64 (maks 5/total 5 MB); worker versi lama mengabaikan field ini. Sebelum rollback ke 22747b9, hentikan intake baru dan drain pending intake dengan worker versi baru, atau restore backup konsisten sebelum fitur dipakai. Backup/restore tetap mengikuti prosedur di atas. Jangan hapus audit/data langsung. Approval yang dibatalkan membutuhkan review ulang; rollback tidak mengembalikannya. Upload belum dipindai malware; payload intake dan BLOB menyebabkan duplikasi storage yang perlu kapasitas/retensi. Versi ini tetap lokal sampai QA/UX/release gate lulus.
+
+## DEV-USER-23 akun dan kompatibilitas
+
+Bootstrap sekali dan pengelolaan akun lokal tersedia; prosedur tepat di docs/USERS.md, bukan memakai fixture untuk production. Schema users ditambah name/active/must_change_password dan marker bootstrap/last-admin triggers; ID/password existing dipertahankan. Backup pra-upgrade wajib pada target yang disetujui. Backend lama tidak memeriksa status nonaktif/forced-change, sehingga rollback kode saja dengan DB baru dan login terbuka berisiko. Tutup login, simpan snapshot, pilih maintenance+restore pra-upgrade yang disetujui atau forward fix. Tidak ada provisioning live dalam implementasi ini.
