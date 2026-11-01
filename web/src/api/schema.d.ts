@@ -382,6 +382,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Report run metadata
+         * @description report.view, this workspace only.
+         */
         get: operations["getReportRun"];
         put?: never;
         post?: never;
@@ -905,6 +909,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/reports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operational report preview over the whole scope (D10)
+         * @description report.view (CS, Lead CS). Same SQL source as the export. Filter values must belong to this workspace (422 + field).
+         */
+        get: operations["previewReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/report-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest report runs of this workspace (D10)
+         * @description report.view. Newest first, at most `limit`.
+         */
+        get: operations["listReportRuns"];
+        put?: never;
+        /**
+         * Export the operational report as CSV (D10)
+         * @description report.view (no export-specific permission exists in the D01 catalog). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).
+         */
+        post: operations["createReportRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the CSV of a succeeded run (D10)
+         * @description Membership + report.view re-checked on every request; workspace-scoped; hash verified before sending; expired = 410. UTF-8 with BOM, CRLF, every cell quoted, formula-leading cells prefixed with '. Audited (report.download). Headers: Content-Disposition attachment, X-Content-SHA256, Cache-Control no-store, CSP sandbox.
+         */
+        get: operations["downloadReportRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1047,7 +1115,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -1200,7 +1268,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description Operational report run metadata. Official BI export is held. The artifact reference is not exposed. */
+        /** @description Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed. */
         ReportRun: {
             /** Format: uuid */
             id: string;
@@ -1214,9 +1282,25 @@ export interface components {
             state: "queued" | "running" | "succeeded" | "failed";
             /** Format: date-time */
             generatedAt: string | null;
+            /** @description The run produced an artifact (D02 meaning). Use downloadable for the download link. */
             hasArtifact: boolean;
             /** Format: date-time */
             createdAt: string;
+            basis: components["schemas"]["ReportBasis"];
+            filters: components["schemas"]["ReportRunFilters"];
+            /** @description True while the stored CSV can be downloaded (D10 artifact, not expired). */
+            downloadable: boolean;
+            requestedBy: components["schemas"]["PersonRef"];
+            rowCount: number | null;
+            /** @description SHA-256 of the exact bytes served by the download. */
+            artifactSha256: string | null;
+            artifactBytes: number | null;
+            /** Format: date-time */
+            expiresAt: string | null;
+            expired: boolean;
+            /** @enum {string|null} */
+            failureCode: "row_limit" | "internal" | null;
+            fileName: string | null;
         };
         UatNotice: {
             /** @example Mode uji — Superadmin */
@@ -2140,6 +2224,168 @@ export interface components {
             /** Format: uuid */
             auditEventId: string;
         };
+        /**
+         * @description `received`: received_at in the period. `resolved`: at least one resolve event in the period (a later reopen keeps it).
+         * @enum {string}
+         */
+        ReportBasis: "received" | "resolved";
+        ReportTypeOption: {
+            /** @enum {string} */
+            code: "operational" | "bi_regulator";
+            label: string;
+            available: boolean;
+            reason: string | null;
+        };
+        /** @description Company header from the database (one workspace = one reporting company). Never taken from the client. */
+        ReportHeader: {
+            companyName: string;
+            companyCode: string;
+            /** @description null until configured; never guessed. */
+            reporterCode: string | null;
+            /** Format: uuid */
+            workspaceId: string;
+            workspaceCode: string;
+            /** @example Asia/Jakarta */
+            timezone: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /**
+             * Format: date-time
+             * @description Inclusive, UTC.
+             */
+            startAt: string;
+            /**
+             * Format: date-time
+             * @description Exclusive, UTC (local midnight after periodEnd).
+             */
+            endAt: string;
+            basis: components["schemas"]["ReportBasis"];
+            basisLabel: string;
+        };
+        ReportAppliedFilters: {
+            status: components["schemas"]["TicketStatusCode"][] | null;
+            owner: string | null;
+            channel: string | null;
+            category: string | null;
+            priority: string | null;
+        };
+        ReportTotals: {
+            /** @description Unique tickets in the report = rows of the export. */
+            tickets: number;
+            /** @description Resolve events in the period among those tickets (never added to tickets). */
+            resolutionCycles: number;
+            /** @description Distinct tickets with at least one resolve event in the period. */
+            resolvedTickets: number;
+            unassigned: number;
+            missingChannel: number;
+            missingCategory: number;
+            missingPriority: number;
+        };
+        ReportStatusCount: {
+            status: components["schemas"]["TicketStatus"];
+            count: number;
+        };
+        ReportBreakdown: {
+            /**
+             * Format: uuid
+             * @description null = not recorded / belum ditugaskan.
+             */
+            id: string | null;
+            label: string | null;
+            count: number;
+        };
+        ReportValidationItem: {
+            /** @enum {string} */
+            code: "regulator_mapping_unavailable" | "reporter_code_missing" | "missing_priority" | "missing_category" | "missing_channel" | "unassigned" | "row_limit";
+            /** @enum {string} */
+            level: "info" | "warning" | "blocking";
+            message: string;
+            count?: number;
+        };
+        ReportRow: {
+            /** Format: uuid */
+            ticketId: string;
+            displayNumber: string;
+            subject: string;
+            status: components["schemas"]["TicketStatus"];
+            priority: string | null;
+            category: string | null;
+            channel: string | null;
+            /** @description PIC display name; null = belum ditugaskan. */
+            owner: string | null;
+            /** @description Workspace local time, YYYY-MM-DD HH:MM. */
+            receivedLocal: string;
+            resolutionCycles: number;
+            lastResolvedLocal: string | null;
+        };
+        /** @description One REPEATABLE READ snapshot: totals, breakdowns and rows read the same SQL source as the export. Rows are the first previewLimit in export order; totals cover every row. */
+        ReportPreview: {
+            /** @enum {string} */
+            reportType: "operational";
+            reportLabel: string;
+            reportTypes: components["schemas"]["ReportTypeOption"][];
+            header: components["schemas"]["ReportHeader"];
+            /** Format: date-time */
+            asOf: string;
+            filters: components["schemas"]["ReportAppliedFilters"];
+            filterOptions: components["schemas"]["DashboardFilterOptions"];
+            totals: components["schemas"]["ReportTotals"];
+            byStatus: components["schemas"]["ReportStatusCount"][];
+            byPriority: components["schemas"]["ReportBreakdown"][];
+            byChannel: components["schemas"]["ReportBreakdown"][];
+            byCategory: components["schemas"]["ReportBreakdown"][];
+            byOwner: components["schemas"]["ReportBreakdown"][];
+            validation: components["schemas"]["ReportValidationItem"][];
+            rows: components["schemas"]["ReportRow"][];
+            previewLimit: number;
+            exportMaxRows: number;
+            exportable: boolean;
+            notice: string;
+        };
+        ReportExportRequest: {
+            /**
+             * @description `bi_regulator` answers 422 regulator_mapping_unavailable.
+             * @enum {string}
+             */
+            reportType: "operational" | "bi_regulator";
+            /** Format: date */
+            periodStart: string;
+            /**
+             * Format: date
+             * @description Inclusive; >= periodStart; at most 366 days.
+             */
+            periodEnd: string;
+            basis?: components["schemas"]["ReportBasis"];
+            status?: components["schemas"]["TicketStatusCode"][];
+            /** @description Member UUID or `unassigned`. */
+            owner?: string;
+            /** @description UUID or `none`. */
+            channel?: string;
+            /** @description UUID or `none`. */
+            category?: string;
+            /** @description UUID or `none`. */
+            priority?: string;
+            /** @enum {string} */
+            format?: "csv";
+        };
+        /** @description Validated filters of the run (null = not filtered). Empty object for runs created before D10. */
+        ReportRunFilters: {
+            status?: components["schemas"]["TicketStatusCode"][] | null;
+            owner?: string | null;
+            channel?: string | null;
+            category?: string | null;
+            priority?: string | null;
+        };
+        ReportRunList: {
+            items: components["schemas"]["ReportRun"][];
+            limit: number;
+        };
+        ReportExportResult: {
+            run: components["schemas"]["ReportRun"];
+            replayed: boolean;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -2277,6 +2523,24 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Official BI / regulator report requested: held until a verified mapping exists (regulator_mapping_unavailable). Nothing is created. */
+        RegulatorMappingUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The report artifact expired (report_expired); create a new export. */
+        ReportExpired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description Unknown, malformed or foreign IDs all return 404. */
@@ -2299,6 +2563,8 @@ export interface components {
         MembershipId: string;
         CatalogKind: components["schemas"]["CatalogKind"];
         CatalogItemId: string;
+        /** @description One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409. */
+        ReportIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;
@@ -4228,6 +4494,170 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+        };
+    };
+    previewReport: {
+        parameters: {
+            query: {
+                /** @description First local day (YYYY-MM-DD). */
+                periodStart: string;
+                /** @description Last local day, inclusive; at most 366 days. */
+                periodEnd: string;
+                /** @description `operational` (default). `bi_regulator` = 422 regulator_mapping_unavailable. */
+                reportType?: "operational" | "bi_regulator";
+                /** @description Date basis. */
+                basis?: components["schemas"]["ReportBasis"];
+                /** @description Comma-separated TicketStatusCode values; absent = all. */
+                status?: string;
+                /** @description Member UUID or `unassigned`. */
+                owner?: string;
+                /** @description UUID or `none`. */
+                channel?: string;
+                /** @description UUID or `none`. */
+                category?: string;
+                /** @description UUID or `none`. */
+                priority?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportPreview"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description validation_failed (+ field) or regulator_mapping_unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listReportRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportRunList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createReportRun: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409. */
+                "Idempotency-Key": components["parameters"]["ReportIdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay (replayed=true) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExportResult"];
+                };
+            };
+            /** @description Run created (succeeded or failed) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExportResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            /** @description validation_failed (+ field) or regulator_mapping_unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    downloadReportRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; otherwise 404. */
+                report_run_id: components["parameters"]["ReportRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV bytes */
+            200: {
+                headers: {
+                    "X-Content-SHA256"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            410: components["responses"]["ReportExpired"];
         };
     };
 }

@@ -41,6 +41,10 @@ import type {
   TicketList,
   TicketListItem,
   TicketMutationResult,
+  ReportPreview,
+  ReportRun,
+  ReportRunList,
+  ReportExportResult,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -351,3 +355,54 @@ export const isIntegrationList = (v: unknown): v is IntegrationList =>
   typeof v.canManageCredentials === 'boolean';
 export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
   isObj(v) && isConnection(v.item) && isStr(v.auditEventId);
+
+// --- D10 reports -------------------------------------------------------------
+const isReportBasis = (v: unknown) => v === 'received' || v === 'resolved';
+const isBreakdown = (v: unknown) => isObj(v) && isStrOrNull(v.id) && isStrOrNull(v.label) && isNum(v.count);
+const REPORT_TOTALS = [
+  'tickets', 'resolutionCycles', 'resolvedTickets', 'unassigned', 'missingChannel', 'missingCategory', 'missingPriority',
+] as const;
+const LEVELS = ['info', 'warning', 'blocking'];
+
+/** Preview of the operational report; totals must be numbers and the header must name the scope. */
+export function isReportPreview(v: unknown): v is ReportPreview {
+  if (!isObj(v) || v.reportType !== 'operational' || !isStr(v.reportLabel) || !isStr(v.asOf) || !isStr(v.notice)) return false;
+  const h = v.header;
+  if (!isObj(h) || !isStr(h.companyName) || !isStr(h.companyCode) || !isStrOrNull(h.reporterCode) ||
+    !isStr(h.workspaceId) || !isStr(h.workspaceCode) || !isStr(h.timezone) || !isStr(h.periodStart) ||
+    !isStr(h.periodEnd) || !isStr(h.startAt) || !isStr(h.endAt) || !isReportBasis(h.basis) || !isStr(h.basisLabel)) return false;
+  const t = v.totals;
+  const f = v.filters;
+  const o = v.filterOptions;
+  return (
+    isObj(t) && REPORT_TOTALS.every((k) => isNum(t[k])) &&
+    isObj(f) && FILTER_KEYS.every((k) => isStrOrNull(f[k])) && (f.status === null || isArr(f.status, isStr)) &&
+    isObj(o) && (['owners', 'channels', 'categories', 'priorities'] as const).every((k) => isArr(o[k], isOption)) &&
+    isArr(v.reportTypes, (r) => isObj(r) && isStr(r.code) && isStr(r.label) && typeof r.available === 'boolean' && isStrOrNull(r.reason)) &&
+    isArr(v.byStatus, (s) => isObj(s) && isStatus(s.status) && isNum(s.count)) &&
+    isArr(v.byPriority, isBreakdown) && isArr(v.byChannel, isBreakdown) &&
+    isArr(v.byCategory, isBreakdown) && isArr(v.byOwner, isBreakdown) &&
+    isArr(v.validation, (i) => isObj(i) && isStr(i.code) && LEVELS.includes(i.level as string) && isStr(i.message)) &&
+    isArr(v.rows, (r) => isObj(r) && isStr(r.ticketId) && isStr(r.displayNumber) && isStr(r.subject) &&
+      isStatus(r.status) && isStr(r.receivedLocal) && isNum(r.resolutionCycles)) &&
+    isNum(v.previewLimit) && isNum(v.exportMaxRows) && typeof v.exportable === 'boolean'
+  );
+}
+
+export function isReportRun(v: unknown): v is ReportRun {
+  return (
+    isObj(v) && isStr(v.id) && isStr(v.periodStart) && isStr(v.periodEnd) &&
+    ['queued', 'running', 'succeeded', 'failed'].includes(v.state as string) &&
+    isReportBasis(v.basis) && isObj(v.filters) && typeof v.downloadable === 'boolean' &&
+    typeof v.hasArtifact === 'boolean' && typeof v.expired === 'boolean' &&
+    isObj(v.requestedBy) && isStr(v.requestedBy.id) && isStr(v.requestedBy.label) &&
+    isNumOrNull(v.rowCount) && isStrOrNull(v.artifactSha256) && isNumOrNull(v.artifactBytes) &&
+    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName)
+  );
+}
+
+export const isReportRunList = (v: unknown): v is ReportRunList =>
+  isObj(v) && isArr(v.items, isReportRun) && isNum(v.limit);
+
+export const isReportExportResult = (v: unknown): v is ReportExportResult =>
+  isObj(v) && isReportRun(v.run) && typeof v.replayed === 'boolean';

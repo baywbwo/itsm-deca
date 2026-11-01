@@ -321,3 +321,19 @@ dialog.peek .dialog-body { display: grid; gap: 16px; align-content: start; }
   .integration-grid { grid-template-columns: minmax(0, 1fr); }
   .integration { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* D10 reports */
+.report-head { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 20px; margin: 8px 0 0; }
+.report-head dt { font-size: 12px; color: var(--muted); }
+.report-head dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.report-filters { flex-wrap: wrap; margin-top: 16px; }
+.report-filters .full { flex-basis: 100%; margin: 0; }
+.report-status { border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; flex-basis: 100%; }
+.report-status legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+.report-status .check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; min-height: 28px; }
+.report-breakdowns > .card { margin-top: 0; }
+@media (max-width: 760px) {
+  .report-head { grid-template-columns: 1fr 1fr; }
+  .report-filters .period { flex: 1 1 140px; }
+}
+.banner.spaced-bottom { margin-bottom: 20px; }

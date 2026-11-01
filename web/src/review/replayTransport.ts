@@ -33,6 +33,8 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * Retry/reconcile and other combinations are not recorded; the replay says so.
  * D09 settings, members, catalogs, companies and integrations replay the real GET answers only;
  * every change there answers "tidak direkam" (the live API proves writes, not this package).
+ * D10 reports replay the recorded run list and the previews of the recording month and October 2026;
+ * other periods/filters and every export answer "tidak direkam" (no report file is in the package).
  */
 export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict' | 'intake-unknown' | 'intake-degraded';
 export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict', 'intake-unknown', 'intake-degraded'];
@@ -43,6 +45,7 @@ const DETAIL_READ = /^\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+)\/(detail|a
 const NOTES = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+))\/notes$/;
 const UPLOAD = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/[^/?]+\/attachments)\?/;
 const TICKETS = /^\/api\/v1\/workspaces\/[^/]+\/tickets(\/board)?(\?|$)/;
+const REPORTS = /^\/api\/v1\/workspaces\/[^/]+\/(reports\/preview\?|report-runs)/;
 
 function emptied(body: unknown): unknown {
   const d = structuredClone(body) as Record<string, unknown>;
@@ -286,6 +289,14 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
       return {
         status: 503,
         body: { error: { code: 'dependency_unavailable', message: 'Paket review: kombinasi filter/halaman ini tidak direkam.' } },
+        requestId: 'review-tidak-direkam',
+      };
+    }
+    if (REPORTS.test(path) && !f.responses[key]) {
+      // D10: only the recorded month previews and the run list exist; exports are never recorded.
+      return {
+        status: 503,
+        body: { error: { code: 'dependency_unavailable', message: 'Paket review: laporan dengan parameter ini atau ekspor tidak direkam.' } },
         requestId: 'review-tidak-direkam',
       };
     }

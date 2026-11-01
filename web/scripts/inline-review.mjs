@@ -13,6 +13,6 @@ html = html.replace(/<link rel="stylesheet" crossorigin href="([^"]+)">/g, (_, h
   `<style>${read(href).replaceAll('</style', '<\\/style')}</style>`);
 if (/(src|href)="\.\/assets\//.test(html)) throw new Error('unresolved asset reference left in review HTML');
 
-const out = join(dir, 'itsm-d09-review.html');
+const out = join(dir, 'itsm-d10-review.html');
 writeFileSync(out, html);
 console.log(`${out} (${(html.length / 1024).toFixed(0)} KiB)`);

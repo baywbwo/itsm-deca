@@ -10,6 +10,7 @@ import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../comp
 import { ComponentsPage } from '../pages/ComponentsPage';
 import { DashboardPage } from '../pages/DashboardPage';
 import { IntegrationsPage } from '../pages/IntegrationsPage';
+import { ReportsPage } from '../pages/ReportsPage';
 import { PlannedPage } from '../pages/PlannedPage';
 import { SettingsPage } from '../pages/SettingsPage';
 import { TicketsPage } from '../pages/TicketsPage';
@@ -193,7 +194,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">ITSM Qash · kandidat D09 (pengaturan, anggota, integrasi simulasi) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D10 (laporan operasional, non-regulator) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -311,6 +312,8 @@ function Page({ id, api, userId, data, query, uat, onNotice }: {
       return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
     case 'settings':
       return <SettingsPage api={api} workspace={data.workspace} uat={uat} permissions={data.permissions.permissions} onNotice={onNotice} />;
+    case 'reports':
+      return <ReportsPage api={api} workspace={data.workspace} uat={uat} query={query} onNotice={onNotice} />;
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'components':

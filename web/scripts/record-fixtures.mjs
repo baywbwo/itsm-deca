@@ -74,6 +74,16 @@ for (const w of list.body.items) {
   for (const p of ['settings', 'integrations', ...['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'].map((k) => `catalogs/${k}`)]) {
     responses[`GET ${base}/${p}`] = await rec('GET', `${base}/${p}`);
   }
+  // D10 reports: run list plus the preview of the recording month and of October 2026 (both bases).
+  // Exports are not recorded: a review package must not hold report files.
+  responses[`GET ${base}/report-runs`] = await rec('GET', `${base}/report-runs`);
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: w.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.now());
+  for (const [s, e] of [[`${day.slice(0, 8)}01`, day], ['2026-10-01', '2026-10-31']]) {
+    for (const basis of ['received', 'resolved']) {
+      const rp = `${base}/reports/preview?${new URLSearchParams({ periodStart: s, periodEnd: e, basis })}`;
+      responses[`GET ${rp}`] = await rec('GET', rp);
+    }
+  }
   const today = responses[`GET ${base}/dashboard?period=today`].body;
   const order = ['status', 'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore'];
   const toQuery = (f) => {

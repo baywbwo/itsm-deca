@@ -264,3 +264,68 @@ export function withDetail(query: string, ticketId: string | null, full = false)
   }
   return q.toString();
 }
+
+// --- D10 reports -------------------------------------------------------------
+export const REPORT_STATUSES = ['new', 'open', 'pending_customer', 'pending_engineering', 'resolved', 'closed'] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+/** Report state in the URL: the same names the API takes, so the URL is the preview/export spec. */
+export interface ReportParams {
+  periodStart: string;
+  periodEnd: string;
+  basis: 'received' | 'resolved';
+  /** Empty = every status. Canonical order, no duplicates. */
+  status: ReportStatus[];
+  filters: Record<DashboardFilterKey, string | null>;
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** First day of the current month to today, in the workspace time zone. */
+export function defaultReportPeriod(timeZone: string, now = Date.now()): { periodStart: string; periodEnd: string } {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  return { periodStart: `${today.slice(0, 8)}01`, periodEnd: today };
+}
+
+/** Missing or malformed dates fall back to the default period; the server still validates the rest. */
+export function parseReportQuery(query: string, timeZone: string, now = Date.now()): ReportParams {
+  const q = new URLSearchParams(query);
+  const def = defaultReportPeriod(timeZone, now);
+  const s = q.get('periodStart') ?? '';
+  const e = q.get('periodEnd') ?? '';
+  const raw = (q.get('status') ?? '').split(',');
+  return {
+    periodStart: DAY.test(s) ? s : def.periodStart,
+    periodEnd: DAY.test(e) ? e : def.periodEnd,
+    basis: q.get('basis') === 'resolved' ? 'resolved' : 'received',
+    status: REPORT_STATUSES.filter((c) => raw.includes(c)),
+    filters: Object.fromEntries(DASHBOARD_FILTERS.map((k) => [k, q.get(k) || null])) as ReportParams['filters'],
+  };
+}
+
+/** Canonical query (fixed order): the URL, the preview request and the export spec all use it. */
+export function reportQuery(p: ReportParams): string {
+  const q = new URLSearchParams();
+  q.set('periodStart', p.periodStart);
+  q.set('periodEnd', p.periodEnd);
+  q.set('basis', p.basis);
+  if (p.status.length) q.set('status', REPORT_STATUSES.filter((c) => p.status.includes(c)).join(','));
+  for (const k of DASHBOARD_FILTERS) {
+    const v = p.filters[k];
+    if (v) q.set(k, v);
+  }
+  return q.toString();
+}
+
+/** Body of the export request for exactly the previewed spec. */
+export function reportExportBody(p: ReportParams) {
+  return {
+    reportType: 'operational' as const,
+    format: 'csv' as const,
+    periodStart: p.periodStart,
+    periodEnd: p.periodEnd,
+    basis: p.basis,
+    ...(p.status.length ? { status: REPORT_STATUSES.filter((c) => p.status.includes(c)) } : {}),
+    ...Object.fromEntries(DASHBOARD_FILTERS.flatMap((k) => (p.filters[k] ? [[k, p.filters[k]]] : []))),
+  };
+}

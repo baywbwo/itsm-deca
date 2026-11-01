@@ -36,6 +36,10 @@ import {
   isTicketMutationResult,
   isWorkspace,
   isWorkspaceList,
+  isReportPreview,
+  isReportRunList,
+  isReportRun,
+  isReportExportResult,
   isWorkspacePermissions,
 } from './guards';
 import type {
@@ -96,6 +100,11 @@ import type {
   TicketList,
   TicketMutationResult,
   TicketTransitionRequest,
+  ReportPreview,
+  ReportRun,
+  ReportRunList,
+  ReportExportRequest,
+  ReportExportResult,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -341,6 +350,21 @@ export function createApi(transport: Transport) {
         path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work/${encodeURIComponent(workId)}/completion`,
         headers: csrf(), body,
       }, isTicketDetailMutation),
+    /** D10: server-side preview of the whole scope; `query` is the canonical report query (`reportApiQuery`). */
+    previewReport: (id: string, query: string, signal?: AbortSignal): Promise<ReportPreview> =>
+      get(`${ws(id)}/reports/preview?${query}`, isReportPreview, signal),
+    listReportRuns: (id: string, signal?: AbortSignal): Promise<ReportRunList> =>
+      get(`${ws(id)}/report-runs`, isReportRunList, signal),
+    getReportRun: (id: string, runId: string, signal?: AbortSignal): Promise<ReportRun> =>
+      get(`${ws(id)}/report-runs/${encodeURIComponent(runId)}`, isReportRun, signal),
+    /** Idempotent per key: 201 new run, 200 replay of the same spec, 409 when the key carried another spec. */
+    createReportRun: (id: string, key: string, body: ReportExportRequest): Promise<ReportExportResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/report-runs`, headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isReportExportResult, [200, 201]),
+    /** Same-origin link; the server re-checks scope, expiry and the stored hash on every download. */
+    reportContentUrl: (id: string, runId: string): string =>
+      `${ws(id)}/report-runs/${encodeURIComponent(runId)}/content`,
     /** D09: workspace profile; `canEdit` mirrors admin.settings (the server re-checks every write). */
     getSettings: (id: string, signal?: AbortSignal): Promise<SettingsBody> =>
       get(`${ws(id)}/settings`, isSettingsBody, signal),
