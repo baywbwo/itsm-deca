@@ -1,19 +1,31 @@
 import {
+  isCatalogs,
   isDashboard,
   isErrorBody,
+  isMemberList,
   isMeta,
   isSession,
   isSessionIssued,
+  isTicketBoard,
+  isTicketList,
+  isTicketMutationResult,
   isWorkspace,
   isWorkspaceList,
   isWorkspacePermissions,
 } from './guards';
 import type {
   ApiErrorCode,
+  Catalogs,
   Dashboard,
   DashboardPeriodKey,
+  Member,
   Meta,
   Session,
+  TicketAssignmentRequest,
+  TicketBoard,
+  TicketList,
+  TicketMutationResult,
+  TicketTransitionRequest,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -23,6 +35,8 @@ export interface TransportRequest {
   path: string;
   headers: Record<string, string>;
   signal?: AbortSignal | undefined;
+  /** JSON request body (sent as application/json). */
+  body?: unknown;
 }
 export interface TransportResponse {
   status: number;
@@ -47,12 +61,17 @@ export class ApiError extends Error {
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 /** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */
-export const fetchTransport: Transport = async ({ method, path, headers, signal }) => {
+export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload }) => {
   let res: Response;
   try {
     res = await fetch(path, {
       method,
-      headers: { Accept: 'application/json', ...headers },
+      headers: {
+        Accept: 'application/json',
+        ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...headers,
+      },
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal ?? null,
@@ -94,6 +113,7 @@ export function createApi(transport: Transport) {
   const get = <T>(path: string, guard: Guard<T>, signal?: AbortSignal) =>
     call({ method: 'GET', path, headers: {}, signal }, guard);
   const ws = (id: string) => `/api/v1/workspaces/${encodeURIComponent(id)}`;
+  const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
 
   return {
     hasCsrf: () => csrfToken !== null,
@@ -121,11 +141,41 @@ export function createApi(transport: Transport) {
      */
     getDashboard: (id: string, query: DashboardPeriodKey | string, signal?: AbortSignal): Promise<Dashboard> =>
       get(`${ws(id)}/dashboard?${query.includes('=') ? query : `period=${encodeURIComponent(query)}`}`, isDashboard, signal),
+    /**
+     * One page of the ticket List. `query` is the canonical list query (`ticketQuery`); `cursor`
+     * continues the same scope/filter/sort (the server refuses a cursor from another one).
+     */
+    listTickets: (id: string, query: string, cursor: string | null, signal?: AbortSignal): Promise<TicketList> =>
+      get(`${ws(id)}/tickets${withParam(query, 'cursor', cursor)}`, isTicketList, signal),
+    /** Board columns (one per status in scope) with server totals and a first page each. */
+    getBoard: (id: string, query: string, signal?: AbortSignal): Promise<TicketBoard> =>
+      get(`${ws(id)}/tickets/board${query ? `?${query}` : ''}`, isTicketBoard, signal),
+    /** Lifecycle move/resolve/reopen; the server re-checks permission, guard and version. */
+    transitionTicket: (id: string, ticketId: string, body: TicketTransitionRequest): Promise<TicketMutationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/transitions`,
+        headers: csrf(), body,
+      }, isTicketMutationResult),
+    assignTicket: (id: string, ticketId: string, body: TicketAssignmentRequest): Promise<TicketMutationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/assignment`,
+        headers: csrf(), body,
+      }, isTicketMutationResult),
+    listMembers: async (id: string, signal?: AbortSignal): Promise<Member[]> =>
+      (await get(`${ws(id)}/members`, isMemberList, signal)).items,
+    getCatalogs: (id: string, signal?: AbortSignal): Promise<Catalogs> =>
+      get(`${ws(id)}/catalogs`, isCatalogs, signal),
     /** Headers for unsafe methods (D06+ mutations). */
-    csrfHeaders(): Record<string, string> {
-      return csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
-    },
+    csrfHeaders: csrf,
   };
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** `query` plus one more parameter (skipped when `value` is null). */
+function withParam(query: string, key: string, value: string | null): string {
+  const q = new URLSearchParams(query);
+  if (value !== null) q.set(key, value);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}

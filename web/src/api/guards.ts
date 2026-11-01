@@ -2,11 +2,17 @@
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
   ApiErrorBody,
+  Catalogs,
   Dashboard,
+  Member,
   Meta,
   PermissionCode,
   Session,
   SessionIssued,
+  TicketBoard,
+  TicketList,
+  TicketListItem,
+  TicketMutationResult,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -120,3 +126,60 @@ export function isDashboard(v: unknown): v is Dashboard {
     isArr(a.items, (i) => isObj(i) && isStr(i.id) && isStr(i.displayNumber) && isStr(i.subject) && isStatus(i.status) && isNum(i.ageSeconds))
   );
 }
+
+const STATUS_CODES = ['new', 'open', 'pending_customer', 'pending_engineering', 'resolved', 'closed'];
+const isTicketStatus = (v: unknown) =>
+  isObj(v) && STATUS_CODES.includes(v.code as string) && isStr(v.label) &&
+  typeof v.selectable === 'boolean' && typeof v.archived === 'boolean';
+const isRefOrNull = (v: unknown) => v === null || (isObj(v) && isStr(v.id) && isStr(v.label));
+const isAction = (a: unknown) =>
+  isObj(a) && isTicketStatus(a.to) && ['move', 'resolve', 'reopen'].includes(a.kind as string) &&
+  ['none', 'summary', 'reason'].includes(a.requires as string) &&
+  (a.blockedBy === null || a.blockedBy === 'blocking_related_work');
+
+/** One ticket as List, Board and mutation results return it (no identity/contact data). */
+export function isTicketListItem(v: unknown): v is TicketListItem {
+  return (
+    isObj(v) && isStr(v.id) && isNum(v.number) && isStr(v.displayNumber) && isStr(v.subject) &&
+    isTicketStatus(v.status) && isNum(v.cycleNo) && isNum(v.version) &&
+    isRefOrNull(v.priority) && isRefOrNull(v.owner) && isRefOrNull(v.channel) && isRefOrNull(v.category) &&
+    isStr(v.receivedAt) && isStr(v.updatedAt) && isNum(v.ageSeconds) &&
+    isObj(v.relatedWork) && isNum(v.relatedWork.open) && isNum(v.relatedWork.blockingOpen) &&
+    isArr(v.allowedActions, isAction)
+  );
+}
+
+const isBasis = (b: unknown) =>
+  isObj(b) && b.unit === 'ticket' && b.dimensions === 'current_ticket_attributes' &&
+  (b.resolved === null || b.resolved === 'resolve_event_in_range');
+const isNumOrNull = (v: unknown) => v === null || isNum(v);
+
+export function isTicketList(v: unknown): v is TicketList {
+  return (
+    isObj(v) && isArr(v.items, isTicketListItem) && isNum(v.total) &&
+    isArr(v.countsByStatus, (c) => isObj(c) && isTicketStatus(c.status) && isNum(c.count)) &&
+    isNumOrNull(v.resolutionEvents) && isStrOrNull(v.nextCursor) && isObj(v.filters) &&
+    isBasis(v.basis) && isStr(v.asOf)
+  );
+}
+
+export function isTicketBoard(v: unknown): v is TicketBoard {
+  return (
+    isObj(v) && isNum(v.total) && isNumOrNull(v.resolutionEvents) && isObj(v.filters) &&
+    isBasis(v.basis) && isStr(v.asOf) &&
+    isArr(v.columns, (c) => isObj(c) && isTicketStatus(c.status) && isNum(c.total) &&
+      isArr(c.items, isTicketListItem) && isStrOrNull(c.nextCursor))
+  );
+}
+
+export const isTicketMutationResult = (v: unknown): v is TicketMutationResult =>
+  isObj(v) && isTicketListItem(v.ticket) && isStr(v.auditEventId);
+
+export const isMemberList = (v: unknown): v is { items: Member[] } =>
+  isObj(v) && isArr(v.items, (m) => isObj(m) && isStr(m.userId) && isStr(m.displayName) && typeof m.active === 'boolean');
+
+const isCatalogItem = (c: unknown) =>
+  isObj(c) && isStr(c.id) && isStr(c.code) && isStr(c.label) && typeof c.active === 'boolean' && isNum(c.sortOrder);
+export const isCatalogs = (v: unknown): v is Catalogs =>
+  isObj(v) && isStr(v.workspaceId) &&
+  (['priorities', 'categories', 'intakeChannels'] as const).every((k) => isArr(v[k], isCatalogItem));

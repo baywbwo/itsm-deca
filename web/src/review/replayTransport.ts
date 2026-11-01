@@ -12,11 +12,23 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * - forbidden: 403 from the dashboard
  * - race: the first workspace's dashboard is slow and ignores cancellation, so its answer lands
  *   after a switch to another workspace; the UI must discard it.
+ * - conflict: a status change replays the server's real 409 (recorded with a stale version).
+ * The ticket List/Board follows slow/empty/error/forbidden the same way as the dashboard.
  */
-export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race';
-export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race'];
+export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict';
+export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict'];
 
 const DASHBOARD = /^\/api\/v1\/workspaces\/([^/]+)\/dashboard\?/;
+const TICKETS = /^\/api\/v1\/workspaces\/[^/]+\/tickets(\/board)?(\?|$)/;
+
+function emptied(body: unknown): unknown {
+  const d = structuredClone(body) as Record<string, unknown>;
+  d.total = 0;
+  if ('items' in d) Object.assign(d, { items: [], countsByStatus: [], nextCursor: null });
+  if ('columns' in d) d.columns = [];
+  if (d.resolutionEvents !== null) d.resolutionEvents = 0;
+  return d;
+}
 
 function zeroed(body: unknown): unknown {
   const d = structuredClone(body) as Record<string, unknown>;
@@ -53,17 +65,33 @@ function wait(ms: number, signal: AbortSignal | undefined, honourAbort: boolean)
 export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario = 'none'): Transport {
   let entered = false;
   let firstDashboardWs: string | null = null;
-  return async ({ method, path, signal }) => {
-    const dash = DASHBOARD.exec(path);
-    if (dash && firstDashboardWs === null) firstDashboardWs = dash[1] ?? null;
-    const lagging = scenario === 'race' && dash !== null && dash[1] === firstDashboardWs;
+  let mutated = false;
+  return async ({ method, path, signal, body: payload }) => {
+    if (method === 'POST' && path.endsWith('/transitions')) {
+      await wait(latencyMs, signal, true);
+      const to = (payload as { to?: string } | undefined)?.to ?? '';
+      const hit = f.responses[`POST ${path}#${scenario === 'conflict' ? 'stale' : to}`];
+      if (!hit) {
+        return {
+          status: 503,
+          body: { error: { code: 'dependency_unavailable', message: 'Paket review: perubahan status ini tidak direkam.' } },
+          requestId: 'review-tidak-direkam',
+        };
+      }
+      if (hit.status === 200) mutated = true;
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    const tickets = TICKETS.test(path);
+    const dash = DASHBOARD.exec(path) ?? (tickets ? ([path, ''] as unknown as RegExpExecArray) : null);
+    if (dash && !tickets && firstDashboardWs === null) firstDashboardWs = dash[1] ?? null;
+    const lagging = scenario === 'race' && !tickets && dash !== null && dash[1] === firstDashboardWs;
     const delay = dash && scenario === 'slow' ? 4000 : lagging ? 3000 : latencyMs;
     await wait(delay, signal, !lagging);
     const key = `${method} ${path}`;
     if (key === 'POST /api/v1/uat/session') entered = true;
     const hit = key === 'GET /api/v1/session' && !entered
       ? f.responses['GET /api/v1/session#anonymous']
-      : f.responses[key] ?? (path.startsWith('/api/v1/workspaces/') ? f.responses['GET #not_found'] : undefined);
+      : (mutated ? f.responses[`${key}#after`] : undefined) ?? f.responses[key] ?? (path.startsWith('/api/v1/workspaces/') ? f.responses['GET #not_found'] : undefined);
     if (dash && scenario === 'error') {
       return { status: 503, body: { error: { code: 'dependency_unavailable', message: 'Simulasi review: layanan tidak tersedia.' } }, requestId: 'review-simulasi' };
     }
@@ -74,12 +102,14 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
       // Only single filters are recorded; a combination is not invented from other answers.
       return {
         status: 503,
-        body: { error: { code: 'dependency_unavailable', message: 'Paket review: kombinasi filter ini tidak direkam.' } },
+        body: { error: { code: 'dependency_unavailable', message: 'Paket review: kombinasi filter/halaman ini tidak direkam.' } },
         requestId: 'review-tidak-direkam',
       };
     }
     if (!hit) return { status: 404, body: null, requestId: null };
-    const body = dash && scenario === 'empty' && hit.status === 200 ? zeroed(hit.body) : structuredClone(hit.body);
+    const body = dash && scenario === 'empty' && hit.status === 200
+      ? (tickets ? emptied(hit.body) : zeroed(hit.body))
+      : structuredClone(hit.body);
     return { status: hit.status, body, requestId: hit.requestId };
   };
 }

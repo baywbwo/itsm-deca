@@ -4,6 +4,83 @@
  */
 
 export interface paths {
+    "/api/v1/workspaces/{workspace_id}/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ticket List (O02): server filter/search/sort with keyset cursor and whole-scope counts */
+        get: operations["listTickets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket Board (O03): per-status columns with server counts and the first page of each
+         * @description Same filters, search and sort as the List. Columns = the requested statuses, or every status present in scope order (closed only when present). Each column continues through listTickets with `status=<code>` and its `nextCursor`.
+         */
+        get: operations["getTicketBoard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change a ticket's status (D01 lifecycle)
+         * @description move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.
+         */
+        post: operations["transitionTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change a ticket's PIC (D01 assignment policy)
+         * @description CS/Lead CS may take an unassigned ticket for themselves (no reason). Replacing or removing another PIC needs ticket.assign_any and a `reason` (audited). The new PIC must be an active member of this workspace (422 otherwise). Stale `version` = 409.
+         */
+        post: operations["assignTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health/live": {
         parameters: {
             query?: never;
@@ -284,6 +361,141 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @enum {string} */
+        TicketSortKey: "updated_at" | "received_at" | "number";
+        /** @enum {string} */
+        SortOrder: "asc" | "desc";
+        /** @description Workspace-scoped reference with its display label (people have no code). */
+        TicketRef: {
+            /** Format: uuid */
+            id: string;
+            code?: string;
+            label: string;
+        };
+        /** @description A status change the caller may request now (D01 lifecycle + caller permissions). The server re-checks everything on submit. */
+        TicketAllowedAction: {
+            to: components["schemas"]["TicketStatus"];
+            /** @enum {string} */
+            kind: "move" | "resolve" | "reopen";
+            /**
+             * @description `summary` = resolution summary (resolve), `reason` = reopen reason.
+             * @enum {string}
+             */
+            requires: "none" | "summary" | "reason";
+            /**
+             * @description Why the action is refused right now; the UI shows it disabled with this explanation.
+             * @enum {string|null}
+             */
+            blockedBy: "blocking_related_work" | null;
+        };
+        /** @description Safe ticket projection shared by List and Board. No identity numbers or contact data. */
+        TicketListItem: {
+            /** Format: uuid */
+            id: string;
+            number: number;
+            /** @example DUMA-12 */
+            displayNumber: string;
+            subject: string;
+            status: components["schemas"]["TicketStatus"];
+            cycleNo: number;
+            version: number;
+            priority: components["schemas"]["TicketRef"] | null;
+            owner: components["schemas"]["TicketRef"] | null;
+            channel: components["schemas"]["TicketRef"] | null;
+            category: components["schemas"]["TicketRef"] | null;
+            /** Format: date-time */
+            receivedAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Seconds since receivedAt; no SLA meaning. */
+            ageSeconds: number;
+            relatedWork: {
+                open: number;
+                blockingOpen: number;
+            };
+            allowedActions: components["schemas"]["TicketAllowedAction"][];
+        };
+        /** @description Echo of the applied filters (`null` = no restriction). */
+        TicketAppliedFilters: {
+            q: string | null;
+            status: components["schemas"]["TicketStatusCode"][] | null;
+            owner: string | null;
+            channel: string | null;
+            category: string | null;
+            priority: string[] | null;
+            receivedFrom: string | null;
+            receivedBefore: string | null;
+            resolvedFrom: string | null;
+            resolvedBefore: string | null;
+            sort: components["schemas"]["TicketSortKey"];
+            order: components["schemas"]["SortOrder"];
+        };
+        TicketStatusCountView: {
+            status: components["schemas"]["TicketStatus"];
+            count: number;
+        };
+        /** @description How numbers are counted. Dimension filters use the ticket's CURRENT PIC/kanal/kategori/prioritas (operational scope, not a historical report). With a resolution range a ticket with several resolve events in the range is listed and counted once; `resolutionEvents` counts the events. */
+        TicketListBasis: {
+            /** @enum {string} */
+            unit: "ticket";
+            /** @enum {string} */
+            dimensions: "current_ticket_attributes";
+            /** @enum {string|null} */
+            resolved: "resolve_event_in_range" | null;
+        };
+        TicketList: {
+            items: components["schemas"]["TicketListItem"][];
+            /** @description Tickets in the whole filtered scope (all pages). */
+            total: number;
+            /** @description Same scope without the status filter; `closed` only when present. */
+            countsByStatus: components["schemas"]["TicketStatusCountView"][];
+            /** @description Resolve events in the range for tickets in scope; only with a resolution range. */
+            resolutionEvents: number | null;
+            /** @description Opaque; bound to workspace, filters and sort. */
+            nextCursor: string | null;
+            filters: components["schemas"]["TicketAppliedFilters"];
+            basis: components["schemas"]["TicketListBasis"];
+            /** Format: date-time */
+            asOf: string;
+        };
+        TicketBoardColumn: {
+            status: components["schemas"]["TicketStatus"];
+            /** @description Server count of the whole column before paging. */
+            total: number;
+            items: components["schemas"]["TicketListItem"][];
+            /** @description Continue with GET /tickets?status=<code>&<same filters>&cursor=. */
+            nextCursor: string | null;
+        };
+        TicketBoard: {
+            columns: components["schemas"]["TicketBoardColumn"][];
+            total: number;
+            resolutionEvents: number | null;
+            filters: components["schemas"]["TicketAppliedFilters"];
+            basis: components["schemas"]["TicketListBasis"];
+            /** Format: date-time */
+            asOf: string;
+        };
+        TicketTransitionRequest: {
+            to: components["schemas"]["TicketStatusCode"];
+            /** @description Version the client saw; stale = 409. */
+            version: number;
+            /** @description Required to resolve, refused otherwise. */
+            summary?: string;
+            /** @description Required to reopen, refused otherwise. */
+            reason?: string;
+        };
+        TicketAssignmentRequest: {
+            /** Format: uuid */
+            ownerUserId: string | null;
+            version: number;
+            /** @description Required to replace/remove another PIC (ticket.assign_any); refused when taking an unassigned ticket for oneself. */
+            reason?: string;
+        };
+        TicketMutationResult: {
+            ticket: components["schemas"]["TicketListItem"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
         Error: {
             error: {
                 /** @enum {string} */
@@ -517,7 +729,7 @@ export interface components {
          * @enum {string}
          */
         DashboardPeriodKey: "today" | "last_7_days" | "this_month";
-        /** @description Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before). */
+        /** @description Drilldown parameters for the ticket list (D06: GET /tickets and /tickets/board accept these keys as query parameters; lists are comma-separated). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before). */
         TicketFilter: {
             status?: components["schemas"]["TicketStatusCode"][];
             /**
@@ -820,6 +1032,186 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listTickets: {
+        parameters: {
+            query?: {
+                /** @description Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters. */
+                q?: string;
+                /** @description Comma-separated status codes; absent = every status (closed archive included). */
+                status?: string;
+                /** @description PIC: member user UUID of this workspace, or `unassigned`. Current attribute. */
+                owner?: string;
+                /** @description Intake channel UUID of this workspace, or `none`. Current attribute. */
+                channel?: string;
+                /** @description Category UUID of this workspace, or `none`. Current attribute. */
+                category?: string;
+                /** @description Comma-separated priority UUIDs of this workspace, or `none`. Current attribute. */
+                priority?: string;
+                /** @description RFC 3339, inclusive. */
+                receivedFrom?: string;
+                /** @description RFC 3339, exclusive. */
+                receivedBefore?: string;
+                /** @description RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once). */
+                resolvedFrom?: string;
+                /** @description RFC 3339, exclusive. */
+                resolvedBefore?: string;
+                /** @description Server sort; the ticket ID is always the tie-break. */
+                sort?: components["schemas"]["TicketSortKey"];
+                /** @description Sort order. */
+                order?: components["schemas"]["SortOrder"];
+                /** @description Page size 1–100. */
+                limit?: number;
+                /** @description Opaque `nextCursor` of the previous page. A cursor from another workspace, filter or sort is 400. */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page plus whole-scope counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketList"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getTicketBoard: {
+        parameters: {
+            query?: {
+                /** @description Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters. */
+                q?: string;
+                /** @description Comma-separated status codes; absent = every status (closed archive included). */
+                status?: string;
+                /** @description PIC: member user UUID of this workspace, or `unassigned`. Current attribute. */
+                owner?: string;
+                /** @description Intake channel UUID of this workspace, or `none`. Current attribute. */
+                channel?: string;
+                /** @description Category UUID of this workspace, or `none`. Current attribute. */
+                category?: string;
+                /** @description Comma-separated priority UUIDs of this workspace, or `none`. Current attribute. */
+                priority?: string;
+                /** @description RFC 3339, inclusive. */
+                receivedFrom?: string;
+                /** @description RFC 3339, exclusive. */
+                receivedBefore?: string;
+                /** @description RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once). */
+                resolvedFrom?: string;
+                /** @description RFC 3339, exclusive. */
+                resolvedBefore?: string;
+                /** @description Server sort; the ticket ID is always the tie-break. */
+                sort?: components["schemas"]["TicketSortKey"];
+                /** @description Sort order. */
+                order?: components["schemas"]["SortOrder"];
+                /** @description Items per column 1–50. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Board */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketBoard"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    transitionTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketTransitionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated ticket and the audit entry written in the same transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketMutationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    assignTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketAssignmentRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated ticket and the audit entry written in the same transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketMutationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
     healthLive: {
         parameters: {
             query?: never;

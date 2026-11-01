@@ -42,3 +42,38 @@ export const PERIOD_LABELS: Record<DashboardPeriodKey, string> = {
   last_7_days: '7 hari terakhir',
   this_month: 'Bulan ini',
 };
+
+/** Offset (minutes east of UTC) of `timeZone` at instant `t`. */
+function zoneOffset(t: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(t);
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const asUtc = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second'));
+  return Math.round((asUtc - Math.floor(t / 1000) * 1000) / 60000);
+}
+
+/** Local calendar date `YYYY-MM-DD` → the UTC instant of its midnight in `timeZone`. */
+export function zonedMidnight(date: string, timeZone: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!m) return null;
+  const guess = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  let t = guess - zoneOffset(guess, timeZone) * 60000;
+  t = guess - zoneOffset(t, timeZone) * 60000;
+  return new Date(t).toISOString().replace('.000Z', 'Z');
+}
+
+/** Instant → local calendar date in `timeZone` (`YYYY-MM-DD`); `endExclusive` gives the last included day. */
+export function localDate(iso: string, timeZone: string, endExclusive = false): string | null {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .format(endExclusive ? t - 1 : t);
+}
+
+/** Next calendar day of `YYYY-MM-DD`. */
+export function nextDay(date: string): string {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y!, m! - 1, d! + 1)).toISOString().slice(0, 10);
+}

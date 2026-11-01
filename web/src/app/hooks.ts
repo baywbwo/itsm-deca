@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ApiError, isAbort, type Api } from '../api/client';
-import type { Dashboard, Meta, Session, Workspace, WorkspacePermissions } from '../api/types';
+import type {
+  CatalogItem,
+  Dashboard,
+  Member,
+  Meta,
+  Session,
+  TicketBoard,
+  TicketList,
+  Workspace,
+  WorkspacePermissions,
+} from '../api/types';
 import {
   DASHBOARD_FILTERS,
   dashboardQuery,
@@ -8,6 +18,7 @@ import {
   parseHash,
   type DashboardParams,
   type Route,
+  type TicketView,
 } from './routes';
 import { ScopedLoader, type ScopedState } from './scopedLoader';
 
@@ -137,4 +148,82 @@ export function navigate(hash: string, replace = false) {
   if (replace) window.history.replaceState(null, '', hash);
   else window.location.hash = hash;
   if (replace) window.dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+export type TicketData = { view: 'list'; list: TicketList } | { view: 'board'; board: TicketBoard };
+
+/**
+ * First List page or the Board for (workspace, view, canonical API query). A new key aborts the
+ * old request; an answer for another key is never shown. Further pages are loaded by the page
+ * with the returned cursors.
+ */
+export function useTicketData(
+  api: Api,
+  workspaceId: string,
+  view: TicketView,
+  query: string,
+  attempt = 0,
+): ScopedState<string, TicketData> {
+  const loader = useRef<ScopedLoader<string, TicketData> | null>(null);
+  loader.current ??= new ScopedLoader<string, TicketData>(isAbort);
+  const l = loader.current;
+  const state = useSyncExternalStore(l.subscribe, l.getState);
+  const key = `${workspaceId}|${view}|${query}|${attempt}`;
+
+  useEffect(() => {
+    l.load(key, async (signal): Promise<TicketData> => {
+      const want = new URLSearchParams(query);
+      const echoed = (f: { q: string | null; sort: string; order: string }) =>
+        (f.q ?? '') === (want.get('q') ?? '') && f.sort === (want.get('sort') ?? 'updated_at') &&
+        f.order === (want.get('order') ?? 'desc');
+      if (view === 'board') {
+        const board = await api.getBoard(workspaceId, query, signal);
+        if (!echoed(board.filters)) throw new ApiError(0, 'bad_response', 'Respons board tidak cocok dengan filter.');
+        return { view, board };
+      }
+      const list = await api.listTickets(workspaceId, query, null, signal);
+      if (!echoed(list.filters)) throw new ApiError(0, 'bad_response', 'Respons daftar tidak cocok dengan filter.');
+      return { view, list };
+    });
+  }, [api, l, key, workspaceId, view, query]);
+  useEffect(() => () => l.reset(), [l]);
+
+  if (state.status === 'idle' || state.key !== key) return { status: 'loading', key };
+  return state;
+}
+
+export interface TicketOptions {
+  owners: Member[];
+  channels: CatalogItem[];
+  categories: CatalogItem[];
+  priorities: CatalogItem[];
+}
+
+/**
+ * Filter choices of one workspace (members + catalogs). A refused or failed source leaves that
+ * list empty: the filter still works from the URL and the server validates it.
+ */
+export function useTicketOptions(api: Api, workspaceId: string): TicketOptions | null {
+  const [opts, setOpts] = useState<{ key: string; value: TicketOptions } | null>(null);
+  useEffect(() => {
+    const ctl = new AbortController();
+    const soft = <T,>(p: Promise<T>, empty: T) => p.catch((e: unknown) => {
+      if (isAbort(e)) throw e;
+      return empty;
+    });
+    Promise.all([
+      soft(api.listMembers(workspaceId, ctl.signal), [] as Member[]),
+      soft(api.getCatalogs(workspaceId, ctl.signal).then((c) => c), null),
+    ]).then(([owners, c]) => setOpts({
+      key: workspaceId,
+      value: {
+        owners,
+        channels: c?.intakeChannels ?? [],
+        categories: c?.categories ?? [],
+        priorities: c?.priorities ?? [],
+      },
+    }), () => undefined);
+    return () => ctl.abort();
+  }, [api, workspaceId]);
+  return opts && opts.key === workspaceId ? opts.value : null;
 }

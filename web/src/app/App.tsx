@@ -10,6 +10,7 @@ import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../comp
 import { ComponentsPage } from '../pages/ComponentsPage';
 import { DashboardPage } from '../pages/DashboardPage';
 import { PlannedPage } from '../pages/PlannedPage';
+import { TicketsPage } from '../pages/TicketsPage';
 import { navigate, useBoot, useHashRoute, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
 import { allowedPages, pageDef, toHash, type PageDef, type PageId } from './routes';
@@ -147,7 +148,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           <Content key={route.workspaceId ?? ''} api={api} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D05 (dashboard) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D06 (List/Board tiket) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -219,6 +220,8 @@ function Page({ id, api, data, query, uat }: { id: PageId; api: Api; data: Scope
     case 'dashboard':
       return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
+    case 'tickets':
+      return <TicketsPage api={api} workspace={data.workspace} permissions={data.permissions} query={query} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:

@@ -55,3 +55,60 @@ describe('api client', () => {
     expect(seen[0]?.path).toBe('/api/v1/workspaces/a%2Fb');
   });
 });
+
+const status = (code: string, label: string) => ({ code, label, selectable: true, archived: code === 'closed' });
+const item = {
+  id: 't1', number: 7, displayNumber: 'DUMA-7', subject: 'Dana belum masuk', status: status('open', 'Ditangani'),
+  cycleNo: 1, version: 3, priority: null, owner: { id: 'u2', label: 'CS Alfa (dummy)' }, channel: null, category: null,
+  receivedAt: '2026-11-01T01:00:00Z', updatedAt: '2026-11-01T02:00:00Z', ageSeconds: 3600,
+  relatedWork: { open: 0, blockingOpen: 0 },
+  allowedActions: [{ to: status('resolved', 'Terselesaikan'), kind: 'resolve', requires: 'summary', blockedBy: null }],
+};
+
+describe('ticket endpoints', () => {
+  it('list keeps the canonical query and appends the cursor', async () => {
+    const page = { items: [item], nextCursor: null, total: 1, countsByStatus: [], resolutionEvents: null,
+      basis: { unit: 'ticket', dimensions: 'current_ticket_attributes', resolved: null },
+      filters: {}, asOf: '2026-11-01T03:00:00Z' };
+    const { api, seen } = fake({
+      'GET /api/v1/workspaces/w/tickets?status=open&cursor=c1': { status: 200, body: page, requestId: null },
+    });
+    const res = await api.listTickets('w', 'status=open', 'c1');
+    expect(seen[0]?.path).toBe('/api/v1/workspaces/w/tickets?status=open&cursor=c1');
+    expect(res.items.map((t) => t.displayNumber)).toEqual(['DUMA-7']);
+    expect(res.items[0]?.allowedActions[0]?.requires).toBe('summary');
+  });
+
+  it('transition POSTs JSON with the CSRF header and returns the server ticket', async () => {
+    const { api, seen } = fake({
+      'POST /api/v1/uat/session': { status: 201, body: { ...session, csrfToken: 'tok' }, requestId: null },
+      'POST /api/v1/workspaces/w/tickets/t1/transitions': {
+        status: 200, body: { ticket: { ...item, version: 4 }, auditEventId: 'a1' }, requestId: 'r9',
+      },
+    });
+    await api.enterUat();
+    const body = { to: 'resolved' as const, version: 3, summary: 'Dana dikembalikan' };
+    const res = await api.transitionTicket('w', 't1', body);
+    expect(seen[1]).toMatchObject({ method: 'POST', headers: { 'X-CSRF-Token': 'tok' }, body });
+    expect(res.ticket.version).toBe(4);
+  });
+
+  it('a version conflict surfaces as 409 without a ticket', async () => {
+    const { api } = fake({
+      'POST /api/v1/workspaces/w/tickets/t1/assignment': {
+        status: 409, body: { error: { code: 'version_conflict', message: 'x' } }, requestId: 'r3',
+      },
+    });
+    await expect(api.assignTicket('w', 't1', { ownerUserId: null, version: 1 }))
+      .rejects.toMatchObject({ status: 409, code: 'version_conflict' });
+  });
+
+  it('a 200 mutation with a bad shape is not trusted', async () => {
+    const { api } = fake({
+      'POST /api/v1/workspaces/w/tickets/t1/transitions': {
+        status: 200, body: { ticket: { ...item, allowedActions: [{ to: 'x' }] }, auditEventId: 'a' }, requestId: null,
+      },
+    });
+    await expect(api.transitionTicket('w', 't1', { to: 'open', version: 1 })).rejects.toMatchObject({ code: 'bad_response' });
+  });
+});

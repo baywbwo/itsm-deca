@@ -115,3 +115,63 @@ export function dashboardQuery(p: DashboardParams): string {
 }
 
 export const hasDashboardFilter = (p: DashboardParams) => DASHBOARD_FILTERS.some((k) => p.filters[k]);
+
+export type TicketView = 'list' | 'board';
+export const TICKET_FILTERS = [
+  'q', 'status', 'owner', 'channel', 'category', 'priority',
+  'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore',
+] as const;
+export type TicketFilterKey = (typeof TICKET_FILTERS)[number];
+export type TicketSort = 'updated_at' | 'received_at' | 'number';
+export type TicketOrder = 'asc' | 'desc';
+
+/**
+ * Ticket List/Board state kept in the URL (`#/w/<ws>/tickets?view=board&status=…`). The filter
+ * names are the List API's own, so a Dashboard drilldown link opens the same scope, and switching
+ * view keeps every filter. Raw values (UUID, `unassigned`/`none`, comma lists, RFC 3339 instants)
+ * are validated by the server, which answers 400 for anything outside the contract.
+ */
+export interface TicketParams {
+  view: TicketView;
+  filters: Record<TicketFilterKey, string | null>;
+  sort: TicketSort;
+  order: TicketOrder;
+}
+
+const SORTS: readonly string[] = ['updated_at', 'received_at', 'number'];
+
+export function parseTicketQuery(query: string): TicketParams {
+  const q = new URLSearchParams(query);
+  const view = q.get('view') === 'board' ? 'board' : 'list';
+  const filters = Object.fromEntries(
+    TICKET_FILTERS.map((k) => [k, (k === 'q' ? q.get(k)?.trim() : q.get(k)) || null]),
+  ) as TicketParams['filters'];
+  const s = q.get('sort');
+  const sort = (s && SORTS.includes(s) ? s : 'updated_at') as TicketSort;
+  const order = q.get('order') === 'asc' ? 'asc' : 'desc';
+  return { view, filters, sort, order };
+}
+
+/** Canonical API query (no `view`): the same scope always gives the same string and cache key. */
+export function ticketApiQuery(p: TicketParams): string {
+  const q = new URLSearchParams();
+  for (const k of TICKET_FILTERS) {
+    const v = p.filters[k];
+    if (v) q.set(k, v);
+  }
+  if (p.sort !== 'updated_at') q.set('sort', p.sort);
+  if (p.order !== 'desc') q.set('order', p.order);
+  return q.toString();
+}
+
+/** URL query: view first (default list omitted), then the API query. */
+export function ticketQuery(p: TicketParams): string {
+  const api = ticketApiQuery(p);
+  return p.view === 'board' ? (api ? `view=board&${api}` : 'view=board') : api;
+}
+
+/** Filters that narrow the scope (search included; sort is not a filter). */
+export const activeTicketFilters = (p: TicketParams) => TICKET_FILTERS.filter((k) => p.filters[k]);
+
+export const emptyTicketFilters = (): TicketParams['filters'] =>
+  Object.fromEntries(TICKET_FILTERS.map((k) => [k, null])) as TicketParams['filters'];

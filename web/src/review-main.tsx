@@ -14,6 +14,6 @@ const note = document.getElementById('review-note');
 if (note) {
   note.textContent = `Paket review statis — respons API direkam dari backend UAT nyata ${f.recordedAt}` +
     `${f.backendSha ? ` (backend ${f.backendSha.slice(0, 7)})` : ''}; bukan server live.` +
-    (scenario === 'none' ? '' : ` Skenario simulasi review: ${scenario} (respons dashboard disintesis, bukan data server).`);
+    (scenario === 'none' ? '' : ` Skenario simulasi review: ${scenario} (respons dashboard/tiket disintesis, bukan data server).`);
 }
 createRoot(document.getElementById('root')!).render(<StrictMode><App api={api} /></StrictMode>);

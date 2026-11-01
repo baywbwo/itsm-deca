@@ -1,7 +1,7 @@
 {
   "name": "itsm-web",
   "private": true,
-  "version": "0.5.0-d05",
+  "version": "0.6.0-d06",
   "type": "module",
   "engines": {
     "node": ">=22"
