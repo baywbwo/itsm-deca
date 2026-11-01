@@ -7,6 +7,7 @@ import type {
   Member,
   Meta,
   PermissionCode,
+  SavedView,
   Session,
   SessionIssued,
   TicketBoard,
@@ -183,3 +184,15 @@ const isCatalogItem = (c: unknown) =>
 export const isCatalogs = (v: unknown): v is Catalogs =>
   isObj(v) && isStr(v.workspaceId) &&
   (['priorities', 'categories', 'intakeChannels'] as const).every((k) => isArr(v[k], isCatalogItem));
+
+export function isSavedView(v: unknown): v is SavedView {
+  return (
+    isObj(v) && isStr(v.id) && isStr(v.name) && (v.view === 'list' || v.view === 'board') &&
+    isObj(v.query) && !('q' in v.query) && Object.values(v.query).every(isStr) &&
+    isNum(v.version) && isStr(v.createdAt) && isStr(v.updatedAt)
+  );
+}
+export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
+  isObj(v) && isArr(v.items, isSavedView);
+/** 204 No Content. */
+export const isEmpty = (v: unknown): v is null => v === null;

@@ -175,3 +175,35 @@ export const activeTicketFilters = (p: TicketParams) => TICKET_FILTERS.filter((k
 
 export const emptyTicketFilters = (): TicketParams['filters'] =>
   Object.fromEntries(TICKET_FILTERS.map((k) => [k, null])) as TicketParams['filters'];
+
+/** Filters a saved view (C32) may hold: everything except free-text search (may hold PII). */
+export const SAVED_VIEW_FILTERS = TICKET_FILTERS.filter((k) => k !== 'q');
+
+/** Saved-view query (string values) for the current scope; search text is never included. */
+export function savedViewQuery(p: TicketParams): Record<string, string> {
+  const q: Record<string, string> = {};
+  for (const k of SAVED_VIEW_FILTERS) {
+    const v = p.filters[k];
+    if (v) q[k] = v;
+  }
+  q.sort = p.sort;
+  q.order = p.order;
+  return q;
+}
+
+/** Ticket params a saved view opens: its view, filters and sort; search is cleared. */
+export function paramsFromSavedView(v: { view: string; query: Record<string, string | undefined> }): TicketParams {
+  const q = new URLSearchParams();
+  if (v.view === 'board') q.set('view', 'board');
+  for (const k of [...SAVED_VIEW_FILTERS, 'sort', 'order'] as const) {
+    const value = v.query[k];
+    if (value) q.set(k, value);
+  }
+  return parseTicketQuery(q.toString());
+}
+
+/** Same view, filters and sort (search ignored): the saved view that matches the screen. */
+export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
+  const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null } });
+  return strip(a) === strip(b);
+}

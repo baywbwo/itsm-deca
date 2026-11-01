@@ -2,13 +2,14 @@ pub mod access;
 pub mod catalogs;
 pub mod dashboard;
 pub mod health;
+pub mod saved_views;
 pub mod session;
 pub mod ticket_list;
 pub mod tickets;
 pub mod workspaces;
 
 use axum::Router;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 
 use crate::AppState;
 
@@ -28,6 +29,16 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/permissions"),
     ("get", "/api/v1/workspaces/{workspace_id}/grants"),
     ("get", "/api/v1/workspaces/{workspace_id}/dashboard"),
+    ("get", "/api/v1/workspaces/{workspace_id}/saved-views"),
+    ("post", "/api/v1/workspaces/{workspace_id}/saved-views"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}",
+    ),
+    (
+        "delete",
+        "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}",
+    ),
     ("get", "/api/v1/workspaces/{workspace_id}/tickets"),
     ("get", "/api/v1/workspaces/{workspace_id}/tickets/board"),
     (
@@ -86,6 +97,14 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/dashboard",
             get(dashboard::get),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/saved-views",
+            get(saved_views::list).merge(post(saved_views::create)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}",
+            patch(saved_views::rename).merge(delete(saved_views::delete)),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets",

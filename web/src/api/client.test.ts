@@ -112,3 +112,36 @@ describe('ticket endpoints', () => {
     await expect(api.transitionTicket('w', 't1', { to: 'open', version: 1 })).rejects.toMatchObject({ code: 'bad_response' });
   });
 });
+
+describe('saved views client (C32)', () => {
+  const view = { id: 'v1', name: 'Email P1', view: 'board', query: { channel: 'c1', sort: 'received', order: 'desc' }, version: 1, createdAt: 't', updatedAt: 't' };
+  const base = '/api/v1/workspaces/w/saved-views';
+
+  it('creates with CSRF (201), renames with version, deletes with 204', async () => {
+    const { api, seen } = fake({
+      'POST /api/v1/uat/session': { status: 201, body: { ...session, csrfToken: 'tok' }, requestId: 'r0' },
+      [`POST ${base}`]: { status: 201, body: view, requestId: 'r1' },
+      [`PATCH ${base}/v1`]: { status: 200, body: { ...view, name: 'Baru', version: 2 }, requestId: 'r2' },
+      [`DELETE ${base}/v1`]: { status: 204, body: null, requestId: 'r3' },
+      [`GET ${base}`]: { status: 200, body: { items: [view] }, requestId: 'r4' },
+    });
+    await api.enterUat();
+    expect(await api.createSavedView('w', { name: 'Email P1', view: 'board', query: view.query })).toEqual(view);
+    expect(seen[1]?.headers).toMatchObject({ 'X-CSRF-Token': 'tok' });
+    expect((await api.renameSavedView('w', 'v1', { name: 'Baru', version: 1 })).version).toBe(2);
+    expect(seen[2]?.method).toBe('PATCH');
+    expect(seen[2]?.headers).toMatchObject({ 'X-CSRF-Token': 'tok' });
+    await expect(api.deleteSavedView('w', 'v1')).resolves.toBeUndefined();
+    expect(seen[3]?.headers).toMatchObject({ 'X-CSRF-Token': 'tok' });
+    expect(await api.listSavedViews('w')).toEqual([view]);
+  });
+
+  it('rejects a stored view that carries search text or non-string values', async () => {
+    const { api } = fake({
+      [`GET ${base}`]: { status: 200, body: { items: [{ ...view, query: { q: 'nama orang' } }] }, requestId: 'r' },
+      [`POST ${base}`]: { status: 201, body: { ...view, query: { status: 1 } }, requestId: 'r' },
+    });
+    await expect(api.listSavedViews('w')).rejects.toMatchObject({ code: 'bad_response' });
+    await expect(api.createSavedView('w', { name: 'x', view: 'list', query: {} })).rejects.toMatchObject({ code: 'bad_response' });
+  });
+});

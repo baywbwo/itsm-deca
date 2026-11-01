@@ -4,6 +4,48 @@
  */
 
 export interface paths {
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Caller's own saved views in this workspace (C32)
+         * @description Private to the session user and workspace; no public/shared views. A view grants nothing: List/Board re-check permission and filters when it is applied.
+         */
+        get: operations["listSavedViews"];
+        put?: never;
+        /**
+         * Save the current List/Board filters and sort as a private view
+         * @description Filters are parsed and validated against the workspace (foreign/unknown IDs = 400). Duplicate name or more than 50 views = 422.
+         */
+        post: operations["createSavedView"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete an own saved view */
+        delete: operations["deleteSavedView"];
+        options?: never;
+        head?: never;
+        /** Rename an own saved view */
+        patch: operations["renameSavedView"];
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/tickets": {
         parameters: {
             query?: never;
@@ -950,6 +992,48 @@ export interface components {
             trend: components["schemas"]["DashboardTrendPoint"][];
             attention: components["schemas"]["DashboardAttention"];
         };
+        /** @description List/Board filters and sort in the List query-string format (same rules as the List parameters). Search text (`q`), `limit` and `cursor` are not allowed. Stored in canonical form; `sort`/`order` are always present in responses. */
+        SavedViewQuery: {
+            status?: string;
+            owner?: string;
+            channel?: string;
+            category?: string;
+            priority?: string;
+            receivedFrom?: string;
+            receivedBefore?: string;
+            resolvedFrom?: string;
+            resolvedBefore?: string;
+            sort?: string;
+            order?: string;
+        };
+        SavedView: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @enum {string} */
+            view: "list" | "board";
+            query: components["schemas"]["SavedViewQuery"];
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        SavedViewList: {
+            items: components["schemas"]["SavedView"][];
+        };
+        SavedViewCreateRequest: {
+            /** @description Trimmed; unique per user+workspace (case-insensitive, 422). Label only; do not put personal data in it. */
+            name: string;
+            /** @enum {string} */
+            view: "list" | "board";
+            query?: components["schemas"]["SavedViewQuery"];
+        };
+        SavedViewRenameRequest: {
+            name: string;
+            /** @description The version the client saw; stale = 409. */
+            version: number;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -1025,6 +1109,8 @@ export interface components {
         AttachmentId: string;
         /** @description Scoped to workspace_id; otherwise 404. */
         ReportRunId: string;
+        /** @description Own view in workspace_id only; another user's view or another workspace returns 404. */
+        SavedViewId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1032,6 +1118,125 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listSavedViews: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Own views, by name */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedViewList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created view */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    deleteSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Own view in workspace_id only; another user's view or another workspace returns 404. */
+                saved_view_id: components["parameters"]["SavedViewId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    renameSavedView: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Own view in workspace_id only; another user's view or another workspace returns 404. */
+                saved_view_id: components["parameters"]["SavedViewId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SavedViewRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed view */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SavedView"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
     listTickets: {
         parameters: {
             query?: {

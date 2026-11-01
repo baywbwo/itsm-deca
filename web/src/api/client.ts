@@ -3,8 +3,11 @@ import {
   isDashboard,
   isErrorBody,
   isMemberList,
+  isEmpty,
   isMeta,
   isSession,
+  isSavedView,
+  isSavedViewList,
   isSessionIssued,
   isTicketBoard,
   isTicketList,
@@ -20,6 +23,9 @@ import type {
   DashboardPeriodKey,
   Member,
   Meta,
+  SavedView,
+  SavedViewCreateRequest,
+  SavedViewRenameRequest,
   Session,
   TicketAssignmentRequest,
   TicketBoard,
@@ -31,7 +37,7 @@ import type {
 } from './types';
 
 export interface TransportRequest {
-  method: 'GET' | 'POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   path: string;
   headers: Record<string, string>;
   signal?: AbortSignal | undefined;
@@ -165,6 +171,22 @@ export function createApi(transport: Transport) {
       (await get(`${ws(id)}/members`, isMemberList, signal)).items,
     getCatalogs: (id: string, signal?: AbortSignal): Promise<Catalogs> =>
       get(`${ws(id)}/catalogs`, isCatalogs, signal),
+    /** C32: the caller's own saved views in this workspace (private, no PII, grants nothing). */
+    listSavedViews: async (id: string, signal?: AbortSignal): Promise<SavedView[]> =>
+      (await get(`${ws(id)}/saved-views`, isSavedViewList, signal)).items,
+    createSavedView: (id: string, body: SavedViewCreateRequest): Promise<SavedView> =>
+      call({ method: 'POST', path: `${ws(id)}/saved-views`, headers: csrf(), body }, isSavedView, 201),
+    renameSavedView: (id: string, viewId: string, body: SavedViewRenameRequest): Promise<SavedView> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/saved-views/${encodeURIComponent(viewId)}`,
+        headers: csrf(), body,
+      }, isSavedView),
+    deleteSavedView: async (id: string, viewId: string): Promise<void> => {
+      await call({
+        method: 'DELETE', path: `${ws(id)}/saved-views/${encodeURIComponent(viewId)}`,
+        headers: csrf(),
+      }, isEmpty, 204);
+    },
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

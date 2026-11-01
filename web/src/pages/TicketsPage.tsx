@@ -30,8 +30,10 @@ import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { PageHeader } from '../components/PageHeader';
+import { Popover } from '../components/Popover';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
 import { statusTone } from './DashboardPage';
+import { SavedViews } from './SavedViews';
 
 /** Lifecycle order of the D01 freeze; labels come from the server when it has sent them. */
 const STATUS_ORDER: readonly TicketStatusCode[] = [
@@ -137,10 +139,11 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
         description={`Satu daftar pengaduan ${workspace.name}, dua cara melihat pekerjaan.`}
         action={canCreate ? <Button variant="primary" onClick={() => setCreateOpen(true)}>＋ Buat tiket</Button> : undefined} />
       <ViewTabs view={params.view} onChange={(view) => go({ ...params, view })} panelId="ticket-panel" />
-      <Toolbar params={params} options={options} tz={tz} statusLabel={statusLabel} searchRef={searchRef}
-        onFilter={setFilter} onClearResolved={() => go({ ...params, filters: { ...params.filters, resolvedFrom: null, resolvedBefore: null } })}
+      <Toolbar api={api} workspaceId={workspace.id} params={params} options={options} tz={tz} statusLabel={statusLabel}
+        searchRef={searchRef} onFilter={setFilter}
+        onClear={(keys) => go({ ...params, filters: { ...params.filters, ...Object.fromEntries(keys.map((k) => [k, null])) } })}
         onSort={(sort, order) => go({ ...params, sort, order })}
-        activeCount={active.length} onReset={reset} />
+        onApply={(p) => go(p)} activeCount={active.length} onReset={reset} />
       <p className="sr-only" role="status" aria-live="polite">
         {notice ?? (data ? `${num(data.view === 'list' ? data.list.total : data.board.total)} tiket dimuat.` : '')}
       </p>
@@ -215,16 +218,28 @@ function ViewTabs({ view, onChange, panelId }: { view: TicketView; onChange: (v:
   );
 }
 
-/** C05: search (300 ms debounce, Enter applies now), filters, sort, active-filter count and one reset. */
-function Toolbar({ params, options, tz, statusLabel, searchRef, onFilter, onClearResolved, onSort, activeCount, onReset }: {
+/** Filters inside the Filter popover (everything except search and status). */
+const POPOVER_FILTERS: readonly TicketFilterKey[] = [
+  'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore',
+];
+
+/**
+ * C05 one-row toolbar (wraps): search (300 ms debounce, Enter applies now), status, Filter popover
+ * (PIC/kanal/kategori/prioritas/tanggal, with an active-count badge and its own reset), sort, C32
+ * saved view and one reset for everything. Active popover filters stay visible as removable chips.
+ */
+function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef, onFilter, onClear, onSort, onApply, activeCount, onReset }: {
+  api: Api;
+  workspaceId: string;
   params: TicketParams;
   options: TicketOptions | null;
   tz: string;
   statusLabel: (c: TicketStatusCode) => string;
   searchRef: React.RefObject<HTMLInputElement | null>;
   onFilter: (k: TicketFilterKey, v: string | null, replace?: boolean) => void;
-  onClearResolved: () => void;
+  onClear: (keys: readonly TicketFilterKey[]) => void;
   onSort: (sort: TicketSort, order: 'asc' | 'desc') => void;
+  onApply: (p: TicketParams) => void;
   activeCount: number;
   onReset: () => void;
 }) {
@@ -233,7 +248,7 @@ function Toolbar({ params, options, tz, statusLabel, searchRef, onFilter, onClea
   const typed = useRef(false);
   const filterRef = useRef(onFilter);
   filterRef.current = onFilter;
-  // Follow the URL (back/forward, reset, drilldown) unless the user is mid-typing.
+  // Follow the URL (back/forward, reset, drilldown, saved view) unless the user is mid-typing.
   useEffect(() => {
     if (!typed.current) setText(applied);
   }, [applied]);
@@ -252,92 +267,135 @@ function Toolbar({ params, options, tz, statusLabel, searchRef, onFilter, onClea
   const recvFrom = params.filters.receivedFrom ? localDate(params.filters.receivedFrom, tz) : null;
   const recvTo = params.filters.receivedBefore ? localDate(params.filters.receivedBefore, tz, true) : null;
   const resolved = params.filters.resolvedFrom || params.filters.resolvedBefore;
+  const popoverActive = POPOVER_FILTERS.filter((k) => params.filters[k]);
+  // Range bounds count as one filter each (received, resolved).
+  const popoverCount = DIMENSIONS.filter((d) => params.filters[d.key]).length +
+    (recvFrom || recvTo ? 1 : 0) + (resolved ? 1 : 0);
+
+  const dimLabel = (k: DimKey, value: string) => {
+    const d = DIMENSIONS.find((x) => x.key === k)!;
+    if (value === d.unset.value) return d.unset.label;
+    const list = dimOptions(options, k);
+    return value.split(',').map((id) => list.find((o) => o.id === id)?.label ?? (options ? 'tidak dikenal' : 'memuat…')).join(' + ');
+  };
+  const chips: { key: string; text: string; clear: readonly TicketFilterKey[] }[] = [
+    ...DIMENSIONS.filter((d) => params.filters[d.key]).map((d) => ({
+      key: d.key, text: `${d.label}: ${dimLabel(d.key, params.filters[d.key]!)}`, clear: [d.key] as const,
+    })),
+    ...(recvFrom || recvTo ? [{
+      key: 'received',
+      text: `Diterima ${recvFrom ? `dari ${recvFrom}` : ''}${recvFrom && recvTo ? ' ' : ''}${recvTo ? `s.d. ${recvTo}` : ''}`,
+      clear: ['receivedFrom', 'receivedBefore'] as const,
+    }] : []),
+    ...(resolved ? [{
+      key: 'resolved',
+      text: `Diselesaikan${params.filters.resolvedFrom ? ` sejak ${instantLabel(params.filters.resolvedFrom, tz)}` : ''}${params.filters.resolvedBefore ? ` sebelum ${instantLabel(params.filters.resolvedBefore, tz)}` : ''}`,
+      clear: ['resolvedFrom', 'resolvedBefore'] as const,
+    }] : []),
+  ];
 
   return (
-    <div className="toolbar row ticket-toolbar" role="search" aria-label="Cari dan filter tiket">
-      <label className="period grow">
-        Cari
-        <input ref={searchRef} className="field-control" type="search" value={text} maxLength={100}
-          placeholder="Nomor (12, #12, DUMA-12) atau judul"
-          onChange={(e) => { typed.current = true; setText(e.target.value); }}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return;
-            typed.current = false;
-            onFilter('q', text.trim() || null);
-          }} />
-      </label>
-      <label className="period">
-        Status
-        <select className="field-control" value={status ?? ''} onChange={(e) => onFilter('status', e.target.value || null)}>
-          <option value="">Semua status</option>
-          {STATUS_ORDER.map((c) => <option key={c} value={c}>{statusLabel(c)}</option>)}
-          {!statusKnown && status && (
-            <option value={status}>{statusSet.map((c) => STATUS_ORDER.includes(c as TicketStatusCode)
-              ? statusLabel(c as TicketStatusCode) : c).join(' + ')}</option>
+    <div className="toolbar ticket-toolbar" role="search" aria-label="Cari dan filter tiket">
+      <div className="toolbar-row">
+        <label className="toolbar-search">
+          <span className="sr-only">Cari tiket</span>
+          <input ref={searchRef} className="field-control" type="search" value={text} maxLength={100}
+            placeholder="Cari nomor (12, #12, DUMA-12) atau judul…"
+            onChange={(e) => { typed.current = true; setText(e.target.value); }}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              typed.current = false;
+              onFilter('q', text.trim() || null);
+            }} />
+        </label>
+        <label className="toolbar-select">
+          <span className="sr-only">Status</span>
+          <select className="field-control" value={status ?? ''} onChange={(e) => onFilter('status', e.target.value || null)}>
+            <option value="">Semua status</option>
+            {STATUS_ORDER.map((c) => <option key={c} value={c}>{statusLabel(c)}</option>)}
+            {!statusKnown && status && (
+              <option value={status}>{statusSet.map((c) => STATUS_ORDER.includes(c as TicketStatusCode)
+                ? statusLabel(c as TicketStatusCode) : c).join(' + ')}</option>
+            )}
+          </select>
+        </label>
+        <Popover className="filter-popover" label="Filter lanjutan" title="Filter"
+          trigger={<>
+            <span aria-hidden="true">⚲</span> Filter
+            {popoverCount > 0 && <span className="count-badge" aria-label={`${popoverCount} aktif`}>{popoverCount}</span>}
+          </>}>
+          {(close) => (
+            <>
+              <div className="filter-grid">
+                {DIMENSIONS.map((d) => {
+                  const value = params.filters[d.key] ?? '';
+                  const list = dimOptions(options, d.key);
+                  const known = value === '' || value === d.unset.value || list.some((o) => o.id === value);
+                  return (
+                    <label className="period" key={d.key}>
+                      {d.label}
+                      <select className="field-control" value={value} onChange={(e) => onFilter(d.key, e.target.value || null)}>
+                        <option value="">Semua</option>
+                        {list.map((o) => <option key={o.id} value={o.id}>{o.label}{o.active ? '' : ' (nonaktif)'}</option>)}
+                        <option value={d.unset.value}>{d.unset.label}</option>
+                        {!known && <option value={value}>{dimLabel(d.key, value)}</option>}
+                      </select>
+                    </label>
+                  );
+                })}
+                <label className="period">
+                  Diterima dari
+                  <input className="field-control" type="date" value={recvFrom ?? ''}
+                    onChange={(e) => onFilter('receivedFrom', e.target.value ? zonedMidnight(e.target.value, tz) : null)} />
+                </label>
+                <label className="period">
+                  Diterima s.d.
+                  <input className="field-control" type="date" value={recvTo ?? ''}
+                    onChange={(e) => onFilter('receivedBefore', e.target.value ? zonedMidnight(nextDay(e.target.value), tz) : null)} />
+                </label>
+              </div>
+              <p className="muted tiny">Diterapkan langsung ke List dan Board · waktu {tzLabel(tz)}.
+                {resolved ? ' Rentang penyelesaian dari Dashboard tampil sebagai chip.' : ''}</p>
+              <div className="popover-foot row between">
+                <Button variant="ghost" disabled={popoverActive.length === 0} onClick={() => onClear(POPOVER_FILTERS)}>
+                  Reset filter ini
+                </Button>
+                <Button variant="primary" onClick={close}>Selesai</Button>
+              </div>
+            </>
           )}
-        </select>
-      </label>
-      {DIMENSIONS.map((d) => {
-        const value = params.filters[d.key] ?? '';
-        const list = dimOptions(options, d.key);
-        const multi = d.key === 'priority' && value.includes(',');
-        const known = value === '' || value === d.unset.value || list.some((o) => o.id === value);
-        return (
-          <label className="period" key={d.key}>
-            {d.label}
-            <select className="field-control" value={value} onChange={(e) => onFilter(d.key, e.target.value || null)}>
-              <option value="">Semua</option>
-              {list.map((o) => <option key={o.id} value={o.id}>{o.label}{o.active ? '' : ' (nonaktif)'}</option>)}
-              <option value={d.unset.value}>{d.unset.label}</option>
-              {!known && (
-                <option value={value}>
-                  {multi
-                    ? value.split(',').map((id) => list.find((o) => o.id === id)?.label ?? 'tidak dikenal').join(' + ')
-                    : options ? 'Nilai tidak dikenal' : 'Memuat…'}
-                </option>
-              )}
-            </select>
-          </label>
-        );
-      })}
-      <label className="period">
-        Diterima dari
-        <input className="field-control" type="date" value={recvFrom ?? ''}
-          onChange={(e) => onFilter('receivedFrom', e.target.value ? zonedMidnight(e.target.value, tz) : null)} />
-      </label>
-      <label className="period">
-        Diterima s.d.
-        <input className="field-control" type="date" value={recvTo ?? ''}
-          onChange={(e) => onFilter('receivedBefore', e.target.value ? zonedMidnight(nextDay(e.target.value), tz) : null)} />
-      </label>
-      <label className="period">
-        Urutkan
-        <select className="field-control" value={`${params.sort}:${params.order}`}
-          onChange={(e) => {
-            const [s, o] = e.target.value.split(':');
-            onSort(s as TicketSort, o === 'asc' ? 'asc' : 'desc');
-          }}>
-          {(Object.keys(SORT_LABELS) as TicketSort[]).flatMap((s) => [
-            <option key={`${s}:desc`} value={`${s}:desc`}>{SORT_LABELS[s]} ↓</option>,
-            <option key={`${s}:asc`} value={`${s}:asc`}>{SORT_LABELS[s]} ↑</option>,
-          ])}
-        </select>
-      </label>
-      <div className="toolbar-end">
-        {activeCount > 0 && <Badge tone="blue">{`${activeCount} filter aktif`}</Badge>}
-        {activeCount > 0 && <Button variant="ghost" onClick={onReset}>Reset filter</Button>}
+        </Popover>
+        <label className="toolbar-select">
+          <span className="sr-only">Urutkan</span>
+          <select className="field-control" value={`${params.sort}:${params.order}`}
+            onChange={(e) => {
+              const [s, o] = e.target.value.split(':');
+              onSort(s as TicketSort, o === 'asc' ? 'asc' : 'desc');
+            }}>
+            {(Object.keys(SORT_LABELS) as TicketSort[]).flatMap((s) => [
+              <option key={`${s}:desc`} value={`${s}:desc`}>Urut: {SORT_LABELS[s]} ↓</option>,
+              <option key={`${s}:asc`} value={`${s}:asc`}>Urut: {SORT_LABELS[s]} ↑</option>,
+            ])}
+          </select>
+        </label>
+        <SavedViews api={api} workspaceId={workspaceId} params={params} onApply={onApply} />
+        {activeCount > 0 && (
+          <Button variant="ghost" onClick={onReset} aria-label={`Reset semua filter (${activeCount} aktif)`}>
+            Reset ({activeCount})
+          </Button>
+        )}
       </div>
-      {resolved && (
-        <div className="chips full-row">
-          <span className="chip">
-            Diselesaikan {params.filters.resolvedFrom ? `sejak ${instantLabel(params.filters.resolvedFrom, tz)}` : ''}
-            {params.filters.resolvedBefore ? ` sebelum ${instantLabel(params.filters.resolvedBefore, tz)}` : ''}
-            <Button variant="ghost" className="chip-x" aria-label="Hapus filter rentang penyelesaian"
-              onClick={onClearResolved}>✕</Button>
-          </span>
-        </div>
+      {chips.length > 0 && (
+        <ul className="chips" aria-label="Filter aktif">
+          {chips.map((c) => (
+            <li key={c.key} className="chip">
+              {c.text}
+              <Button variant="ghost" className="chip-x" aria-label={`Hapus filter ${c.text}`}
+                onClick={() => onClear(c.clear)}>✕</Button>
+            </li>
+          ))}
+        </ul>
       )}
-      <span className="muted tiny full-row">Waktu {tzLabel(tz)} · saved view belum tersedia pada kandidat ini</span>
     </div>
   );
 }

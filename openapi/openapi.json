@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.6.0-d06",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+    "version": "0.7.0-d06",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
   "components": {
@@ -31,7 +31,8 @@
       },
       "TicketId": { "name": "ticket_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; a ticket of another workspace returns 404." },
       "AttachmentId": { "name": "attachment_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id and ticket_id; otherwise 404." },
-      "ReportRunId": { "name": "report_run_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; otherwise 404." }
+      "ReportRunId": { "name": "report_run_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; otherwise 404." },
+      "SavedViewId": { "name": "saved_view_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}, "description": "Own view in workspace_id only; another user's view or another workspace returns 404." }
     },
     "schemas": {
       "TicketSortKey": {
@@ -1066,7 +1067,12 @@
           "trend": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardTrendPoint" } },
           "attention": { "$ref": "#/components/schemas/DashboardAttention" }
         }
-      }
+      },
+      "SavedViewQuery": { "type": "object", "additionalProperties": false, "description": "List/Board filters and sort in the List query-string format (same rules as the List parameters). Search text (`q`), `limit` and `cursor` are not allowed. Stored in canonical form; `sort`/`order` are always present in responses.", "properties": {"status": {"type": "string"}, "owner": {"type": "string"}, "channel": {"type": "string"}, "category": {"type": "string"}, "priority": {"type": "string"}, "receivedFrom": {"type": "string"}, "receivedBefore": {"type": "string"}, "resolvedFrom": {"type": "string"}, "resolvedBefore": {"type": "string"}, "sort": {"type": "string"}, "order": {"type": "string"}} },
+      "SavedView": { "type": "object", "additionalProperties": false, "required": ["id", "name", "view", "query", "version", "createdAt", "updatedAt"], "properties": {"id": {"type": "string", "format": "uuid"}, "name": {"type": "string", "minLength": 1, "maxLength": 60}, "view": {"type": "string", "enum": ["list", "board"]}, "query": {"$ref": "#/components/schemas/SavedViewQuery"}, "version": {"type": "integer", "minimum": 1}, "createdAt": {"type": "string", "format": "date-time"}, "updatedAt": {"type": "string", "format": "date-time"}} },
+      "SavedViewList": { "type": "object", "additionalProperties": false, "required": ["items"], "properties": {"items": {"type": "array", "maxItems": 50, "items": {"$ref": "#/components/schemas/SavedView"}}} },
+      "SavedViewCreateRequest": { "type": "object", "additionalProperties": false, "required": ["name", "view"], "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 60, "description": "Trimmed; unique per user+workspace (case-insensitive, 422). Label only; do not put personal data in it."}, "view": {"type": "string", "enum": ["list", "board"]}, "query": {"$ref": "#/components/schemas/SavedViewQuery"}} },
+      "SavedViewRenameRequest": { "type": "object", "additionalProperties": false, "required": ["name", "version"], "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 60}, "version": {"type": "integer", "minimum": 1, "description": "The version the client saw; stale = 409."}} }
     },
     "responses": {
       "VersionConflict": { "description": "Optimistic version is stale (version_conflict)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
@@ -1082,6 +1088,189 @@
     }
   },
   "paths": {
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+      "get": {
+        "operationId": "listSavedViews",
+        "summary": "Caller's own saved views in this workspace (C32)",
+        "description": "Private to the session user and workspace; no public/shared views. A view grants nothing: List/Board re-check permission and filters when it is applied.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own views, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedView",
+        "summary": "Save the current List/Board filters and sort as a private view",
+        "description": "Filters are parsed and validated against the workspace (foreign/unknown IDs = 400). Duplicate name or more than 50 views = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}": {
+      "patch": {
+        "operationId": "renameSavedView",
+        "summary": "Rename an own saved view",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/SavedViewId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewRenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSavedView",
+        "summary": "Delete an own saved view",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/SavedViewId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/tickets": {
       "get": {
         "operationId": "listTickets",

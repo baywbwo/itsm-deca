@@ -227,3 +227,39 @@ table.tickets td .badge { white-space: normal; }
 table.tickets td:first-child, table.tickets td:nth-child(7) { white-space: nowrap; }
 table.tickets .subject { min-width: 200px; max-width: 260px; }
 table.tickets td.stack span { display: block; }
+/* D06 rework: C05 one-row toolbar + Filter popover, C32 saved view (prototype v3.2 §ListBoard). */
+.ticket-toolbar { display: grid; gap: 8px; }
+.toolbar-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.toolbar-search { flex: 1 1 260px; }
+.toolbar-search .field-control { max-width: none; width: 100%; }
+.toolbar-select .field-control { max-width: 220px; }
+.popover { position: relative; }
+.popover-trigger { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.popover-trigger.open { border-color: var(--ink); }
+.trigger-value { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.count-badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--ink); color: #fff; font-size: 11px; font-weight: 700; }
+.popover-panel { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: min(520px, 92vw); background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px #18261e24; padding: 12px 14px 14px; }
+.saved-views .popover-panel { left: auto; right: 0; width: min(420px, 92vw); }
+.popover-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.popover-body { display: grid; gap: 8px; max-height: min(70vh, 560px); overflow: auto; padding: 2px; }
+.popover-body .period { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
+.popover-body .field-control { width: 100%; max-width: none; font-size: 14px; font-weight: 400; }
+.filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.popover-foot { display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.saved-new, .saved-edit { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.saved-new .grow, .saved-edit .grow { flex: 1 1 180px; }
+.saved-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; border-top: 1px solid var(--line); padding-top: 8px; }
+.saved-item { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; border-radius: 8px; padding: 2px; }
+.saved-item.current { background: var(--soft); }
+.saved-apply { flex: 1 1 160px; display: flex; gap: 8px; align-items: center; justify-content: space-between; text-align: left; border: 1px solid transparent; background: none; border-radius: 7px; padding: 8px 10px; min-height: 40px; }
+.saved-apply:hover { border-color: var(--line); }
+.saved-name { overflow-wrap: anywhere; font-weight: 700; }
+.form-error { color: var(--danger-ink); }
+@media (max-width: 640px) {
+  .toolbar-select, .popover { flex: 1 1 140px; }
+  .toolbar-select .field-control, .popover-trigger { width: 100%; max-width: none; justify-content: center; }
+  .popover { position: static; }
+  .popover-panel, .saved-views .popover-panel { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: 100%; border-radius: 14px 14px 0 0; max-height: 85vh; padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+  .popover-body { max-height: calc(85vh - 64px); }
+  .filter-grid { grid-template-columns: 1fr; }
+}

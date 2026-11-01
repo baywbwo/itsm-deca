@@ -30,3 +30,7 @@ export type TicketMutationResult = S['TicketMutationResult'];
 export type Member = S['Member'];
 export type Catalogs = S['Catalogs'];
 export type CatalogItem = S['CatalogItem'];
+export type SavedView = S['SavedView'];
+export type SavedViewQuery = S['SavedViewQuery'];
+export type SavedViewCreateRequest = S['SavedViewCreateRequest'];
+export type SavedViewRenameRequest = S['SavedViewRenameRequest'];

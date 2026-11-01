@@ -66,20 +66,20 @@ macro_rules! utc {
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListQuery {
-    q: Option<String>,
-    status: Option<String>,
-    owner: Option<String>,
-    channel: Option<String>,
-    category: Option<String>,
-    priority: Option<String>,
-    received_from: Option<String>,
-    received_before: Option<String>,
-    resolved_from: Option<String>,
-    resolved_before: Option<String>,
-    sort: Option<String>,
-    order: Option<String>,
-    limit: Option<String>,
-    cursor: Option<String>,
+    pub(crate) q: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) owner: Option<String>,
+    pub(crate) channel: Option<String>,
+    pub(crate) category: Option<String>,
+    pub(crate) priority: Option<String>,
+    pub(crate) received_from: Option<String>,
+    pub(crate) received_before: Option<String>,
+    pub(crate) resolved_from: Option<String>,
+    pub(crate) resolved_before: Option<String>,
+    pub(crate) sort: Option<String>,
+    pub(crate) order: Option<String>,
+    pub(crate) limit: Option<String>,
+    pub(crate) cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -334,6 +334,44 @@ impl TicketQuery {
             status: Some(vec![s]),
             ..self.clone()
         }
+    }
+
+    /// Canonical query-string form stored by a saved view (C32): filters, sort and order in
+    /// the List/Board wire format. Search text is never part of it (free text may hold PII).
+    pub(crate) fn saved_params(&self) -> BTreeMap<&'static str, String> {
+        let mut out = BTreeMap::new();
+        if let Some(v) = &self.status {
+            let codes: Vec<&str> = v.iter().map(|s| s.code()).collect();
+            out.insert("status", codes.join(","));
+        }
+        for (key, value) in [
+            ("owner", self.owner.wire(UNASSIGNED)),
+            ("channel", self.channel.wire(NONE)),
+            ("category", self.category.wire(NONE)),
+        ] {
+            if let Some(v) = value {
+                out.insert(key, v);
+            }
+        }
+        if self.priority_unset {
+            out.insert("priority", NONE.to_owned());
+        } else if let Some(ids) = &self.priority {
+            let ids: Vec<String> = ids.iter().map(Uuid::to_string).collect();
+            out.insert("priority", ids.join(","));
+        }
+        for (key, value) in [
+            ("receivedFrom", &self.received_from),
+            ("receivedBefore", &self.received_before),
+            ("resolvedFrom", &self.resolved_from),
+            ("resolvedBefore", &self.resolved_before),
+        ] {
+            if let Some(v) = value {
+                out.insert(key, v.clone());
+            }
+        }
+        out.insert("sort", self.sort.code().to_owned());
+        out.insert("order", self.order.sql().to_ascii_lowercase());
+        out
     }
 
     pub fn applied(&self) -> AppliedTicketFilters {
@@ -776,7 +814,11 @@ async fn snapshot(state: &AppState) -> Result<sqlx::Transaction<'static, Postgre
 
 /// 400 unless every filter value belongs to the workspace and every instant is a real
 /// timestamp. Inactive members / catalog rows stay filterable (history).
-async fn validate(conn: &mut PgConnection, ws: Uuid, f: &TicketQuery) -> Result<(), AppError> {
+pub(crate) async fn validate(
+    conn: &mut PgConnection,
+    ws: Uuid,
+    f: &TicketQuery,
+) -> Result<(), AppError> {
     let mut b = QueryBuilder::<Postgres>::new("SELECT true");
     if let Some(id) = f.owner.id() {
         b.push(" AND EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = ")
@@ -1076,7 +1118,7 @@ fn note(raw: Option<String>, max: usize) -> Result<Option<String>, AppError> {
     }
 }
 
-fn body<T>(b: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
+pub(crate) fn body<T>(b: Result<Json<T>, JsonRejection>) -> Result<T, AppError> {
     b.map(|Json(v)| v).map_err(|e| {
         tracing::info!(error.kind = "invalid_body", status = %e.status(), "request body refused");
         AppError::InvalidRequest

@@ -14,6 +14,9 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  *   after a switch to another workspace; the UI must discard it.
  * - conflict: a status change replays the server's real 409 (recorded with a stale version).
  * The ticket List/Board follows slow/empty/error/forbidden the same way as the dashboard.
+ * Saved views (C32) are always synthetic in the review package: an in-memory store per page
+ * load (lost on reload, never in browser storage) that mimics the server rules (unique name,
+ * version 409, 404). It does not prove the live API; that is covered by the cargo/UAT tests.
  */
 export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict';
 export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict'];
@@ -62,11 +65,55 @@ function wait(ms: number, signal: AbortSignal | undefined, honourAbort: boolean)
  * Review-only transport: replays responses recorded from the real UAT backend so the shell can
  * be reviewed from a file:// page. Session state is simulated (anonymous until UAT entry).
  */
+const SAVED = /^\/api\/v1\/workspaces\/([^/]+)\/saved-views(?:\/([^/]+))?$/;
+
+interface SyntheticView { id: string; name: string; view: string; query: Record<string, string>; version: number; createdAt: string; updatedAt: string }
+
+function savedViews(store: Map<string, SyntheticView[]>, method: string, ws: string, id: string | undefined, payload: unknown) {
+  const items = store.get(ws) ?? [];
+  const fail = (status: number, code: string, message: string) =>
+    ({ status, body: { error: { code, message } }, requestId: 'review-simulasi-saved-view' });
+  const ok = (status: number, body: unknown) => ({ status, body, requestId: 'review-simulasi-saved-view' });
+  const p = (payload ?? {}) as { name?: string; view?: string; query?: Record<string, string>; version?: number };
+  const name = (p.name ?? '').trim();
+  const dup = (except?: string) => items.some((v) => v.id !== except && v.name.toLowerCase() === name.toLowerCase());
+  const now = new Date().toISOString();
+  if (!id && method === 'GET') return ok(200, { items: structuredClone(items) });
+  if (!id && method === 'POST') {
+    if (!name || name.length > 60) return fail(400, 'invalid_request', 'Simulasi review: nama tidak valid.');
+    if (dup() || items.length >= 50) return fail(422, 'rule_violation', 'Simulasi review: nama dipakai atau batas tercapai.');
+    const v = { id: `sim-${items.length + 1}-${Date.now()}`, name, view: p.view ?? 'list', query: { ...(p.query ?? {}) }, version: 1, createdAt: now, updatedAt: now };
+    store.set(ws, [...items, v]);
+    return ok(201, structuredClone(v));
+  }
+  const cur = items.find((v) => v.id === id);
+  if (!cur) return fail(404, 'not_found', 'Data tidak ditemukan.');
+  if (method === 'PATCH') {
+    if (p.version !== cur.version) return fail(409, 'version_conflict', 'Simulasi review: versi berubah.');
+    if (!name || name.length > 60) return fail(400, 'invalid_request', 'Simulasi review: nama tidak valid.');
+    if (dup(cur.id)) return fail(422, 'rule_violation', 'Simulasi review: nama dipakai.');
+    const v = { ...cur, name, version: cur.version + 1, updatedAt: now };
+    store.set(ws, items.map((x) => (x.id === id ? v : x)));
+    return ok(200, structuredClone(v));
+  }
+  if (method === 'DELETE') {
+    store.set(ws, items.filter((x) => x.id !== id));
+    return ok(204, null);
+  }
+  return fail(400, 'invalid_request', 'Simulasi review: metode tidak didukung.');
+}
+
 export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario = 'none'): Transport {
   let entered = false;
   let firstDashboardWs: string | null = null;
   let mutated = false;
+  const saved = new Map<string, SyntheticView[]>();
   return async ({ method, path, signal, body: payload }) => {
+    const sv = SAVED.exec(path);
+    if (sv) {
+      await wait(latencyMs, signal, true);
+      return savedViews(saved, method, sv[1] ?? '', sv[2], payload);
+    }
     if (method === 'POST' && path.endsWith('/transitions')) {
       await wait(latencyMs, signal, true);
       const to = (payload as { to?: string } | undefined)?.to ?? '';
