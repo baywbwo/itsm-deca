@@ -21,12 +21,14 @@ type TabId = 'workspace' | 'members' | 'catalogs' | 'companies';
  * O07/O09 Pengaturan. Every tab reads its own server answer; edit controls appear only when the
  * server says so (`canEdit`/`canManage`), and the server re-checks each write (default deny).
  */
-export function SettingsPage({ api, workspace, uat, permissions, onNotice }: {
+export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWorkspacesChanged = () => undefined }: {
   api: Api;
   workspace: Workspace;
   uat: boolean;
   permissions: readonly string[];
   onNotice: (text: string) => void;
+  /** A save changed what the workspace switcher lists (name, new company, active). */
+  onWorkspacesChanged?: () => void;
 }) {
   const tabs: { id: TabId; label: string }[] = [
     ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
@@ -43,10 +45,10 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice }: {
         description={`Profil workspace, anggota dan katalog referensi ${workspace.code}. Penonaktifan menggantikan penghapusan; histori tetap tersimpan.`} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Bagian pengaturan" panelId={panelId} />
       <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab-${tab}`}>
-        {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} />}
+        {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'catalogs' && <CatalogTab api={api} workspace={workspace} onNotice={onNotice} />}
-        {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} />}
+        {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
       </div>
     </>
   );
@@ -71,12 +73,14 @@ function ReadOnlyBanner({ what }: { what: string }) {
 
 // ---------------------------------------------------------------- Workspace profile
 
-function WorkspaceTab({ api, workspace, onNotice }: { api: Api; workspace: Workspace; onNotice: (t: string) => void }) {
+function WorkspaceTab({ api, workspace, onNotice, onChanged }: {
+  api: Api; workspace: Workspace; onNotice: (t: string) => void; onChanged: () => void;
+}) {
   const res = useLoad((s) => api.getSettings(workspace.id, s), workspace.id);
   if (res.error) return <LoadFailure error={res.error} what="Profil workspace" onRetry={res.reload} />;
   if (!res.data) return <LoadingState label="Memuat profil workspace…" />;
   return <WorkspaceForm key={res.data.settings.version} api={api} body={res.data} onReload={res.reload}
-    onSaved={(b) => { res.set(b); onNotice('Profil workspace tersimpan dan tercatat di audit.'); }} />;
+    onSaved={(b) => { res.set(b); onChanged(); onNotice('Profil workspace tersimpan dan tercatat di audit.'); }} />;
 }
 
 function WorkspaceForm({ api, body, onReload, onSaved }: {
@@ -482,7 +486,9 @@ function CatalogDialog({ api, workspace, editor, kindLabel, entry, onClose, onRe
 
 // ---------------------------------------------------------------- Companies (UAT Superadmin)
 
-function CompaniesTab({ api, workspace, onNotice }: { api: Api; workspace: Workspace; onNotice: (t: string) => void }) {
+function CompaniesTab({ api, workspace, onNotice, onChanged }: {
+  api: Api; workspace: Workspace; onNotice: (t: string) => void; onChanged: () => void;
+}) {
   const res = useLoad((s) => api.listCompanies(s), 'companies');
   const [adding, setAdding] = useState(false);
   const [toggle, setToggle] = useState<WorkspaceSettings | null>(null);
@@ -490,7 +496,10 @@ function CompaniesTab({ api, workspace, onNotice }: { api: Api; workspace: Works
   if (res.error) return <LoadFailure error={res.error} what="Daftar perusahaan" onRetry={res.reload} />;
   const list = res.data;
   if (!list) return <LoadingState label="Memuat perusahaan…" />;
-  const replace = (c: WorkspaceSettings) => res.set({ items: list.items.map((x) => (x.companyId === c.companyId ? c : x)) });
+  const replace = (c: WorkspaceSettings) => {
+    res.set({ items: list.items.map((x) => (x.companyId === c.companyId ? c : x)) });
+    onChanged();
+  };
   return (
     <section aria-labelledby="co-title">
       <div className="row between spaced-bottom">
@@ -517,7 +526,7 @@ function CompaniesTab({ api, workspace, onNotice }: { api: Api; workspace: Works
         ]} />
       {adding && (
         <CompanyDialog api={api} onClose={() => setAdding(false)}
-          onDone={(c) => { res.set({ items: [...list.items, c] }); setAdding(false); onNotice(`${c.companyName} (${c.workspaceCode}) dibuat tanpa anggota. Tercatat di audit.`); }} />
+          onDone={(c) => { res.set({ items: [...list.items, c] }); setAdding(false); onChanged(); onNotice(`${c.companyName} (${c.workspaceCode}) dibuat tanpa anggota. Tercatat di audit.`); }} />
       )}
       {toggle && (
         <ConfirmDialog title={`${toggle.active ? 'Nonaktifkan' : 'Aktifkan'} ${toggle.companyName}?`}
