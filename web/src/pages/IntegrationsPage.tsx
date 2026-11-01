@@ -194,7 +194,7 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
   ];
   return (
     <>
-      <Dialog open onClose={busy ? () => undefined : onClose} title={`Konfigurasi ${label}`} variant="drawer" initialFocus="input"
+      <Dialog open onClose={busy ? () => undefined : onClose} title={`Konfigurasi ${label}`} variant="peek" initialFocus="input"
         footer={(
           <>
             <Button onClick={onClose} disabled={busy}>Tutup</Button>

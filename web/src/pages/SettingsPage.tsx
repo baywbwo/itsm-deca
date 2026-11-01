@@ -279,7 +279,7 @@ function MemberDialog({ api, workspace, list, member, onClose, onChanged, onRelo
 
   return (
     <>
-      <Dialog open onClose={busy ? () => undefined : onClose} title={`Kelola ${member.displayName}`} variant="drawer" initialFocus="select"
+      <Dialog open onClose={busy ? () => undefined : onClose} title={`Kelola ${member.displayName}`} variant="peek" initialFocus="select"
         footer={<Button onClick={onClose} disabled={busy}>Tutup</Button>}>
         {error && <WriteAlert error={error} onReload={onReload} />}
         <p className="muted">Status: <strong>{member.active ? 'Aktif' : 'Nonaktif'}</strong> · versi {member.version}</p>
