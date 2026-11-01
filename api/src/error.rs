@@ -27,6 +27,9 @@ pub enum AppError {
     /// to the client (it may name tables or values); the client gets a generic rule error.
     #[error("rule_violation")]
     RuleViolation,
+    /// A query or body value is outside the documented contract.
+    #[error("invalid_request")]
+    InvalidRequest,
     #[error("uat_not_available")]
     UatNotAvailable,
     #[error("dependency_unavailable")]
@@ -67,6 +70,11 @@ impl AppError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "rule_violation",
                 "Perubahan ditolak oleh aturan proses.",
+            ),
+            AppError::InvalidRequest => (
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                "Parameter permintaan tidak valid.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,

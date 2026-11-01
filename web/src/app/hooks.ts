@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ApiError, isAbort, type Api } from '../api/client';
-import type { Meta, Session, Workspace, WorkspacePermissions } from '../api/types';
+import type { Dashboard, DashboardPeriodKey, Meta, Session, Workspace, WorkspacePermissions } from '../api/types';
 import { parseHash, type Route } from './routes';
 import { ScopedLoader, type ScopedState } from './scopedLoader';
 
@@ -73,6 +73,41 @@ export function useScope(api: Api, workspaceId: string | null, attempt = 0): Sco
   }
   return state;
 }
+
+/**
+ * Dashboard aggregates for (workspace, period). Same guarantees as useScope: a switch aborts
+ * the previous request, a late answer for another key is ignored and old numbers are never
+ * shown under the new key.
+ */
+export function useDashboard(
+  api: Api,
+  workspaceId: string,
+  period: DashboardPeriodKey,
+  attempt = 0,
+): ScopedState<string, Dashboard> {
+  const loader = useRef<ScopedLoader<string, Dashboard> | null>(null);
+  loader.current ??= new ScopedLoader<string, Dashboard>(isAbort);
+  const l = loader.current;
+  const state = useSyncExternalStore(l.subscribe, l.getState);
+  const key = dashboardKey(workspaceId, period);
+
+  useEffect(() => {
+    l.load(key, async (signal) => {
+      const d = await api.getDashboard(workspaceId, period, signal);
+      // Defence in depth: never render numbers that belong to another scope or period.
+      if (d.workspaceId !== workspaceId || d.period.key !== period) {
+        throw new ApiError(0, 'bad_response', 'Respons dashboard tidak cocok dengan workspace/periode.');
+      }
+      return d;
+    });
+  }, [api, l, key, workspaceId, period, attempt]);
+  useEffect(() => () => l.reset(), [l]);
+
+  if (state.status === 'idle' || state.key !== key) return { status: 'loading', key };
+  return state;
+}
+
+export const dashboardKey = (workspaceId: string, period: DashboardPeriodKey) => `${workspaceId}|${period}`;
 
 const subscribeHash = (fn: () => void) => {
   window.addEventListener('hashchange', fn);

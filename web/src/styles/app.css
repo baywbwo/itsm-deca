@@ -119,6 +119,50 @@ dialog.drawer .dialog-body { display: grid; gap: 24px; align-content: start; }
 .swatches { display: flex; gap: 12px; flex-wrap: wrap; }
 .swatch { padding: 16px; border: 1px solid var(--line); border-radius: 8px; min-width: 120px; }
 
+/* O01 Dashboard (baseline design-baseline/index.html) */
+.toolbar { padding: 12px 0; margin-bottom: 16px; border-bottom: 1px solid var(--line); gap: 12px; }
+.toolbar .period { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.toolbar .field-control { width: auto; }
+.between { justify-content: space-between; }
+.spaced { margin-top: 20px; }
+.spaced-bottom { margin-bottom: 20px; }
+.plain { list-style: none; padding: 0; margin: 0; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 20px 0 24px; }
+.kpi { display: block; border: 1px solid var(--line); border-radius: 10px; padding: 20px; text-align: left; color: inherit; text-decoration: none; background: #fff; min-width: 0; }
+a.kpi:hover { border-color: var(--accent); }
+.kpi strong { display: block; font-size: 30px; letter-spacing: -1px; margin: 8px 0; }
+.kpi small { color: var(--muted); }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; }
+.grid2 > .card, .grid2 > .card + .card { margin-top: 0; }
+.bars { display: grid; gap: 16px; margin-bottom: 12px; }
+.barrow { display: grid; grid-template-columns: 130px minmax(0, 1fr) 30px; align-items: center; gap: 12px; font-size: 12px; }
+.barrow b { text-align: right; }
+.track { height: 9px; background: #f1f1ee; border-radius: 4px; }
+.fill { height: 9px; background: #9caaa0; border-radius: 4px; }
+.barrow:first-child .fill { background: var(--accent); }
+.activity { padding: 16px 0; border-bottom: 1px solid var(--line); flex-wrap: nowrap; }
+.activity:last-child { border-bottom: 0; }
+.pic { display: inline-flex; align-items: center; gap: 8px; color: inherit; min-height: 30px; min-width: 0; overflow-wrap: anywhere; }
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); min-height: 30px; }
+details .plain li { padding: 4px 0; font-size: 13px; }
+.subject { display: block; max-width: 300px; overflow: hidden; text-overflow: ellipsis; }
+.legend { display: flex; gap: 16px; color: var(--muted); margin-bottom: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.key-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.key-received, .trend .col-received { background: var(--accent); fill: var(--accent); }
+.key-resolved, .trend .col-resolved { background: #9caaa0; fill: #9caaa0; }
+.trend { width: 100%; height: auto; display: block; margin-bottom: 8px; }
+.trend .axis { font-size: 11px; fill: var(--muted); }
+.trend .baseline { stroke: var(--ink); stroke-width: 1; }
+.trend .gridline { stroke: var(--line); stroke-dasharray: 3 3; }
+.source { margin-top: 20px; }
+.props-row { display: contents; }
+
+@media (min-width: 761px) and (max-width: 1099px) {
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid2 { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 760px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
@@ -128,5 +172,12 @@ dialog.drawer .dialog-body { display: grid; gap: 24px; align-content: start; }
   .props { grid-template-columns: 115px minmax(0, 1fr); }
   .card { padding: 16px; }
   h1 { font-size: 26px; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .kpi { padding: 16px; }
+  .kpi strong { font-size: 26px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .barrow { grid-template-columns: 100px minmax(0, 1fr) 25px; }
+  .toolbar .period { width: 100%; }
+  .toolbar .field-control { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }

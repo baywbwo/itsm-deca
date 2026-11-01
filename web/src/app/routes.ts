@@ -1,4 +1,4 @@
-import type { PermissionCode } from '../api/types';
+import type { PermissionCode, TicketFilter } from '../api/types';
 
 export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'components';
 
@@ -43,17 +43,39 @@ export function allowedPages(permissions: readonly PermissionCode[], uat: boolea
 export interface Route {
   workspaceId: string | null;
   page: PageId;
+  /** Raw query after `?` (drilldown filters); '' when absent. */
+  query: string;
 }
 
 const PAGE_IDS = new Set<string>(PAGES.map((p) => p.id));
 
-/** `#/w/<workspaceId>/<page>`; anything else falls back to no workspace + dashboard. */
+/** `#/w/<workspaceId>/<page>[?query]`; anything else falls back to no workspace + dashboard. */
 export function parseHash(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  if (parts[0] !== 'w' || !parts[1]) return { workspaceId: null, page: 'dashboard' };
+  const raw = hash.replace(/^#\/?/, '');
+  const q = raw.indexOf('?');
+  const path = q < 0 ? raw : raw.slice(0, q);
+  const query = q < 0 ? '' : raw.slice(q + 1);
+  const parts = path.split('/').filter(Boolean);
+  if (parts[0] !== 'w' || !parts[1]) return { workspaceId: null, page: 'dashboard', query: '' };
   const page = parts[2] && PAGE_IDS.has(parts[2]) ? (parts[2] as PageId) : 'dashboard';
-  return { workspaceId: decodeURIComponent(parts[1]), page };
+  return { workspaceId: decodeURIComponent(parts[1]), page, query };
 }
 
-export const toHash = (r: { workspaceId: string; page: PageId }) =>
-  `#/w/${encodeURIComponent(r.workspaceId)}/${r.page}`;
+export const toHash = (r: { workspaceId: string; page: PageId; query?: string }) =>
+  `#/w/${encodeURIComponent(r.workspaceId)}/${r.page}${r.query ? `?${r.query}` : ''}`;
+
+/** Server-built drilldown filter → ticket-list query (lists joined by commas). */
+export function filterToQuery(f: TicketFilter): string {
+  const q = new URLSearchParams();
+  if (f.status?.length) q.set('status', f.status.join(','));
+  if (f.owner) q.set('owner', f.owner);
+  if (f.priority?.length) q.set('priority', f.priority.join(','));
+  if (f.receivedFrom) q.set('receivedFrom', f.receivedFrom);
+  if (f.receivedBefore) q.set('receivedBefore', f.receivedBefore);
+  if (f.resolvedFrom) q.set('resolvedFrom', f.resolvedFrom);
+  if (f.resolvedBefore) q.set('resolvedBefore', f.resolvedBefore);
+  return q.toString();
+}
+
+export const drilldownHash = (workspaceId: string, f: TicketFilter) =>
+  toHash({ workspaceId, page: 'tickets', query: filterToQuery(f) });

@@ -2,6 +2,7 @@
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
   ApiErrorBody,
+  Dashboard,
   Meta,
   PermissionCode,
   Session,
@@ -69,3 +70,34 @@ export function isWorkspacePermissions(v: unknown): v is WorkspacePermissions {
 
 export const isErrorBody = (v: unknown): v is ApiErrorBody =>
   isObj(v) && isObj(v.error) && isStr(v.error.code) && isStr(v.error.message);
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isArr = (v: unknown, item: (x: unknown) => boolean) => Array.isArray(v) && v.every(item);
+const isStatus = (v: unknown) => isObj(v) && isStr(v.code) && isStr(v.label);
+const isFilter = (v: unknown) => isObj(v);
+const PERIODS = ['today', 'last_7_days', 'this_month'];
+const TOTALS = [
+  'tickets', 'active', 'unassigned', 'pendingCustomer', 'receivedInPeriod', 'resolvedInPeriod',
+  'resolvedTicketsInPeriod',
+] as const;
+
+/** Shape check of the dashboard aggregate; numbers must be numbers, lists must be lists. */
+export function isDashboard(v: unknown): v is Dashboard {
+  if (!isObj(v) || !isStr(v.workspaceId) || !isStr(v.workspaceCode) || !isStr(v.asOf)) return false;
+  const p = v.period;
+  if (!isObj(p) || !PERIODS.includes(p.key as string) || !isStr(p.timezone) || !isStr(p.startDate) ||
+    !isStr(p.endDate) || !isStr(p.startAt) || !isStr(p.endAt)) return false;
+  const t = v.totals;
+  if (!isObj(t) || !TOTALS.every((k) => isNum(t[k]))) return false;
+  const a = v.attention;
+  return (
+    typeof v.slaConfigured === 'boolean' && isObj(v.drilldown) &&
+    isArr(v.statusDistribution, (s) => isObj(s) && isStatus(s.status) && isNum(s.count) && isFilter(s.filter)) &&
+    isArr(v.picLoad, (r) => isObj(r) && isStrOrNull(r.userId) && isStrOrNull(r.displayName) && isNum(r.activeTickets)) &&
+    isArr(v.channels, (c) => isObj(c) && isStrOrNull(c.label) && isNum(c.count)) &&
+    isArr(v.age, (b) => isObj(b) && isStr(b.label) && isNum(b.count)) &&
+    isArr(v.trend, (d) => isObj(d) && isStr(d.date) && isNum(d.received) && isNum(d.resolved)) &&
+    isObj(a) && isNum(a.total) &&
+    isArr(a.items, (i) => isObj(i) && isStr(i.id) && isStr(i.displayNumber) && isStr(i.subject) && isStatus(i.status) && isNum(i.ageSeconds))
+  );
+}

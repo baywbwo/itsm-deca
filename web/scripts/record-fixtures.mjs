@@ -28,6 +28,10 @@ responses['GET /api/v1/workspaces'] = list;
 for (const w of list.body.items) {
   responses[`GET /api/v1/workspaces/${w.id}`] = await rec('GET', `/api/v1/workspaces/${w.id}`);
   responses[`GET /api/v1/workspaces/${w.id}/permissions`] = await rec('GET', `/api/v1/workspaces/${w.id}/permissions`);
+  for (const period of ['today', 'last_7_days', 'this_month']) {
+    const path = `/api/v1/workspaces/${w.id}/dashboard?period=${period}`;
+    responses[`GET ${path}`] = await rec('GET', path);
+  }
 }
 // Any other workspace path replays the server's real 404 (unknown/foreign/malformed look alike).
 responses['GET #not_found'] = await rec('GET', '/api/v1/workspaces/00000000-0000-4000-8000-000000000000');

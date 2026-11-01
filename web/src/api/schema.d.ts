@@ -263,6 +263,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dashboard aggregates for one workspace (whole scope, not paginated) */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -270,7 +287,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "uat_not_available" | "dependency_unavailable" | "internal";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal";
                 message: string;
             };
         };
@@ -495,6 +512,163 @@ export interface components {
             /** Format: date-time */
             grantedAt: string;
         };
+        /**
+         * @description Calendar periods in the workspace time zone. last_7_days = today minus 6 days through today; this_month = the whole calendar month.
+         * @enum {string}
+         */
+        DashboardPeriodKey: "today" | "last_7_days" | "this_month";
+        /** @description Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. Time bounds are half-open [from, before). */
+        TicketFilter: {
+            status?: components["schemas"]["TicketStatusCode"][];
+            /**
+             * @description Member user UUID, or the literal `unassigned`.
+             * @example unassigned
+             */
+            owner?: string;
+            priority?: string[];
+            /** Format: date-time */
+            receivedFrom?: string;
+            /** Format: date-time */
+            receivedBefore?: string;
+            /** Format: date-time */
+            resolvedFrom?: string;
+            /** Format: date-time */
+            resolvedBefore?: string;
+        };
+        /** @enum {string} */
+        TicketStatusCode: "new" | "open" | "pending_customer" | "pending_engineering" | "resolved" | "closed";
+        DashboardPeriod: {
+            key: components["schemas"]["DashboardPeriodKey"];
+            /** @enum {string} */
+            basis: "received";
+            /** @example Asia/Jakarta */
+            timezone: string;
+            /**
+             * Format: date
+             * @description First local day (inclusive).
+             */
+            startDate: string;
+            /**
+             * Format: date
+             * @description Last local day (inclusive).
+             */
+            endDate: string;
+            /**
+             * Format: date-time
+             * @description Inclusive start instant (UTC).
+             */
+            startAt: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end instant (UTC).
+             */
+            endAt: string;
+        };
+        /** @description Aggregated server-side over the whole workspace scope, never over a page. */
+        DashboardTotals: {
+            /** @description All tickets in the workspace, any status (snapshot). */
+            tickets: number;
+            /** @description new + open + pending_customer + pending_engineering now (snapshot, not period-bound). */
+            active: number;
+            /** @description Active tickets without a PIC now. */
+            unassigned: number;
+            /** @description Tickets in pending_customer now. */
+            pendingCustomer: number;
+            /** @description Tickets with received_at in [startAt, endAt). */
+            receivedInPeriod: number;
+            /** @description Resolve events with occurred_at in the period; a later reopen does not remove them. */
+            resolvedInPeriod: number;
+            /** @description Distinct tickets behind resolvedInPeriod. */
+            resolvedTicketsInPeriod: number;
+        };
+        DashboardDrilldowns: {
+            active: components["schemas"]["TicketFilter"];
+            unassigned: components["schemas"]["TicketFilter"];
+            pendingCustomer: components["schemas"]["TicketFilter"];
+            receivedInPeriod: components["schemas"]["TicketFilter"];
+            resolvedInPeriod: components["schemas"]["TicketFilter"];
+            attention: components["schemas"]["TicketFilter"];
+        };
+        DashboardStatusCount: {
+            status: components["schemas"]["TicketStatus"];
+            active: boolean;
+            count: number;
+            filter: components["schemas"]["TicketFilter"];
+        };
+        /** @description One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null). */
+        DashboardPicLoad: {
+            /** Format: uuid */
+            userId: string | null;
+            displayName: string | null;
+            memberActive: boolean;
+            activeTickets: number;
+            filter: components["schemas"]["TicketFilter"];
+        };
+        /** @description Tickets received in the period per intake channel; null channel = not recorded. */
+        DashboardChannelCount: {
+            /** Format: uuid */
+            channelId: string | null;
+            code: string | null;
+            label: string | null;
+            count: number;
+        };
+        /** @description Active tickets by age since received_at. Not an SLA breach. */
+        DashboardAgeBucket: {
+            /** @enum {string} */
+            key: "lt_1d" | "d1_2" | "gt_2d";
+            label: string;
+            count: number;
+        };
+        DashboardTrendPoint: {
+            /** Format: date */
+            date: string;
+            received: number;
+            resolved: number;
+        };
+        DashboardNamed: {
+            /** Format: uuid */
+            id: string;
+            code: string | null;
+            label: string;
+        };
+        DashboardAttentionTicket: {
+            /** Format: uuid */
+            id: string;
+            number: number;
+            displayNumber: string;
+            subject: string;
+            status: components["schemas"]["TicketStatus"];
+            priority: components["schemas"]["DashboardNamed"] | null;
+            owner: components["schemas"]["DashboardNamed"] | null;
+            channel: components["schemas"]["DashboardNamed"] | null;
+            /** Format: date-time */
+            receivedAt: string;
+            ageSeconds: number;
+        };
+        /** @description Active urgent/high tickets, urgent first then oldest received; at most `limit` items, `total` over the scope. */
+        DashboardAttention: {
+            total: number;
+            limit: number;
+            items: components["schemas"]["DashboardAttentionTicket"][];
+        };
+        /** @description Read-only snapshot from one REPEATABLE READ transaction. Synthetic dummy data in UAT. */
+        Dashboard: {
+            /** Format: uuid */
+            workspaceId: string;
+            workspaceCode: string;
+            /** Format: date-time */
+            asOf: string;
+            period: components["schemas"]["DashboardPeriod"];
+            slaConfigured: boolean;
+            totals: components["schemas"]["DashboardTotals"];
+            drilldown: components["schemas"]["DashboardDrilldowns"];
+            statusDistribution: components["schemas"]["DashboardStatusCount"][];
+            picLoad: components["schemas"]["DashboardPicLoad"][];
+            channels: components["schemas"]["DashboardChannelCount"][];
+            age: components["schemas"]["DashboardAgeBucket"][];
+            trend: components["schemas"]["DashboardTrendPoint"][];
+            attention: components["schemas"]["DashboardAttention"];
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -544,6 +718,15 @@ export interface components {
         };
         /** @description Refused by a domain rule; generic message, no SQL or scoped data */
         RuleViolation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A query parameter is not valid (invalid_request) */
+        InvalidRequest: {
             headers: {
                 [name: string]: unknown;
             };
@@ -992,6 +1175,35 @@ export interface operations {
                     "application/json": components["schemas"]["ReportRun"];
                 };
             };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: {
+                period?: components["schemas"]["DashboardPeriodKey"];
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dashboard */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Dashboard"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

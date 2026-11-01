@@ -1,5 +1,6 @@
 pub mod access;
 pub mod catalogs;
+pub mod dashboard;
 pub mod health;
 pub mod session;
 pub mod tickets;
@@ -25,6 +26,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/catalogs"),
     ("get", "/api/v1/workspaces/{workspace_id}/permissions"),
     ("get", "/api/v1/workspaces/{workspace_id}/grants"),
+    ("get", "/api/v1/workspaces/{workspace_id}/dashboard"),
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
@@ -69,6 +71,10 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/grants",
             get(access::list_grants),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/dashboard",
+            get(dashboard::get),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",

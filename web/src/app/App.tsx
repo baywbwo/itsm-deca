@@ -144,10 +144,10 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
               bukti izin CS/Lead CS.
             </div>
           )}
-          <Content key={route.workspaceId ?? ''} scope={scope} page={current} pages={pages}
-            uat={session.uatSuperadmin} firstWorkspace={first ?? null}
+          <Content key={route.workspaceId ?? ''} api={api} scope={scope} page={current} pages={pages}
+            query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D04 (shell) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D05 (dashboard) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -172,10 +172,12 @@ function Profile({ session }: { session: Session }) {
   );
 }
 
-function Content({ scope, page, pages, uat, firstWorkspace, onRetry, onReenter }: {
+function Content({ api, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter }: {
+  api: Api;
   scope: ReturnType<typeof useScope>;
   page: PageDef;
   pages: PageDef[];
+  query: string;
   uat: boolean;
   firstWorkspace: Workspace | null;
   onRetry: () => void;
@@ -209,17 +211,18 @@ function Content({ scope, page, pages, uat, firstWorkspace, onRetry, onReenter }
     );
   }
   if (!pages.some((p) => p.id === page.id)) return <ForbiddenState />;
-  return <Page id={page.id} data={scope.data} uat={uat} />;
+  return <Page id={page.id} api={api} data={scope.data} query={query} uat={uat} />;
 }
 
-function Page({ id, data, uat }: { id: PageId; data: ScopeData; uat: boolean }) {
+function Page({ id, api, data, query, uat }: { id: PageId; api: Api; data: ScopeData; query: string; uat: boolean }) {
   switch (id) {
     case 'dashboard':
-      return <DashboardPage data={data} />;
+      return <DashboardPage api={api} workspace={data.workspace} uat={uat}
+        canReports={data.permissions.permissions.includes('report.view')} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:
-      return <PlannedPage page={pageDef(id)} workspace={data.workspace} />;
+      return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }
 }
 

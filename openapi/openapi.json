@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.3.0-d03",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+    "version": "0.4.0-d05",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
   "components": {
@@ -44,7 +44,7 @@
             "properties": {
               "code": {
                 "type": "string",
-                "enum": ["unauthenticated", "forbidden", "csrf_failed", "not_found", "version_conflict", "rule_violation", "uat_not_available", "dependency_unavailable", "internal"]
+                "enum": ["unauthenticated", "forbidden", "csrf_failed", "not_found", "version_conflict", "rule_violation", "invalid_request", "uat_not_available", "dependency_unavailable", "internal"]
               },
               "message": { "type": "string" }
             }
@@ -293,6 +293,174 @@
           "grantedBy": { "type": "string", "format": "uuid" },
           "grantedAt": { "type": "string", "format": "date-time" }
         }
+      },
+      "DashboardPeriodKey": {
+        "type": "string",
+        "enum": ["today", "last_7_days", "this_month"],
+        "description": "Calendar periods in the workspace time zone. last_7_days = today minus 6 days through today; this_month = the whole calendar month."
+      },
+      "TicketFilter": {
+        "type": "object",
+        "description": "Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. Time bounds are half-open [from, before).",
+        "properties": {
+          "status": { "type": "array", "items": { "$ref": "#/components/schemas/TicketStatusCode" } },
+          "owner": { "type": "string", "description": "Member user UUID, or the literal `unassigned`.", "examples": ["unassigned"] },
+          "priority": { "type": "array", "items": { "type": "string" } },
+          "receivedFrom": { "type": "string", "format": "date-time" },
+          "receivedBefore": { "type": "string", "format": "date-time" },
+          "resolvedFrom": { "type": "string", "format": "date-time" },
+          "resolvedBefore": { "type": "string", "format": "date-time" }
+        }
+      },
+      "TicketStatusCode": {
+        "type": "string",
+        "enum": ["new", "open", "pending_customer", "pending_engineering", "resolved", "closed"]
+      },
+      "DashboardPeriod": {
+        "type": "object",
+        "required": ["key", "basis", "timezone", "startDate", "endDate", "startAt", "endAt"],
+        "properties": {
+          "key": { "$ref": "#/components/schemas/DashboardPeriodKey" },
+          "basis": { "type": "string", "enum": ["received"] },
+          "timezone": { "type": "string", "examples": ["Asia/Jakarta"] },
+          "startDate": { "type": "string", "format": "date", "description": "First local day (inclusive)." },
+          "endDate": { "type": "string", "format": "date", "description": "Last local day (inclusive)." },
+          "startAt": { "type": "string", "format": "date-time", "description": "Inclusive start instant (UTC)." },
+          "endAt": { "type": "string", "format": "date-time", "description": "Exclusive end instant (UTC)." }
+        }
+      },
+      "DashboardTotals": {
+        "type": "object",
+        "description": "Aggregated server-side over the whole workspace scope, never over a page.",
+        "required": ["tickets", "active", "unassigned", "pendingCustomer", "receivedInPeriod", "resolvedInPeriod", "resolvedTicketsInPeriod"],
+        "properties": {
+          "tickets": { "type": "integer", "minimum": 0, "description": "All tickets in the workspace, any status (snapshot)." },
+          "active": { "type": "integer", "minimum": 0, "description": "new + open + pending_customer + pending_engineering now (snapshot, not period-bound)." },
+          "unassigned": { "type": "integer", "minimum": 0, "description": "Active tickets without a PIC now." },
+          "pendingCustomer": { "type": "integer", "minimum": 0, "description": "Tickets in pending_customer now." },
+          "receivedInPeriod": { "type": "integer", "minimum": 0, "description": "Tickets with received_at in [startAt, endAt)." },
+          "resolvedInPeriod": { "type": "integer", "minimum": 0, "description": "Resolve events with occurred_at in the period; a later reopen does not remove them." },
+          "resolvedTicketsInPeriod": { "type": "integer", "minimum": 0, "description": "Distinct tickets behind resolvedInPeriod." }
+        }
+      },
+      "DashboardDrilldowns": {
+        "type": "object",
+        "required": ["active", "unassigned", "pendingCustomer", "receivedInPeriod", "resolvedInPeriod", "attention"],
+        "properties": {
+          "active": { "$ref": "#/components/schemas/TicketFilter" },
+          "unassigned": { "$ref": "#/components/schemas/TicketFilter" },
+          "pendingCustomer": { "$ref": "#/components/schemas/TicketFilter" },
+          "receivedInPeriod": { "$ref": "#/components/schemas/TicketFilter" },
+          "resolvedInPeriod": { "$ref": "#/components/schemas/TicketFilter" },
+          "attention": { "$ref": "#/components/schemas/TicketFilter" }
+        }
+      },
+      "DashboardStatusCount": {
+        "type": "object",
+        "required": ["status", "active", "count", "filter"],
+        "properties": {
+          "status": { "$ref": "#/components/schemas/TicketStatus" },
+          "active": { "type": "boolean" },
+          "count": { "type": "integer", "minimum": 0 },
+          "filter": { "$ref": "#/components/schemas/TicketFilter" }
+        }
+      },
+      "DashboardPicLoad": {
+        "type": "object",
+        "description": "One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null).",
+        "required": ["userId", "displayName", "memberActive", "activeTickets", "filter"],
+        "properties": {
+          "userId": { "type": ["string", "null"], "format": "uuid" },
+          "displayName": { "type": ["string", "null"] },
+          "memberActive": { "type": "boolean" },
+          "activeTickets": { "type": "integer", "minimum": 0 },
+          "filter": { "$ref": "#/components/schemas/TicketFilter" }
+        }
+      },
+      "DashboardChannelCount": {
+        "type": "object",
+        "description": "Tickets received in the period per intake channel; null channel = not recorded.",
+        "required": ["channelId", "code", "label", "count"],
+        "properties": {
+          "channelId": { "type": ["string", "null"], "format": "uuid" },
+          "code": { "type": ["string", "null"] },
+          "label": { "type": ["string", "null"] },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "DashboardAgeBucket": {
+        "type": "object",
+        "description": "Active tickets by age since received_at. Not an SLA breach.",
+        "required": ["key", "label", "count"],
+        "properties": {
+          "key": { "type": "string", "enum": ["lt_1d", "d1_2", "gt_2d"] },
+          "label": { "type": "string" },
+          "count": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "DashboardTrendPoint": {
+        "type": "object",
+        "required": ["date", "received", "resolved"],
+        "properties": {
+          "date": { "type": "string", "format": "date" },
+          "received": { "type": "integer", "minimum": 0 },
+          "resolved": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "DashboardNamed": {
+        "type": "object",
+        "required": ["id", "code", "label"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "code": { "type": ["string", "null"] },
+          "label": { "type": "string" }
+        }
+      },
+      "DashboardAttentionTicket": {
+        "type": "object",
+        "required": ["id", "number", "displayNumber", "subject", "status", "priority", "owner", "channel", "receivedAt", "ageSeconds"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "number": { "type": "integer", "minimum": 1 },
+          "displayNumber": { "type": "string" },
+          "subject": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/TicketStatus" },
+          "priority": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
+          "owner": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
+          "channel": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
+          "receivedAt": { "type": "string", "format": "date-time" },
+          "ageSeconds": { "type": "integer", "minimum": 0 }
+        }
+      },
+      "DashboardAttention": {
+        "type": "object",
+        "description": "Active urgent/high tickets, urgent first then oldest received; at most `limit` items, `total` over the scope.",
+        "required": ["total", "limit", "items"],
+        "properties": {
+          "total": { "type": "integer", "minimum": 0 },
+          "limit": { "type": "integer", "minimum": 0 },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardAttentionTicket" } }
+        }
+      },
+      "Dashboard": {
+        "type": "object",
+        "description": "Read-only snapshot from one REPEATABLE READ transaction. Synthetic dummy data in UAT.",
+        "required": ["workspaceId", "workspaceCode", "asOf", "period", "slaConfigured", "totals", "drilldown", "statusDistribution", "picLoad", "channels", "age", "trend", "attention"],
+        "properties": {
+          "workspaceId": { "type": "string", "format": "uuid" },
+          "workspaceCode": { "type": "string" },
+          "asOf": { "type": "string", "format": "date-time" },
+          "period": { "$ref": "#/components/schemas/DashboardPeriod" },
+          "slaConfigured": { "type": "boolean" },
+          "totals": { "$ref": "#/components/schemas/DashboardTotals" },
+          "drilldown": { "$ref": "#/components/schemas/DashboardDrilldowns" },
+          "statusDistribution": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardStatusCount" } },
+          "picLoad": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardPicLoad" } },
+          "channels": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardChannelCount" } },
+          "age": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardAgeBucket" } },
+          "trend": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardTrendPoint" } },
+          "attention": { "$ref": "#/components/schemas/DashboardAttention" }
+        }
       }
     },
     "responses": {
@@ -304,7 +472,8 @@
         "description": "Workspace is visible but the caller lacks the permission (default deny)",
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       },
-      "RuleViolation": { "description": "Refused by a domain rule; generic message, no SQL or scoped data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "RuleViolation": { "description": "Refused by a domain rule; generic message, no SQL or scoped data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "InvalidRequest": { "description": "A query parameter is not valid (invalid_request)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     }
   },
   "paths": {
@@ -501,6 +670,24 @@
         "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }, { "$ref": "#/components/parameters/ReportRunId" }],
         "responses": {
           "200": { "description": "Operational report run metadata", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportRun" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/dashboard": {
+      "get": {
+        "operationId": "getDashboard",
+        "summary": "Dashboard aggregates for one workspace (whole scope, not paginated)",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/WorkspaceId" },
+          { "name": "period", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/DashboardPeriodKey", "default": "today" } }
+        ],
+        "responses": {
+          "200": { "description": "Dashboard", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Dashboard" } } } },
+          "400": { "$ref": "#/components/responses/InvalidRequest" },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
           "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }

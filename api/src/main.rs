@@ -44,7 +44,12 @@ async fn run(command: &str) -> Result<(), String> {
                 .map_err(|_| "ITSM_SEED_CONFIRM_DB wajib diisi".to_owned())?;
             seed::seed_uat(&pool, &confirm)
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            let n = seed::seed_uat_tickets(&pool, &confirm)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("seed-uat: {n} tiket dummy baru");
+            Ok(())
         }
         "serve" => serve(config, pool).await,
         _ => Err("perintah tidak dikenal".to_owned()),

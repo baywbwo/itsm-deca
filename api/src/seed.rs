@@ -194,3 +194,318 @@ async fn simulation_connection(
     .fetch_one(&mut *tx)
     .await
 }
+
+/// Dummy tickets for the D05 dashboard: (subject, status, owner, channel, priority,
+/// received hours ago, resolved hours ago, reopened hours ago). Owner: 0 = none,
+/// 1 = CS Alfa, 2 = Lead CS Alfa. Times are relative to the seed run.
+type TicketSeed = (
+    &'static str,
+    &'static str,
+    u8,
+    Option<&'static str>,
+    &'static str,
+    i32,
+    Option<i32>,
+    Option<i32>,
+);
+
+const ALFA_TICKETS: &[TicketSeed] = &[
+    (
+        "Saldo tidak masuk setelah top up (dummy)",
+        "new",
+        0,
+        Some("whatsapp"),
+        "urgent",
+        2,
+        None,
+        None,
+    ),
+    (
+        "Transaksi QRIS gagal, saldo terpotong (dummy)",
+        "new",
+        0,
+        Some("website"),
+        "high",
+        5,
+        None,
+        None,
+    ),
+    (
+        "Permintaan ubah nomor rekening (dummy)",
+        "new",
+        0,
+        Some("email"),
+        "normal",
+        30,
+        None,
+        None,
+    ),
+    (
+        "Pengaduan tanpa kanal tercatat (dummy)",
+        "new",
+        0,
+        None,
+        "low",
+        1,
+        None,
+        None,
+    ),
+    (
+        "Status penarikan dana belum berubah (dummy)",
+        "open",
+        1,
+        Some("whatsapp"),
+        "high",
+        50,
+        None,
+        None,
+    ),
+    (
+        "Merchant tidak menerima notifikasi (dummy)",
+        "open",
+        1,
+        Some("email"),
+        "normal",
+        3,
+        None,
+        None,
+    ),
+    (
+        "Settlement merchant tertunda (dummy)",
+        "open",
+        2,
+        Some("website"),
+        "urgent",
+        26,
+        None,
+        None,
+    ),
+    (
+        "Konfirmasi dokumen pelanggan (dummy)",
+        "pending_customer",
+        1,
+        Some("whatsapp"),
+        "normal",
+        72,
+        None,
+        None,
+    ),
+    (
+        "Bukti transfer belum dikirim pelanggan (dummy)",
+        "pending_customer",
+        2,
+        Some("email"),
+        "low",
+        8,
+        None,
+        None,
+    ),
+    (
+        "Error API pembayaran, menunggu tim teknis (dummy)",
+        "pending_engineering",
+        2,
+        Some("website"),
+        "high",
+        100,
+        None,
+        None,
+    ),
+    (
+        "Refund ganda (dummy)",
+        "resolved",
+        1,
+        Some("whatsapp"),
+        "normal",
+        20,
+        Some(1),
+        None,
+    ),
+    (
+        "Pertanyaan biaya MDR (dummy)",
+        "resolved",
+        1,
+        Some("website"),
+        "normal",
+        6,
+        Some(2),
+        None,
+    ),
+    (
+        "Login aplikasi merchant gagal (dummy)",
+        "resolved",
+        2,
+        Some("email"),
+        "low",
+        200,
+        Some(150),
+        None,
+    ),
+    (
+        "Kartu ditolak di EDC (dummy)",
+        "open",
+        1,
+        Some("whatsapp"),
+        "high",
+        10,
+        Some(4),
+        Some(1),
+    ),
+];
+
+const BETA_TICKETS: &[TicketSeed] = &[
+    (
+        "Pengaduan workspace Beta (dummy)",
+        "new",
+        0,
+        Some("email"),
+        "high",
+        4,
+        None,
+        None,
+    ),
+    (
+        "Tindak lanjut Beta (dummy)",
+        "open",
+        0,
+        Some("whatsapp"),
+        "normal",
+        40,
+        None,
+        None,
+    ),
+    (
+        "Menunggu pelanggan Beta (dummy)",
+        "pending_customer",
+        0,
+        Some("website"),
+        "low",
+        12,
+        None,
+        None,
+    ),
+];
+
+/// Adds labelled dummy tickets to DUMA/DUMB on a marked dummy database, once: a workspace
+/// that already has tickets is left untouched. Not called by `seed_uat`, so tests keep
+/// their own numbering.
+pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, SeedError> {
+    let mut tx = pool.begin().await?;
+    let current: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&mut *tx)
+        .await?;
+    let marked: Option<String> = sqlx::query_scalar(
+        "SELECT marked_db FROM itsm_deployment_marker WHERE kind = 'test_dummy'",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if current != confirm_db || marked.as_deref() != Some(current.as_str()) {
+        return Err(SeedError::ConfirmationMismatch);
+    }
+    let cs: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_subject = 'dummy:cs-alfa'")
+            .fetch_one(&mut *tx)
+            .await?;
+    let lead: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_subject = 'dummy:lead-alfa'")
+            .fetch_one(&mut *tx)
+            .await?;
+    let admin: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_subject = 'dummy:uat-superadmin'")
+            .fetch_one(&mut *tx)
+            .await?;
+    let mut created = 0;
+    for (code, rows) in [("DUMA", ALFA_TICKETS), ("DUMB", BETA_TICKETS)] {
+        let ws: Uuid = sqlx::query_scalar("SELECT id FROM workspaces WHERE code = $1")
+            .bind(code)
+            .fetch_one(&mut *tx)
+            .await?;
+        let existing: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM tickets WHERE workspace_id = $1")
+                .bind(ws)
+                .fetch_one(&mut *tx)
+                .await?;
+        if existing > 0 {
+            continue;
+        }
+        for &(subject, status, owner, channel, priority, recv_h, resolved_h, reopened_h) in rows {
+            let owner = match owner {
+                1 => Some(cs),
+                2 => Some(lead),
+                _ => None,
+            };
+            let id: Uuid = sqlx::query_scalar(
+                "INSERT INTO tickets (workspace_id, subject, chronology, received_at, created_by, \
+                   owner_user_id, intake_channel_id, priority_id) \
+                 VALUES ($1, $2, 'Kronologi uji (dummy).', now() - make_interval(hours => $3), $4, $5, \
+                   (SELECT id FROM intake_channels WHERE workspace_id = $1 AND code = $6), \
+                   (SELECT id FROM priorities WHERE workspace_id = $1 AND code = $7)) \
+                 RETURNING id",
+            )
+            .bind(ws)
+            .bind(subject)
+            .bind(recv_h)
+            .bind(admin)
+            .bind(owner)
+            .bind(channel)
+            .bind(priority)
+            .fetch_one(&mut *tx)
+            .await?;
+            if let Some(h) = resolved_h {
+                event(&mut tx, ws, id, 1, "resolve", h, owner.unwrap_or(admin)).await?;
+                set_status(&mut tx, id, "resolved", 1).await?;
+            }
+            if let Some(h) = reopened_h {
+                event(&mut tx, ws, id, 2, "reopen", h, owner.unwrap_or(admin)).await?;
+                set_status(&mut tx, id, "open", 2).await?;
+            }
+            if status != "resolved" && status != "new" && reopened_h.is_none() {
+                set_status(&mut tx, id, status, 1).await?;
+            }
+            created += 1;
+        }
+    }
+    tx.commit().await?;
+    Ok(created)
+}
+
+async fn event(
+    tx: &mut sqlx::PgConnection,
+    ws: Uuid,
+    ticket: Uuid,
+    cycle: i32,
+    action: &str,
+    hours_ago: i32,
+    actor: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ticket_resolution_events (workspace_id, ticket_id, cycle_no, action, summary, \
+           actor_id, occurred_at) \
+         VALUES ($1, $2, $3, $4, 'Ringkasan uji (dummy).', $5, now() - make_interval(hours => $6))",
+    )
+    .bind(ws)
+    .bind(ticket)
+    .bind(cycle)
+    .bind(action)
+    .bind(actor)
+    .bind(hours_ago)
+    .execute(tx)
+    .await
+    .map(|_| ())
+}
+
+async fn set_status(
+    tx: &mut sqlx::PgConnection,
+    ticket: Uuid,
+    status: &str,
+    cycle: i32,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE tickets SET workflow_status = $2, cycle_no = $3, version = version + 1 WHERE id = $1",
+    )
+    .bind(ticket)
+    .bind(status)
+    .bind(cycle)
+    .execute(tx)
+    .await
+    .map(|_| ())
+}

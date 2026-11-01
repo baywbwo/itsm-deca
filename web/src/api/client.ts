@@ -1,4 +1,5 @@
 import {
+  isDashboard,
   isErrorBody,
   isMeta,
   isSession,
@@ -7,7 +8,15 @@ import {
   isWorkspaceList,
   isWorkspacePermissions,
 } from './guards';
-import type { ApiErrorCode, Meta, Session, Workspace, WorkspacePermissions } from './types';
+import type {
+  ApiErrorCode,
+  Dashboard,
+  DashboardPeriodKey,
+  Meta,
+  Session,
+  Workspace,
+  WorkspacePermissions,
+} from './types';
 
 export interface TransportRequest {
   method: 'GET' | 'POST' | 'DELETE';
@@ -106,6 +115,9 @@ export function createApi(transport: Transport) {
       get(ws(id), isWorkspace, signal),
     getMyPermissions: (id: string, signal?: AbortSignal): Promise<WorkspacePermissions> =>
       get(`${ws(id)}/permissions`, isWorkspacePermissions, signal),
+    /** Whole-scope aggregates for one workspace and period (server-side, not a page). */
+    getDashboard: (id: string, period: DashboardPeriodKey, signal?: AbortSignal): Promise<Dashboard> =>
+      get(`${ws(id)}/dashboard?period=${encodeURIComponent(period)}`, isDashboard, signal),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders(): Record<string, string> {
       return csrfToken ? { 'X-CSRF-Token': csrfToken } : {};
