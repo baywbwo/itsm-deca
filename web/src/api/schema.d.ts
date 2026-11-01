@@ -208,6 +208,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/csrf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description D11. Re-issues the CSRF synchronizer token of the current session (a reloaded tab keeps the HttpOnly cookie but lost the in-memory token). Requires the session cookie and header `X-ITSM-CSRF-Refresh: 1`; when the browser sends `Sec-Fetch-Site` it must be `same-origin`. Rotates the token: the previous token of this session stops working. Sets no cookie. */
+        post: operations["refreshCsrf"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces": {
         parameters: {
             query?: never;
@@ -2386,6 +2403,9 @@ export interface components {
             run: components["schemas"]["ReportRun"];
             replayed: boolean;
         };
+        CsrfIssued: {
+            csrfToken: string;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -3055,6 +3075,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+        };
+    };
+    refreshCsrf: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-ITSM-CSRF-Refresh": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New CSRF token (shown once; only its digest is stored) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CsrfIssued"];
+                };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfFailed"];

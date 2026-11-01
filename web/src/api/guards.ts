@@ -85,6 +85,10 @@ export function isSession(v: unknown): v is Session {
   );
 }
 
+/** D11 CSRF re-issue after a reload. */
+export const isCsrfIssued = (v: unknown): v is { csrfToken: string } =>
+  isObj(v) && isStr(v.csrfToken) && v.csrfToken.length > 0;
+
 export const isSessionIssued = (v: unknown): v is SessionIssued =>
   isSession(v) && isStr((v as Obj).csrfToken) && ((v as Obj).csrfToken as string).length > 0;
 

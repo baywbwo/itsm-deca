@@ -6,6 +6,10 @@ import { isIntegrationList, isMemberList, isSettingsBody } from './guards';
 function fake(responses: Record<string, TransportResponse>) {
   const seen: TransportRequest[] = [];
   const api = createApi(async (req) => {
+    // D11: a client that never entered re-issues its CSRF token first (kept out of `seen`).
+    if (req.path === '/api/v1/session/csrf' && !responses['POST /api/v1/session/csrf']) {
+      return { status: 200, body: { csrfToken: 're-issued' }, requestId: null };
+    }
     seen.push(req);
     const r = responses[`${req.method} ${req.path}`];
     if (!r) throw new Error(`unexpected ${req.method} ${req.path}`);

@@ -31,6 +31,7 @@ import {
   isSavedView,
   isSavedViewList,
   isSessionIssued,
+  isCsrfIssued,
   isTicketBoard,
   isTicketList,
   isTicketMutationResult,
@@ -177,14 +178,61 @@ export const fetchTransport: Transport = async ({ method, path, headers, signal,
   return { status: res.status, body, requestId: res.headers.get('x-request-id') };
 };
 
+/** Rejects with an AbortError as soon as `signal` aborts, without cancelling the shared work. */
+function untilAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException('Aborted', 'AbortError'));
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
+    p.then(
+      (v) => { signal.removeEventListener('abort', abort); resolve(v); },
+      (e: unknown) => { signal.removeEventListener('abort', abort); reject(e instanceof Error ? e : new Error(String(e))); },
+    );
+  });
+}
+
 type Guard<T> = (v: unknown) => v is T;
 
 export function createApi(transport: Transport) {
   // CSRF synchronizer token: memory only (never storage), returned once at entry.
+  // D11: a reloaded tab keeps the HttpOnly cookie but not this token; it is re-issued from the
+  // session (same origin, custom header) before the first unsafe request, and once more if the
+  // server refuses it (another tab of the same session rotated it). A CSRF refusal happens before
+  // any handler runs, so the single retry cannot apply a change twice.
   let csrfToken: string | null = null;
+  let refreshing: Promise<string> | null = null;
+
+  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf']);
+
+  // Shared by concurrent callers; each caller still stops at its own abort or timeout.
+  function refreshCsrf(signal?: AbortSignal): Promise<string> {
+    refreshing ??= (async () => {
+      const res = await transport({
+        method: 'POST', path: '/api/v1/session/csrf', headers: { 'X-ITSM-CSRF-Refresh': '1' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status !== 200 || !isCsrfIssued(res.body)) {
+        throw isErrorBody(res.body)
+          ? new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId)
+          : new ApiError(res.status, 'internal', 'Terjadi kesalahan pada server.', res.requestId);
+      }
+      csrfToken = res.body.csrfToken;
+      return csrfToken;
+    })().finally(() => { refreshing = null; });
+    return untilAbort(refreshing, signal);
+  }
+
+  async function send(req: TransportRequest): Promise<TransportResponse> {
+    if (req.method === 'GET' || CSRF_EXEMPT.has(req.path)) return transport(req);
+    const withToken = (t: string) => ({ ...req, headers: { ...req.headers, 'X-CSRF-Token': t } });
+    const res = await transport(withToken(csrfToken ?? (await refreshCsrf(req.signal))));
+    const refused = res.status === 403 && isErrorBody(res.body) && res.body.error.code === 'csrf_failed';
+    return refused ? transport(withToken(await refreshCsrf(req.signal))) : res;
+  }
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
-    const res = await transport(req);
+    const res = await send(req);
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
