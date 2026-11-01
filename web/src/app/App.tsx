@@ -125,6 +125,13 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
     setToast(`Workspace aktif: ${next.code} · ${next.name}`);
   }
 
+  // Answer to the leave guard: the mobile drawer closes like a normal nav pick.
+  function leave(discard: boolean) {
+    if (discard && route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
+    setDrawer(false);
+    resolvePendingNav(true);
+  }
+
   const switcher = (
     <SelectField label="Workspace" className="workspace" value={listed?.id ?? ''}
       hint={data ? roleLabel(data.permissions) : undefined}
@@ -215,11 +222,8 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
         footer={pendingNav !== null && (
           <>
             <Button className="nav-stay" onClick={() => resolvePendingNav(false)}>Tetap di sini</Button>
-            <Button onClick={() => {
-              if (route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
-              resolvePendingNav(true);
-            }}>Buang draf &amp; lanjut</Button>
-            <Button variant="primary" onClick={() => resolvePendingNav(true)}>Lanjut, simpan draf</Button>
+            <Button onClick={() => leave(true)}>Buang draf &amp; lanjut</Button>
+            <Button variant="primary" onClick={() => leave(false)}>Lanjut, simpan draf</Button>
           </>
         )}>
         <p>Ada draf tiket di workspace <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
