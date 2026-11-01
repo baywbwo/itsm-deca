@@ -249,7 +249,8 @@ export interface paths {
         };
         get: operations["listWorkspaceMembers"];
         put?: never;
-        post?: never;
+        /** Add member by exact account subject (admin.members) */
+        post: operations["addWorkspaceMember"];
         delete?: never;
         options?: never;
         head?: never;
@@ -679,6 +680,231 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace & company settings (C24) */
+        get: operations["getWorkspaceSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update settings (admin.settings grant) */
+        patch: operations["updateWorkspaceSettings"];
+        trace?: never;
+    };
+    "/api/v1/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All companies (UAT superadmin only) */
+        get: operations["listCompanies"];
+        put?: never;
+        /** Create company + workspace (UAT superadmin only; no memberships) */
+        post: operations["createCompany"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/companies/{company_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Activate/deactivate a company (UAT superadmin only) */
+        patch: operations["setCompanyActive"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Catalog editor entries incl. inactive */
+        get: operations["listCatalogEntries"];
+        put?: never;
+        /** Add catalog entry (admin.settings; priorities fixed → 422) */
+        post: operations["createCatalogEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit/deactivate catalog entry (no hard delete) */
+        patch: operations["updateCatalogEntry"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change role/active (admin.members; not self; deactivation revokes grants) */
+        patch: operations["updateWorkspaceMember"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Grant a code the caller holds (admin.members; not self) */
+        post: operations["addMemberGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke a live grant (admin.members; not self) */
+        post: operations["revokeMemberGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Simulated connections (integration.manage) */
+        get: operations["listIntegrations"];
+        put?: never;
+        /** Save a simulated connection as draft */
+        post: operations["createIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save connection name */
+        patch: operations["updateIntegration"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Simulated test (no provider contacted) */
+        post: operations["testIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a tested connection */
+        post: operations["activateIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a connection */
+        post: operations["disableIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -865,11 +1091,17 @@ export interface components {
         };
         Member: {
             /** Format: uuid */
+            membershipId: string;
+            /** Format: uuid */
             userId: string;
             displayName: string;
             /** @enum {string} */
             role: "cs" | "lead_cs";
             active: boolean;
+            /** Format: int32 */
+            version: number;
+            /** @description Live grants; empty unless the caller holds admin.members. */
+            grants: components["schemas"]["GrantCode"][];
         };
         /** @description Internal code + UI label. `closed` is a read-only historical archive state: never selectable, never mapped to resolved. Close final is not available. */
         TicketStatus: {
@@ -1729,6 +1961,185 @@ export interface components {
          * @enum {string}
          */
         SavedViewColumn: "status" | "priority" | "owner" | "channel" | "received" | "updated";
+        /** @enum {string} */
+        Timezone: "Asia/Jakarta" | "Asia/Makassar" | "Asia/Jayapura";
+        /** @enum {string} */
+        ProviderCode: "jira" | "lark";
+        /** @enum {string} */
+        CatalogKind: "priorities" | "categories" | "products" | "receiving-units" | "regions" | "intake-channels";
+        WorkspaceSettings: {
+            /** Format: uuid */
+            workspaceId: string;
+            workspaceCode: string;
+            workspaceName: string;
+            timezone: string;
+            /** Format: uuid */
+            companyId: string;
+            companyCode: string;
+            companyName: string;
+            reporterCode: string | null;
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+            /** Format: int64 */
+            memberCount: number;
+        };
+        SettingsBody: {
+            settings: components["schemas"]["WorkspaceSettings"];
+            canEdit: boolean;
+            timezones: components["schemas"]["Timezone"][];
+        };
+        SettingsPatchRequest: {
+            workspaceName: string;
+            companyName: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        SettingsResult: {
+            settings: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        CompanyList: {
+            items: components["schemas"]["WorkspaceSettings"][];
+        };
+        CompanyCreateRequest: {
+            code: string;
+            name: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+        };
+        CompanyActivationRequest: {
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+        };
+        CompanyResult: {
+            item: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        CatalogEntry: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            label: string;
+            active: boolean;
+            /** Format: int32 */
+            sortOrder: number;
+            /** Format: int32 */
+            version: number;
+        };
+        CatalogEditor: {
+            kind: components["schemas"]["CatalogKind"];
+            items: components["schemas"]["CatalogEntry"][];
+            canEdit: boolean;
+        };
+        CatalogCreateRequest: {
+            code: string;
+            label: string;
+            sortOrder: number;
+        };
+        CatalogPatchRequest: {
+            label: string;
+            active: boolean;
+            sortOrder: number;
+            /** Format: int32 */
+            version: number;
+        };
+        CatalogEntryResult: {
+            kind: components["schemas"]["CatalogKind"];
+            item: components["schemas"]["CatalogEntry"];
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        MemberList: {
+            items: components["schemas"]["Member"][];
+            /** Format: uuid */
+            myMembershipId: string | null;
+            canManage: boolean;
+            grantable: components["schemas"]["GrantCode"][];
+        };
+        MemberCreateRequest: {
+            /** @description Exact account subject; unknown → 422 (no enumeration). */
+            subject: string;
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+        };
+        MemberPatchRequest: {
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+        };
+        GrantChangeRequest: {
+            grantCode: components["schemas"]["GrantCode"];
+            /** Format: int32 */
+            version: number;
+        };
+        MemberResult: {
+            item: components["schemas"]["Member"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        IntegrationLogEntry: {
+            action: string;
+            outcome: string;
+            /** Format: date-time */
+            occurredAt: string;
+            actor: string | null;
+        };
+        IntegrationConnection: {
+            /** Format: uuid */
+            id: string;
+            provider: components["schemas"]["ProviderCode"];
+            displayName: string;
+            /** @enum {string} */
+            mode: "simulation";
+            /** @enum {string} */
+            state: "draft" | "tested" | "active" | "disabled";
+            /** Format: date-time */
+            testedAt: string | null;
+            lastTestNote: string | null;
+            simulatedOutcome: string;
+            /** Format: int32 */
+            version: number;
+            /** Format: int64 */
+            directoryCount: number;
+            /** @enum {string} */
+            credential: "not_available";
+            /** @enum {string} */
+            mapping: "not_available";
+            recent: components["schemas"]["IntegrationLogEntry"][];
+        };
+        IntegrationList: {
+            /** Format: uuid */
+            workspaceId: string;
+            items: components["schemas"]["IntegrationConnection"][];
+            creatable: components["schemas"]["ProviderCode"][];
+            canManageCredentials: boolean;
+        };
+        IntegrationCreateRequest: {
+            provider: components["schemas"]["ProviderCode"];
+            displayName: string;
+        };
+        IntegrationPatchRequest: {
+            displayName: string;
+            /** Format: int32 */
+            version: number;
+        };
+        VersionRequest: {
+            /** Format: int32 */
+            version: number;
+        };
+        IntegrationResult: {
+            item: components["schemas"]["IntegrationConnection"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -1884,6 +2295,10 @@ export interface components {
         /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
         IdempotencyKey: string;
         RelatedWorkId: string;
+        CompanyId: string;
+        MembershipId: string;
+        CatalogKind: components["schemas"]["CatalogKind"];
+        CatalogItemId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2445,14 +2860,45 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["Member"][];
-                    };
+                    "application/json": components["schemas"]["MemberList"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    addWorkspaceMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
         };
     };
     listTicketStatuses: {
@@ -3245,6 +3691,543 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    getWorkspaceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateWorkspaceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated (auditEventId null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    listCompanies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Companies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    setCompanyActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyActivationRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    listCatalogEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEditor"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEntryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    updateCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+                item_id: components["parameters"]["CatalogItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated (auditEventId null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEntryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    updateWorkspaceMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    addMemberGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Granted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    revokeMemberGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    listIntegrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connections */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    updateIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    testIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    activateIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    disableIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
         };
     };
 }

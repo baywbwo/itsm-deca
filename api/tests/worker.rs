@@ -607,3 +607,71 @@ async fn row_state(pool: &PgPool, id: Uuid) -> String {
         "state",
     )
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn disabled_connection_settles_pending_intent_as_failed(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let st = state(&pool);
+    let id = transient_jira(&pool, &fx, "d09-disabled-1").await;
+    // D09: an administrator disables the connection while the intent waits for its retry.
+    let admin = tok(&pool, fx.admin).await;
+    let list = send(
+        &pool,
+        "GET",
+        &format!("/api/v1/workspaces/{}/integrations", fx.a),
+        &admin,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.json);
+    let jira = match list.json["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|c| c["provider"] == "jira"))
+    {
+        Some(c) => c.clone(),
+        None => panic!("no jira in {}", list.json),
+    };
+    let r = send(
+        &pool,
+        "POST",
+        &format!(
+            "/api/v1/workspaces/{}/integrations/{}/disable",
+            fx.a,
+            s(&jira["id"])
+        ),
+        &admin,
+        None,
+        Some(&json!({"version": jira["version"]})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    let issues = || async {
+        let n: i64 = ok(
+            sqlx::query_scalar("SELECT count(*) FROM jira_issues WHERE workspace_id = $1")
+                .bind(fx.a)
+                .fetch_one(&pool)
+                .await,
+            "issues",
+        );
+        n
+    };
+    let before = issues().await;
+    make_due(&pool, id).await;
+    let t = ok(outbox::run_once(&st).await, "tick");
+    assert_eq!(t.settled, 1, "{t:?}");
+    let after = row(&pool, id).await;
+    assert_eq!(after.state, "failed", "{after:?}");
+    assert!(
+        after
+            .safe_error
+            .as_deref()
+            .is_some_and(|e| e.contains("tidak aktif")),
+        "{after:?}"
+    );
+    assert_eq!(
+        issues().await,
+        before,
+        "nothing sent through a disabled connection"
+    );
+}

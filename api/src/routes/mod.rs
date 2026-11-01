@@ -5,8 +5,11 @@ pub mod dashboard;
 pub mod followup;
 pub mod health;
 pub mod intake;
+pub mod integrations;
+pub mod members;
 pub mod saved_views;
 pub mod session;
+pub mod settings;
 pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
@@ -128,6 +131,48 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
     ),
+    ("patch", "/api/v1/workspaces/{workspace_id}/settings"),
+    ("get", "/api/v1/workspaces/{workspace_id}/settings"),
+    ("get", "/api/v1/companies"),
+    ("post", "/api/v1/companies"),
+    ("patch", "/api/v1/companies/{company_id}"),
+    ("get", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
+    ("post", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}",
+    ),
+    ("post", "/api/v1/workspaces/{workspace_id}/members"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/integrations"),
+    ("post", "/api/v1/workspaces/{workspace_id}/integrations"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
+    ),
 ];
 
 pub fn api_router() -> Router<AppState> {
@@ -147,7 +192,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/members",
-            get(workspaces::members),
+            get(members::list).merge(post(members::add)),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/catalogs",
@@ -249,6 +294,58 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
             get(attachments::download),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/settings",
+            get(settings::get_settings).merge(patch(settings::update_settings)),
+        )
+        .route(
+            "/api/v1/companies",
+            get(settings::list_companies).merge(post(settings::create_company)),
+        )
+        .route(
+            "/api/v1/companies/{company_id}",
+            patch(settings::set_company_active),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/catalogs/{kind}",
+            get(settings::list_catalog).merge(post(settings::create_catalog_entry)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}",
+            patch(settings::update_catalog_entry),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}",
+            patch(members::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants",
+            post(members::grant),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke",
+            post(members::revoke),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations",
+            get(integrations::list).merge(post(integrations::create)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}",
+            patch(integrations::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test",
+            post(integrations::test),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate",
+            post(integrations::activate),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
+            post(integrations::disable),
         )
 }
 

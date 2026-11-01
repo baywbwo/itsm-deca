@@ -69,6 +69,8 @@ pub async fn seed_uat(pool: &PgPool, confirm_db: &str) -> Result<(), SeedError> 
 
     let cs = upsert_user(&mut tx, "dummy:cs-alfa", "CS Alfa (dummy)").await?;
     let lead = upsert_user(&mut tx, "dummy:lead-alfa", "Lead CS Alfa (dummy)").await?;
+    // Account without any membership: candidate for D09 membership administration.
+    upsert_user(&mut tx, "dummy:cs-bravo", "CS Bravo (dummy)").await?;
     for (user, role) in [(cs, "cs"), (lead, "lead_cs")] {
         sqlx::query(
             "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, $3) \
@@ -217,8 +219,10 @@ async fn simulation_connection(
         return Ok(id);
     }
     sqlx::query_scalar(
-        "INSERT INTO integration_connections (workspace_id, provider, mode, display_name) \
-         VALUES ($1, $2, 'simulation', $3) RETURNING id",
+        "INSERT INTO integration_connections (workspace_id, provider, mode, display_name, state, \
+           tested_at, last_test_note) \
+         VALUES ($1, $2, 'simulation', $3, 'active', now(), 'Seed uji dummy (simulasi).') \
+         RETURNING id",
     )
     .bind(ws)
     .bind(provider)

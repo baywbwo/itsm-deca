@@ -160,6 +160,18 @@ pub async fn settle(
             ),
             None,
         ),
+        // D09: the connection was disabled (or not activated) after the intent was queued.
+        // Nothing reaches the provider; a definite failure an officer may retry once the
+        // connection is active again.
+        "inactive" => (
+            "failed",
+            Settled::Failed,
+            Some(
+                "Koneksi integrasi tidak aktif; tidak dikirim. Aktifkan koneksi lalu coba ulang."
+                    .to_owned(),
+            ),
+            None,
+        ),
         "unknown" => (
             "unknown",
             Settled::Unknown,

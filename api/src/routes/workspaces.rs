@@ -7,7 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::authz::{self, Permission};
+use crate::authz;
 use crate::error::AppError;
 use crate::session::Session;
 
@@ -22,15 +22,6 @@ pub struct WorkspaceView {
     version: i32,
     /// Caller's business role here; `null` for UAT Superadmin without membership.
     my_role: Option<String>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct MemberView {
-    user_id: Uuid,
-    display_name: String,
-    role: String,
-    active: bool,
 }
 
 #[derive(Serialize)]
@@ -82,22 +73,4 @@ pub async fn get_one(
 ) -> Result<Json<WorkspaceView>, AppError> {
     let id = parse_id(&raw)?;
     Ok(Json(find_accessible(&state, &s, id).await?))
-}
-
-pub async fn members(
-    State(state): State<AppState>,
-    s: Session,
-    Path(raw): Path<String>,
-) -> Result<Json<ListBody<MemberView>>, AppError> {
-    let access = authz::resolve(&state, &s, parse_id(&raw)?).await?;
-    access.require(Permission::MemberRead)?;
-    let items = sqlx::query_as::<_, MemberView>(
-        "SELECT m.user_id, u.display_name, m.role, m.active \
-         FROM workspace_memberships m JOIN users u ON u.id = m.user_id \
-         WHERE m.workspace_id = $1 ORDER BY u.display_name, m.user_id",
-    )
-    .bind(access.workspace_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(Json(ListBody { items }))
 }

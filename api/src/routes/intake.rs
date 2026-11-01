@@ -263,7 +263,8 @@ pub(crate) async fn require_active(
     }
 }
 
-/// The workspace's usable simulation connection for a provider (not disabled), if any.
+/// The workspace's active simulation connection for a provider, if any (D09: save → test →
+/// activate; draft, tested and disabled connections receive nothing).
 pub(crate) async fn connection(
     conn: &mut PgConnection,
     ws: Uuid,
@@ -271,7 +272,7 @@ pub(crate) async fn connection(
 ) -> Result<Option<Uuid>, AppError> {
     Ok(sqlx::query_scalar(
         "SELECT id FROM integration_connections \
-         WHERE workspace_id = $1 AND provider = $2 AND mode = 'simulation' AND state <> 'disabled' \
+         WHERE workspace_id = $1 AND provider = $2 AND mode = 'simulation' AND state = 'active' \
          ORDER BY created_at, id LIMIT 1",
     )
     .bind(ws)
@@ -445,7 +446,7 @@ pub async fn create(
             let conn: Option<Uuid> = sqlx::query_scalar(
                 "SELECT d.connection_id FROM lark_destinations d \
                  JOIN integration_connections c ON c.workspace_id = d.workspace_id AND c.id = d.connection_id \
-                 WHERE d.workspace_id = $1 AND d.id = $2 AND d.active AND c.state <> 'disabled'",
+                 WHERE d.workspace_id = $1 AND d.id = $2 AND d.active AND c.state = 'active'",
             )
             .bind(ws)
             .bind(d)
@@ -641,7 +642,7 @@ async fn provider(
         "SELECT id, display_name, source FROM lark_destinations \
          WHERE workspace_id = $1 AND connection_id = $2 AND active ORDER BY display_name, id"
     };
-    let options = if state == "disabled" {
+    let options = if state != "active" {
         Vec::new()
     } else {
         sqlx::query_as::<_, DirectoryEntry>(sql)

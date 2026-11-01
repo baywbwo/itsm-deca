@@ -178,7 +178,9 @@ pub(crate) async fn lock_intent(
 ) -> Result<Intent, AppError> {
     sqlx::query_as::<_, Intent>(
         "SELECT o.ticket_id, o.connection_id, o.operation, o.related_work_id, o.state, o.attempt, \
-                o.auto_attempts, o.claim_token, COALESCE(c.config->>'simulatedOutcome', 'success') AS outcome, w.code AS ws_code, t.number \
+                o.auto_attempts, o.claim_token, \
+                CASE WHEN c.state <> 'active' THEN 'inactive' \
+                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, w.code AS ws_code, t.number \
          FROM integration_outbox o \
          JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id \
          JOIN workspaces w ON w.id = o.workspace_id \
