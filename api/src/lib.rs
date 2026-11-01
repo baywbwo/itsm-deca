@@ -1,5 +1,6 @@
-//! ITSM API (D02a foundation + D02 domain schema).
+//! ITSM API (D02a foundation + D02 domain schema + D03 permission foundation).
 
+pub mod authz;
 pub mod config;
 pub mod db;
 pub mod domain;

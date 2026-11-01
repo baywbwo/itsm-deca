@@ -8,9 +8,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::authz::{self, Permission};
 use crate::domain::{TicketStatus, TicketStatusView};
 use crate::error::AppError;
-use crate::routes::workspaces::{find_accessible, parse_id};
+use crate::routes::workspaces::parse_id;
 use crate::session::Session;
 
 /// Timestamps are rendered by PostgreSQL as RFC 3339 UTC strings.
@@ -99,10 +100,11 @@ pub async fn get_one(
     s: Session,
     Path((raw_ws, raw_ticket)): Path<(String, String)>,
 ) -> Result<Json<TicketView>, AppError> {
-    let ws = find_accessible(&state, &s, parse_id(&raw_ws)?).await?;
+    let ws = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
+    ws.require(Permission::TicketRead)?;
     let ticket_id = parse_id(&raw_ticket)?;
     let row = sqlx::query_as::<_, TicketRow>(TICKET_SELECT)
-        .bind(ws.id)
+        .bind(ws.workspace_id)
         .bind(ticket_id)
         .fetch_optional(&state.pool)
         .await?
@@ -111,9 +113,9 @@ pub async fn get_one(
         .ok_or_else(|| AppError::internal(UnknownStatus))?;
     Ok(Json(TicketView {
         id: row.id,
-        workspace_id: ws.id,
+        workspace_id: ws.workspace_id,
         number: row.number,
-        display_number: format!("{}-{}", ws.code, row.number),
+        display_number: format!("{}-{}", ws.workspace_code, row.number),
         subject: row.subject,
         chronology: row.chronology,
         received_at: row.received_at,
@@ -155,7 +157,8 @@ pub async fn attachment(
     s: Session,
     Path((raw_ws, raw_ticket, raw_att)): Path<(String, String, String)>,
 ) -> Result<Json<AttachmentView>, AppError> {
-    let ws = find_accessible(&state, &s, parse_id(&raw_ws)?).await?;
+    let ws = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
+    ws.require(Permission::AttachmentRead)?;
     let ticket_id = parse_id(&raw_ticket)?;
     let att_id = parse_id(&raw_att)?;
     let view = sqlx::query_as::<_, AttachmentView>(concat!(
@@ -164,7 +167,7 @@ pub async fn attachment(
         " AS created_at FROM attachments \
          WHERE workspace_id = $1 AND ticket_id = $2 AND id = $3"
     ))
-    .bind(ws.id)
+    .bind(ws.workspace_id)
     .bind(ticket_id)
     .bind(att_id)
     .fetch_optional(&state.pool)
@@ -192,7 +195,8 @@ pub async fn report_run(
     s: Session,
     Path((raw_ws, raw_run)): Path<(String, String)>,
 ) -> Result<Json<ReportRunView>, AppError> {
-    let ws = find_accessible(&state, &s, parse_id(&raw_ws)?).await?;
+    let ws = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
+    ws.require(Permission::ReportView)?;
     let run_id = parse_id(&raw_run)?;
     let view = sqlx::query_as::<_, ReportRunView>(concat!(
         "SELECT id, report_type, period_start::text AS period_start, \
@@ -202,7 +206,7 @@ pub async fn report_run(
         utc!("created_at"),
         " AS created_at FROM report_runs WHERE workspace_id = $1 AND id = $2"
     ))
-    .bind(ws.id)
+    .bind(ws.workspace_id)
     .bind(run_id)
     .fetch_optional(&state.pool)
     .await?

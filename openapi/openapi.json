@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.2.0-d02",
-    "description": "D02a foundation + D02 domain read contract. Mutations arrive in later tasks; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+    "version": "0.3.0-d03",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
   "components": {
@@ -44,7 +44,7 @@
             "properties": {
               "code": {
                 "type": "string",
-                "enum": ["unauthenticated", "csrf_failed", "not_found", "version_conflict", "uat_not_available", "dependency_unavailable", "internal"]
+                "enum": ["unauthenticated", "forbidden", "csrf_failed", "not_found", "version_conflict", "rule_violation", "uat_not_available", "dependency_unavailable", "internal"]
               },
               "message": { "type": "string" }
             }
@@ -57,7 +57,8 @@
         "properties": {
           "environment": { "type": "string", "enum": ["uat", "production"] },
           "accessMode": { "type": "string", "enum": ["uat_superadmin", "sso"] },
-          "banner": { "type": ["string", "null"], "examples": ["Mode uji — Superadmin"] }
+          "banner": { "type": ["string", "null"], "examples": ["Mode uji — Superadmin"] },
+          "uat": { "oneOf": [{ "$ref": "#/components/schemas/UatNotice" }, { "type": "null" }], "description": "Present only in UAT Superadmin mode; null/absent otherwise." }
         }
       },
       "User": {
@@ -203,13 +204,107 @@
           "hasArtifact": { "type": "boolean" },
           "createdAt": { "type": "string", "format": "date-time" }
         }
+      },
+      "UatNotice": {
+        "type": "object",
+        "required": ["banner", "persistent", "dataScope", "superadminProvesRbac"],
+        "properties": {
+          "banner": { "type": "string", "examples": ["Mode uji — Superadmin"] },
+          "persistent": { "type": "boolean", "const": true, "description": "The banner must stay visible on every screen and cannot be dismissed." },
+          "dataScope": { "type": "string", "enum": ["dummy"] },
+          "superadminProvesRbac": { "type": "boolean", "const": false, "description": "Superadmin sees everything; its access is not evidence for CS/Lead CS permissions." }
+        }
+      },
+      "PermissionCode": {
+        "type": "string",
+        "enum": [
+          "member.read",
+          "catalog.read",
+          "ticket.read",
+          "ticket.create",
+          "ticket.update",
+          "ticket.transition",
+          "ticket.resolve",
+          "ticket.assign_self",
+          "ticket.assign_any",
+          "related_work.manage",
+          "attachment.read",
+          "attachment.upload",
+          "report.view",
+          "admin.members",
+          "admin.settings",
+          "integration.manage",
+          "integration.credentials",
+          "integration.recovery"
+        ]
+      },
+      "GrantCode": { "type": "string", "enum": ["admin.members", "admin.settings", "integration.manage", "integration.credentials", "integration.recovery"] },
+      "PermissionCatalog": {
+        "type": "object",
+        "required": ["permissions", "roles"],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["code", "label", "source"],
+              "properties": {
+                "code": { "$ref": "#/components/schemas/PermissionCode" },
+                "label": { "type": "string" },
+                "source": { "type": "string", "enum": ["role", "grant"], "description": "grant = only via an explicit workspace grant, never from a role" }
+              }
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["code", "label", "permissions"],
+              "properties": {
+                "code": { "type": "string", "enum": ["cs", "lead_cs"] },
+                "label": { "type": "string" },
+                "permissions": { "type": "array", "items": { "$ref": "#/components/schemas/PermissionCode" } }
+              }
+            }
+          }
+        }
+      },
+      "WorkspacePermissions": {
+        "type": "object",
+        "required": ["workspaceId", "role", "uatSuperadmin", "permissions", "grants"],
+        "properties": {
+          "workspaceId": { "type": "string", "format": "uuid" },
+          "role": { "type": ["string", "null"], "enum": ["cs", "lead_cs", null], "description": "null for UAT Superadmin without membership" },
+          "uatSuperadmin": { "type": "boolean" },
+          "permissions": { "type": "array", "items": { "$ref": "#/components/schemas/PermissionCode" }, "description": "Effective for this request; UI hint only, the server re-checks every call." },
+          "grants": { "type": "array", "items": { "$ref": "#/components/schemas/GrantCode" } }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "required": ["id", "userId", "displayName", "membershipRole", "membershipActive", "grantCode", "grantedBy", "grantedAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "userId": { "type": "string", "format": "uuid" },
+          "displayName": { "type": "string" },
+          "membershipRole": { "type": "string", "enum": ["cs", "lead_cs"] },
+          "membershipActive": { "type": "boolean" },
+          "grantCode": { "$ref": "#/components/schemas/GrantCode" },
+          "grantedBy": { "type": "string", "format": "uuid" },
+          "grantedAt": { "type": "string", "format": "date-time" }
+        }
       }
     },
     "responses": {
       "VersionConflict": { "description": "Optimistic version is stale (version_conflict)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Unauthenticated": { "description": "No valid session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "CsrfFailed": { "description": "CSRF check failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "NotFound": { "description": "Not found or not accessible", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "NotFound": { "description": "Not found or not accessible", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "Forbidden": {
+        "description": "Workspace is visible but the caller lacks the permission (default deny)",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      },
+      "RuleViolation": { "description": "Refused by a domain rule; generic message, no SQL or scoped data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
     }
   },
   "paths": {
@@ -300,6 +395,7 @@
             "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Member" } } } } } }
           },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -317,6 +413,48 @@
         }
       }
     },
+    "/api/v1/permissions": {
+      "get": {
+        "operationId": "getPermissionCatalog",
+        "security": [{ "sessionCookie": [] }],
+        "description": "Static permission catalog and role defaults for the UI.",
+        "responses": {
+          "200": { "description": "Catalog", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PermissionCatalog" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/permissions": {
+      "get": {
+        "operationId": "getMyWorkspacePermissions",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+        "responses": {
+          "200": { "description": "Caller's effective permissions in this workspace", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspacePermissions" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/grants": {
+      "get": {
+        "operationId": "listWorkspaceGrants",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+        "description": "Live grants. Requires admin.members; Lead CS without that grant gets 403.",
+        "responses": {
+          "200": {
+            "description": "Live grants",
+            "content": {
+              "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Grant" } } } } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/catalogs": {
       "get": {
         "operationId": "getWorkspaceCatalogs",
@@ -325,6 +463,7 @@
         "responses": {
           "200": { "description": "Catalogs of an accessible workspace (active and inactive)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Catalogs" } } } },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -337,6 +476,7 @@
         "responses": {
           "200": { "description": "Ticket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ticket" } } } },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -349,6 +489,7 @@
         "responses": {
           "200": { "description": "Attachment metadata bound to this ticket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Attachment" } } } },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -361,6 +502,7 @@
         "responses": {
           "200": { "description": "Operational report run metadata", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportRun" } } } },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }

@@ -7,6 +7,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::authz::{self, Permission};
 use crate::error::AppError;
 use crate::session::Session;
 
@@ -54,7 +55,7 @@ pub async fn list(
 ) -> Result<Json<ListBody<WorkspaceView>>, AppError> {
     let items = sqlx::query_as::<_, WorkspaceView>(&format!("{WORKSPACE_SELECT} ORDER BY w.code"))
         .bind(s.user_id)
-        .bind(s.uat_superadmin)
+        .bind(authz::superadmin_effective(&state, &s))
         .fetch_all(&state.pool)
         .await?;
     Ok(Json(ListBody { items }))
@@ -67,7 +68,7 @@ pub(crate) async fn find_accessible(
 ) -> Result<WorkspaceView, AppError> {
     sqlx::query_as::<_, WorkspaceView>(&format!("{WORKSPACE_SELECT} AND w.id = $3"))
         .bind(s.user_id)
-        .bind(s.uat_superadmin)
+        .bind(authz::superadmin_effective(state, s))
         .bind(workspace_id)
         .fetch_optional(&state.pool)
         .await?
@@ -88,14 +89,14 @@ pub async fn members(
     s: Session,
     Path(raw): Path<String>,
 ) -> Result<Json<ListBody<MemberView>>, AppError> {
-    let id = parse_id(&raw)?;
-    let ws = find_accessible(&state, &s, id).await?;
+    let access = authz::resolve(&state, &s, parse_id(&raw)?).await?;
+    access.require(Permission::MemberRead)?;
     let items = sqlx::query_as::<_, MemberView>(
         "SELECT m.user_id, u.display_name, m.role, m.active \
          FROM workspace_memberships m JOIN users u ON u.id = m.user_id \
          WHERE m.workspace_id = $1 ORDER BY u.display_name, m.user_id",
     )
-    .bind(ws.id)
+    .bind(access.workspace_id)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(ListBody { items }))

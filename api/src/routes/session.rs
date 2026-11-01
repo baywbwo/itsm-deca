@@ -16,6 +16,29 @@ pub struct Meta {
     environment: &'static str,
     access_mode: &'static str,
     banner: Option<&'static str>,
+    /// Present only in UAT Superadmin mode; the FE shows it on every screen.
+    uat: Option<UatNotice>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UatNotice {
+    banner: &'static str,
+    /// The banner cannot be dismissed.
+    persistent: bool,
+    /// Only synthetic data is allowed in this mode.
+    data_scope: &'static str,
+    /// Superadmin entry is for testing only; it does not prove CS / Lead CS access rules.
+    superadmin_proves_rbac: bool,
+}
+
+fn uat_notice() -> UatNotice {
+    UatNotice {
+        banner: UAT_BANNER,
+        persistent: true,
+        data_scope: "dummy",
+        superadmin_proves_rbac: false,
+    }
 }
 
 pub async fn meta(State(state): State<AppState>) -> Json<Meta> {
@@ -27,6 +50,7 @@ pub async fn meta(State(state): State<AppState>) -> Json<Meta> {
         },
         access_mode: state.config.access_mode.as_str(),
         banner: uat.then_some(UAT_BANNER),
+        uat: uat.then(uat_notice),
     })
 }
 

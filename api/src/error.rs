@@ -8,6 +8,8 @@ use serde_json::json;
 
 /// SQLSTATE raised by `itsm_require_version_bump()`.
 pub const VERSION_CONFLICT_SQLSTATE: &str = "IT409";
+/// SQLSTATE raised by the domain guards (lifecycle, outbox, grants, immutable columns).
+pub const RULE_VIOLATION_SQLSTATE: &str = "IT422";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -15,10 +17,16 @@ pub enum AppError {
     Unauthenticated,
     #[error("csrf_failed")]
     CsrfFailed,
+    #[error("forbidden")]
+    Forbidden,
     #[error("not_found")]
     NotFound,
     #[error("version_conflict")]
     VersionConflict,
+    /// A database domain guard refused the change. The guard's own message is never sent
+    /// to the client (it may name tables or values); the client gets a generic rule error.
+    #[error("rule_violation")]
+    RuleViolation,
     #[error("uat_not_available")]
     UatNotAvailable,
     #[error("dependency_unavailable")]
@@ -44,11 +52,21 @@ impl AppError {
                 "csrf_failed",
                 "Permintaan ditolak oleh perlindungan CSRF.",
             ),
+            AppError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "Anda tidak memiliki izin untuk tindakan ini.",
+            ),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Data tidak ditemukan."),
             AppError::VersionConflict => (
                 StatusCode::CONFLICT,
                 "version_conflict",
                 "Data sudah diubah pihak lain. Muat ulang lalu coba lagi.",
+            ),
+            AppError::RuleViolation => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "rule_violation",
+                "Perubahan ditolak oleh aturan proses.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -82,6 +100,16 @@ impl From<sqlx::Error> for AppError {
             {
                 AppError::VersionConflict
             }
+            sqlx::Error::Database(db) if db.code().as_deref() == Some(RULE_VIOLATION_SQLSTATE) => {
+                // Log where it came from (table/constraint names only), not the message text.
+                tracing::info!(
+                    error.kind = "rule_violation",
+                    db.table = db.table().unwrap_or(""),
+                    db.constraint = db.constraint().unwrap_or(""),
+                    "domain rule violated"
+                );
+                AppError::RuleViolation
+            }
             other => AppError::internal(other),
         }
     }
@@ -99,5 +127,23 @@ impl IntoResponse for AppError {
             Json(json!({ "error": { "code": code, "message": message } })),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_codes_have_safe_generic_messages() {
+        let (status, code, message) = AppError::Forbidden.parts();
+        assert_eq!((status, code), (StatusCode::FORBIDDEN, "forbidden"));
+        assert!(!message.is_empty());
+        let (status, code, message) = AppError::RuleViolation.parts();
+        assert_eq!(
+            (status, code),
+            (StatusCode::UNPROCESSABLE_ENTITY, "rule_violation")
+        );
+        assert!(!message.contains("IT422"));
     }
 }

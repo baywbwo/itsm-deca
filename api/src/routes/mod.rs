@@ -1,3 +1,4 @@
+pub mod access;
 pub mod catalogs;
 pub mod health;
 pub mod session;
@@ -17,10 +18,13 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
     ("get", "/api/v1/ticket-statuses"),
+    ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
     ("get", "/api/v1/workspaces/{workspace_id}"),
     ("get", "/api/v1/workspaces/{workspace_id}/members"),
     ("get", "/api/v1/workspaces/{workspace_id}/catalogs"),
+    ("get", "/api/v1/workspaces/{workspace_id}/permissions"),
+    ("get", "/api/v1/workspaces/{workspace_id}/grants"),
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
@@ -44,6 +48,7 @@ pub fn api_router() -> Router<AppState> {
             get(session::current).merge(delete(session::logout)),
         )
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
+        .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))
         .route(
             "/api/v1/workspaces/{workspace_id}",
@@ -56,6 +61,14 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/catalogs",
             get(catalogs::list),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/permissions",
+            get(access::mine),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/grants",
+            get(access::list_grants),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",

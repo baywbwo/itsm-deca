@@ -1,4 +1,4 @@
-# ITSM API — fondasi Rust (D02a + D02)
+# ITSM API — fondasi Rust (D02a + D02 + D03)
 
 Fondasi backend terisolasi: Axum 0.8 + SQLx 0.8 + PostgreSQL. **Hanya UAT dengan data dummy.**
 Tidak ada akses production, tidak ada SSO, tidak terhubung ke Zammad.
@@ -11,6 +11,8 @@ Tidak ada akses production, tidak ada SSO, tidak terhubung ke Zammad.
 - Workspace: akses = membership aktif di workspace aktif, atau grant UAT Superadmin. ID asing/tidak dikenal/malformed = 404.
 - `api/migrations/0002_d02_domain.{up,down}.sql` (D02): katalog per workspace, tiket dengan nomor per workspace (`KODE-n`, kode workspace dibekukan setelah nomor pertama), guard lifecycle (resolve wajib ringkasan + tanpa related work blocking terbuka; reopen ke `open` cycle berikutnya dengan alasan; `closed` hanya arsip baca), related work, relasi Jira/Lark (hanya `simulation`), outbox per provider, attachment (bind hanya saat `clean`), report run operasional, audit append-only. Semua relasi anak memakai FK komposit `(workspace_id, id)`; `workspace_id` tidak bisa diubah. Rollback: `MIGRATOR.undo` ke versi 1 (lihat tes `migration_0002_rolls_back_and_reapplies_on_dummy_data`).
 - Baca terbatas D02: status tiket, katalog workspace, detail tiket, metadata attachment, metadata report run. Mutasi, list dan unduhan menyusul D03+.
+- `api/migrations/0003_d03_grants.{up,down}.sql` + `api/src/authz.rs` (D03): fondasi izin server-side, default deny. Izin bisnis statis per peran di kode (`cs`; `lead_cs` = `cs` + `ticket.assign_any`). Hak admin/integrasi (`admin.members`, `admin.settings`, `integration.manage`, `integration.credentials`, `integration.recovery`) hanya dari baris `workspace_grants` eksplisit per membership; Lead CS tidak otomatis memilikinya. Grant hanya bisa dicabut sekali, tidak bisa diubah/dihapus (IT422), FK komposit ke membership di workspace yang sama; identitas membership (`workspace_id`, `user_id`) dikunci. Workspace tak terlihat = 404, workspace terlihat tanpa izin = 403 `forbidden`. Guard domain IT422 = 422 `rule_violation` dengan pesan generik. Rollback: `MIGRATOR.undo` ke versi 2 (tes `migration_0003_rolls_back_and_reapplies_on_dummy_data`).
+- Metadata untuk FE (bukan sumber akses): `GET /api/v1/permissions` (katalog izin + default peran), `GET /api/v1/workspaces/{id}/permissions` (izin efektif pemanggil), `GET /api/v1/workspaces/{id}/grants` (butuh `admin.members`). `GET /api/v1/meta` memuat `uat` (banner persisten, data dummy, `superadminProvesRbac=false`) hanya di mode UAT.
 - Kontrak: `openapi/openapi.json` (OpenAPI 3.1), dicocokkan dengan router oleh `api/tests/contract.rs`.
 
 ## Menjalankan
@@ -27,4 +29,4 @@ Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATA
 `PG_BIN=/path/pg/bin scripts/ci.sh` menjalankan fmt, clippy `-D warnings`, dan test terhadap cluster PostgreSQL sekali pakai. Workflow GitHub di `.github/workflows/ci.yml` (belum pernah dijalankan; repo belum punya remote).
 
 ## Belum termasuk
-Endpoint mutasi tiket/intake, SLA, admin grants, penulisan audit, worker outbox, scan clamd, FE, SSO kantor, deploy.
+Endpoint mutasi tiket/intake, SLA, mutasi grant/membership (D09), penulisan audit, worker outbox, scan clamd, FE, SSO kantor, deploy.

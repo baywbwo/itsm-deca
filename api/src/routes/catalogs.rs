@@ -7,9 +7,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::authz::{self, Permission};
 use crate::domain::{TicketStatus, TicketStatusView};
 use crate::error::AppError;
-use crate::routes::workspaces::{ListBody, find_accessible, parse_id};
+use crate::routes::workspaces::{ListBody, parse_id};
 use crate::session::Session;
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -57,7 +58,9 @@ pub async fn list(
     s: Session,
     Path(raw): Path<String>,
 ) -> Result<Json<CatalogsBody>, AppError> {
-    let ws = find_accessible(&state, &s, parse_id(&raw)?).await?.id;
+    let access = authz::resolve(&state, &s, parse_id(&raw)?).await?;
+    access.require(Permission::CatalogRead)?;
+    let ws = access.workspace_id;
     Ok(Json(CatalogsBody {
         workspace_id: ws,
         priorities: catalog(&state, "priorities", ws).await?,
