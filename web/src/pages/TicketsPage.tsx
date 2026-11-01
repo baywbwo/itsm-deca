@@ -91,6 +91,9 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
   const [detail, setDetail] = useState<TicketListItem | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const noticeRef = useRef<HTMLDivElement>(null);
+  // After a save the list remounts and the trigger is gone: land on the result instead.
+  useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
   const searchRef = useRef<HTMLInputElement>(null);
   const tz = workspace.timezone;
   const data = state.status === 'success' ? state.data : null;
@@ -142,7 +145,7 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
         {notice ?? (data ? `${num(data.view === 'list' ? data.list.total : data.board.total)} tiket dimuat.` : '')}
       </p>
       {notice && (
-        <div className="notice row between" role="note">
+        <div className="notice row between" role="note" tabIndex={-1} ref={noticeRef}>
           <span>{notice}</span>
           <Button variant="ghost" onClick={() => setNotice(null)}>Tutup</Button>
         </div>
