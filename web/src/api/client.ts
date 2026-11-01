@@ -1,4 +1,7 @@
 import {
+  isActivityPage,
+  isTicketDetail,
+  isTicketDetailMutation,
   isCatalogs,
   isDashboard,
   isErrorBody,
@@ -22,6 +25,12 @@ import {
   isWorkspacePermissions,
 } from './guards';
 import type {
+  ActivityPage,
+  RelatedWorkCompletionRequest,
+  RelatedWorkCreateRequest,
+  TicketDetail,
+  TicketDetailMutation,
+  TicketPropertiesRequest,
   ApiErrorCode,
   AssignmentHistory,
   IntakeDirectory,
@@ -241,6 +250,28 @@ export function createApi(transport: Transport) {
         method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/reconcile`,
         headers: csrf(), body,
       }, isOutboxRecoveryResult),
+    /** D08a: one ticket with its properties, related work, attachment metadata and resolutions. */
+    getTicketDetail: (id: string, ticketId: string, signal?: AbortSignal): Promise<TicketDetail> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/detail`, isTicketDetail, signal),
+    /** Safe activity labels from the audit log, newest first; `cursor` continues the same ticket. */
+    listTicketActivity: (id: string, ticketId: string, cursor: string | null, signal?: AbortSignal): Promise<ActivityPage> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/activity${withParam('', 'cursor', cursor)}`, isActivityPage, signal),
+    /** Only the fields sent change; `null` clears. The version guards a concurrent edit (409). */
+    updateTicketProperties: (id: string, ticketId: string, body: TicketPropertiesRequest): Promise<TicketDetailMutation> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}`, headers: csrf(), body,
+      }, isTicketDetailMutation),
+    createRelatedWork: (id: string, ticketId: string, body: RelatedWorkCreateRequest): Promise<TicketDetailMutation> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work`, headers: csrf(), body,
+      }, isTicketDetailMutation),
+    /** A person completes related work with summary + evidence; a Jira status never does. */
+    completeRelatedWork: (id: string, ticketId: string, workId: string, body: RelatedWorkCompletionRequest): Promise<TicketDetailMutation> =>
+      call({
+        method: 'POST',
+        path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work/${encodeURIComponent(workId)}/completion`,
+        headers: csrf(), body,
+      }, isTicketDetailMutation),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

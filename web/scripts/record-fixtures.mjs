@@ -179,6 +179,58 @@ if (candidate) {
     responses[`GET ${ap}-history#after`] = await rec('GET', `${ap}-history`);
   }
 }
+// D08 detail: every ticket on the first list pages (and the resolved/closed ones) gets its detail,
+// first activity page and PIC history; one open ticket also gets a real edit sequence where each
+// mutation step (s1 properties, s2 related work, s3 completion) re-records detail and activity.
+for (const w of list.body.items) {
+  const base = `/api/v1/workspaces/${w.id}`;
+  const seen = new Set();
+  for (const q of ["", "?status=resolved", "?status=closed", "?status=pending_engineering"]) {
+    for (const t of responses[`GET ${base}/tickets${q}`]?.body?.items ?? []) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      const tp = `${base}/tickets/${t.id}`;
+      responses[`GET ${tp}/detail`] = await rec("GET", `${tp}/detail`);
+      const act = await rec("GET", `${tp}/activity`);
+      responses[`GET ${tp}/activity`] = act;
+      if (act.body?.nextCursor) {
+        const more = `${tp}/activity?${new URLSearchParams({ cursor: act.body.nextCursor })}`;
+        responses[`GET ${more}`] = await rec("GET", more);
+      }
+      responses[`GET ${tp}/assignment-history`] ??= await rec("GET", `${tp}/assignment-history`);
+    }
+  }
+}
+{
+  const items = responses[`GET ${fb}/tickets`].body.items;
+  const t = items.find((x) => x.status.code === "open" && x.relatedWork.open === 0) ?? items.find((x) => !x.status.archived && x.status.code !== "resolved");
+  if (t) {
+    const tp = `${fb}/tickets/${t.id}`;
+    const d0 = responses[`GET ${tp}/detail`].body;
+    const cat = responses[`GET ${fb}/catalogs`].body;
+    const region = cat.regions.find((r) => r.active && r.id !== d0.properties.region?.id);
+    const props = { version: d0.ticket.version, cause: "Penyebab dummy: batch settlement tertunda (rekaman review D08).", ...(region && { regionId: region.id }) };
+    const h = { "X-CSRF-Token": csrf };
+    responses[`PATCH ${tp}#stale`] = await rec("PATCH", tp, h, { ...props, version: d0.ticket.version - 1 });
+    responses[`PATCH ${tp}#ok`] = await rec("PATCH", tp, h, props);
+    const stage = async (n) => {
+      responses[`GET ${tp}/detail#s${n}`] = await rec("GET", `${tp}/detail`);
+      responses[`GET ${tp}/activity#s${n}`] = await rec("GET", `${tp}/activity`);
+    };
+    await stage(1);
+    const rw = await rec("POST", `${tp}/related-work`, h, { title: "Cek log settlement (dummy)", safeDescription: "Tanpa data nasabah.", blocking: true });
+    responses[`POST ${tp}/related-work#ok`] = rw;
+    await stage(2);
+    const work = rw.body?.detail?.relatedWork?.find((x) => x.completionState === "open");
+    if (work) {
+      const cp = `${tp}/related-work/${work.id}/completion`;
+      const body = { summary: "Settlement diproses ulang (dummy).", evidence: "Referensi uji dummy REV-D08." };
+      responses[`POST ${cp}#stale`] = await rec("POST", cp, h, { ...body, version: work.version + 1 });
+      responses[`POST ${cp}#ok`] = await rec("POST", cp, h, { ...body, version: work.version });
+      await stage(3);
+    }
+  }
+}
 // Any other workspace path replays the server's real 404 (unknown/foreign/malformed look alike).
 responses['GET #not_found'] = await rec('GET', '/api/v1/workspaces/00000000-0000-4000-8000-000000000000');
 

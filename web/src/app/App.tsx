@@ -191,7 +191,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D07r (intake &amp; PIC tiket) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D08a (detail tiket) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">

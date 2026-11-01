@@ -22,12 +22,17 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * - intake-unknown: the first send fails as a network error (synthetic), the resend replays.
  * - intake-degraded: the create answer recorded while the simulation was Jira unknown / Lark failed.
  * - conflict: also the PIC change replays the server's real 409 (stale version).
+ * D08 detail replays one real edit sequence per package: properties (s1), a blocking related work
+ * (s2) and its completion (s3); after each step the detail/activity answer recorded at that step is
+ * served. - conflict: the properties save and the completion replay the real 409.
  * Retry/reconcile and other combinations are not recorded; the replay says so.
  */
 export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict' | 'intake-unknown' | 'intake-degraded';
 export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict', 'intake-unknown', 'intake-degraded'];
 
 const DASHBOARD = /^\/api\/v1\/workspaces\/([^/]+)\/dashboard\?/;
+const DETAIL_MUTATION = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+))(\/related-work(\/[^/]+\/completion)?)?$/;
+const DETAIL_READ = /^\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+)\/(detail|activity)$/;
 const TICKETS = /^\/api\/v1\/workspaces\/[^/]+\/tickets(\/board)?(\?|$)/;
 
 function emptied(body: unknown): unknown {
@@ -125,6 +130,7 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
   const keys = new Map<string, string>(); // idempotency key -> payload JSON
   let networkFailed = false;
   const after = new Set<string>(); // GET keys that now answer with their '#after' recording
+  const stage = new Map<string, number>(); // ticket id -> D08 recorded edit step reached
   return async ({ method, path, signal, headers, body: payload }) => {
     if (method === 'POST' && CREATE.test(path)) {
       await wait(latencyMs, signal, true);
@@ -162,6 +168,24 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
     if (method === 'POST' && /\/integration-outbox\/[^/]+\/(retry|reconcile)$/.test(path)) {
       await wait(latencyMs, signal, true);
       return notRecorded('pemulihan integrasi (coba ulang/rekonsiliasi)');
+    }
+    const dm = method !== 'GET' ? DETAIL_MUTATION.exec(path) : null;
+    if (dm && (method === 'PATCH' ? !dm[3] : !!dm[3])) {
+      await wait(latencyMs, signal, true);
+      const step = method === 'PATCH' ? 1 : dm[4] ? 3 : 2;
+      const variant = scenario === 'conflict' && step !== 2 ? 'stale' : 'ok';
+      const hit = (stage.get(dm[2]!) ?? 0) === step - 1 ? f.responses[`${method} ${path}#${variant}`] : undefined;
+      if (!hit) return notRecorded('perubahan detail ini (hanya satu urutan edit yang direkam)');
+      if (hit.status === 200 || hit.status === 201) stage.set(dm[2]!, step);
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    const dr = method === 'GET' ? DETAIL_READ.exec(path) : null;
+    if (dr && stage.get(dr[1]!)) {
+      const hit = f.responses[`GET ${path}#s${stage.get(dr[1]!)}`];
+      if (hit) {
+        await wait(latencyMs, signal, true);
+        return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+      }
     }
     if (method === 'GET' && after.has(`GET ${path}`) && f.responses[`GET ${path}#after`]) {
       await wait(latencyMs, signal, true);

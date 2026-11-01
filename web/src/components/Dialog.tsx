@@ -13,7 +13,7 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
   title: string;
   children: ReactNode;
   footer?: ReactNode;
-  variant?: 'drawer';
+  variant?: 'drawer' | 'peek';
   initialFocus?: string;
   /** Element to focus on close instead of the opener (e.g. the control that asked for it). */
   returnFocus?: RefObject<HTMLElement | null>;

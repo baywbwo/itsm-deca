@@ -6,6 +6,7 @@ pub mod intake;
 pub mod saved_views;
 pub mod session;
 pub mod sync;
+pub mod ticket_detail;
 pub mod ticket_list;
 pub mod tickets;
 pub mod workspaces;
@@ -60,6 +61,26 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+    ),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion",
     ),
     (
         "post",
@@ -140,7 +161,23 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
-            get(tickets::get_one),
+            get(tickets::get_one).merge(patch(ticket_detail::update_properties)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail",
+            get(ticket_detail::detail),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity",
+            get(ticket_detail::activity),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work",
+            post(ticket_detail::create_related_work),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion",
+            post(ticket_detail::complete_related_work),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions",

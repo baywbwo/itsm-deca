@@ -351,7 +351,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit ticket properties (D08)
+         * @description ticket.update. Closed archive = 422 before the version check; stale `version` = 409 and nothing changes. A field error answers 422 validation_failed with the field name. Update, version bump and audit (field names only, never values) commit atomically.
+         */
+        patch: operations["updateTicketProperties"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}": {
@@ -505,6 +509,86 @@ export interface paths {
         put?: never;
         /** Settle an UNKNOWN delivery with evidence (integration.recovery) */
         post: operations["reconcileOutbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket detail (D08)
+         * @description ticket.read. One read-only snapshot: header (list projection with allowed actions), labelled properties, related work, bound attachment metadata (attachment.read) and resolution history. Another workspace's ticket = 404.
+         */
+        get: operations["getTicketDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket activity log (D08)
+         * @description ticket.read. Successful audit entries of this ticket, newest first, keyset-paginated. Labels are server-built from safe audit fields only.
+         */
+        get: operations["listTicketActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add related work (D08)
+         * @description related_work.manage. Refused (422) on a closed or resolved ticket (reopen first). Row and audit commit atomically.
+         */
+        post: operations["createRelatedWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete related work locally (D08)
+         * @description related_work.manage. Needs summary and evidence from a person; Jira status never completes work. Stale related-work `version` = 409; already completed or closed ticket = 422.
+         */
+        post: operations["completeRelatedWork"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1325,6 +1409,147 @@ export interface components {
             /** Format: uuid */
             auditEventId: string;
         };
+        Labeled: {
+            /** Format: uuid */
+            id: string;
+            label: string;
+        };
+        TicketProperties: {
+            subject: string;
+            chronology: string;
+            /** Format: date-time */
+            receivedAt: string;
+            intakeChannel: components["schemas"]["Labeled"] | null;
+            priority: components["schemas"]["Labeled"] | null;
+            category: components["schemas"]["Labeled"] | null;
+            product: components["schemas"]["Labeled"] | null;
+            receivingUnit: components["schemas"]["Labeled"] | null;
+            region: components["schemas"]["Labeled"] | null;
+            /** @description Dummy CIF directory; not editable in D08a. */
+            merchant: components["schemas"]["Labeled"] | null;
+            transactionActivity: string | null;
+            cause: string | null;
+            foreignBranchReference: string | null;
+        };
+        /** @description Simulated provider link; status is informational and never completes work. */
+        JiraLink: {
+            issueKey: string;
+            externalStatus: string | null;
+            safeUrl: string | null;
+        };
+        RelatedWork: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            safeDescription: string | null;
+            blocking: boolean;
+            /**
+             * @description Local completion; independent of Jira status.
+             * @enum {string}
+             */
+            completionState: "open" | "completed";
+            completionSummary: string | null;
+            completionEvidence: string | null;
+            requestedBy: components["schemas"]["Labeled"] | null;
+            completedBy: components["schemas"]["Labeled"] | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            jira: components["schemas"]["JiraLink"] | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description Metadata of an attachment bound to the ticket (bound implies a clean scan). No object key, no URL. */
+        AttachmentMeta: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            inspectedMime: string | null;
+            sizeBytes: number;
+            scanStatus: string;
+            /** @enum {string} */
+            visibility: "public" | "internal";
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ResolutionEvent: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            action: "resolve" | "reopen";
+            cycleNo: number;
+            summary: string;
+            actor: components["schemas"]["Labeled"] | null;
+            /** Format: date-time */
+            at: string;
+        };
+        DetailCapabilities: {
+            /** @description Closed archive; every write is refused (422). */
+            readOnly: boolean;
+            editProperties: boolean;
+            manageRelatedWork: boolean;
+        };
+        TicketDetail: {
+            ticket: components["schemas"]["TicketListItem"];
+            properties: components["schemas"]["TicketProperties"];
+            can: components["schemas"]["DetailCapabilities"];
+            relatedWork: components["schemas"]["RelatedWork"][];
+            /** @description Empty without attachment.read. */
+            attachments: components["schemas"]["AttachmentMeta"][];
+            resolutions: components["schemas"]["ResolutionEvent"][];
+        };
+        TicketDetailMutation: {
+            detail: components["schemas"]["TicketDetail"];
+            /**
+             * Format: uuid
+             * @description null when nothing changed.
+             */
+            auditEventId: string | null;
+        };
+        /** @description Only the fields present change; `null` clears a nullable field. A new catalog value must be active in this workspace (422 validation_failed otherwise). */
+        TicketPropertiesRequest: {
+            /** @description Ticket version the client saw; stale = 409. */
+            version: number;
+            subject?: string;
+            chronology?: string;
+            /** Format: uuid */
+            priorityId?: string | null;
+            /** Format: uuid */
+            categoryId?: string | null;
+            /** Format: uuid */
+            productId?: string | null;
+            /** Format: uuid */
+            receivingUnitId?: string | null;
+            /** Format: uuid */
+            regionId?: string | null;
+            transactionActivity?: string | null;
+            cause?: string | null;
+            foreignBranchReference?: string | null;
+        };
+        ActivityItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            at: string;
+            action: string;
+            /** @description Server-built sentence from safe audit fields; never free text. */
+            label: string;
+            actor: components["schemas"]["Labeled"] | null;
+        };
+        ActivityPage: {
+            items: components["schemas"]["ActivityItem"][];
+            nextCursor: string | null;
+        };
+        RelatedWorkCreateRequest: {
+            title: string;
+            safeDescription?: string | null;
+            blocking: boolean;
+        };
+        RelatedWorkCompletionRequest: {
+            version: number;
+            summary: string;
+            evidence: string;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -1425,6 +1650,7 @@ export interface components {
         ConnectionId: string;
         /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
         IdempotencyKey: string;
+        RelatedWorkId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2147,6 +2373,41 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
+    updateTicketProperties: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketPropertiesRequest"];
+            };
+        };
+        responses: {
+            /** @description Fresh detail and the audit entry (null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetailMutation"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
     getTicketAttachment: {
         parameters: {
             query?: never;
@@ -2425,6 +2686,137 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["ValidationFailed"];
+        };
+    };
+    getTicketDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ticket detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetail"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listTicketActivity: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Activity page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityPage"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createRelatedWork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelatedWorkCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Fresh detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetailMutation"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    completeRelatedWork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+                related_work_id: components["parameters"]["RelatedWorkId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelatedWorkCompletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Fresh detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetailMutation"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
         };
     };
 }

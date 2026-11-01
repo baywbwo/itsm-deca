@@ -1,7 +1,10 @@
 // Runtime checks at the network boundary. The compile-time types are generated; these
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
+  ActivityPage,
   ApiErrorBody,
+  TicketDetail,
+  TicketDetailMutation,
   AssignmentHistory,
   IntakeDirectory,
   IntegrationSync,
@@ -232,3 +235,34 @@ export const isAssignmentHistory = (v: unknown): v is AssignmentHistory =>
   isArr(v.items, (e) => isObj(e) && isStr(e.id) && isStr(e.at) &&
     ['initial', 'take_for_self', 'reassign'].includes(e.kind as string) &&
     isPersonOrNull(e.actor) && isPersonOrNull(e.from) && isPersonOrNull(e.to) && isStrOrNull(e.reason ?? null));
+
+// D08a ticket detail.
+const isTextOrNull = isStrOrNull;
+const isProps = (p: unknown) =>
+  isObj(p) && isStr(p.subject) && isStr(p.chronology) && isStr(p.receivedAt) &&
+  isRefOrNull(p.intakeChannel) && isRefOrNull(p.priority) && isRefOrNull(p.category) && isRefOrNull(p.product) &&
+  isRefOrNull(p.receivingUnit) && isRefOrNull(p.region) && isRefOrNull(p.merchant) &&
+  isTextOrNull(p.transactionActivity) && isTextOrNull(p.cause) && isTextOrNull(p.foreignBranchReference);
+const isJiraOrNull = (j: unknown) =>
+  j === null || (isObj(j) && isStr(j.issueKey) && isStrOrNull(j.externalStatus) && isStrOrNull(j.safeUrl));
+const isRelatedWork = (r: unknown) =>
+  isObj(r) && isStr(r.id) && isStr(r.title) && isStrOrNull(r.safeDescription) && typeof r.blocking === 'boolean' &&
+  (r.completionState === 'open' || r.completionState === 'completed') && isStrOrNull(r.completionSummary) &&
+  isStrOrNull(r.completionEvidence) && isRefOrNull(r.requestedBy) && isRefOrNull(r.completedBy) &&
+  isStrOrNull(r.completedAt) && isJiraOrNull(r.jira) && isNum(r.version) && isStr(r.createdAt);
+const isAttachmentMeta = (a: unknown) =>
+  isObj(a) && isStr(a.id) && isStr(a.fileName) && isStrOrNull(a.inspectedMime) && isNum(a.sizeBytes) &&
+  isStr(a.scanStatus) && (a.visibility === 'public' || a.visibility === 'internal') && isStr(a.createdAt);
+const isResolution = (e: unknown) =>
+  isObj(e) && isStr(e.id) && (e.action === 'resolve' || e.action === 'reopen') && isNum(e.cycleNo) &&
+  isStr(e.summary) && isRefOrNull(e.actor) && isStr(e.at);
+export const isTicketDetail = (v: unknown): v is TicketDetail =>
+  isObj(v) && isTicketListItem(v.ticket) && isProps(v.properties) &&
+  isObj(v.can) && typeof v.can.readOnly === 'boolean' && typeof v.can.editProperties === 'boolean' &&
+  typeof v.can.manageRelatedWork === 'boolean' &&
+  isArr(v.relatedWork, isRelatedWork) && isArr(v.attachments, isAttachmentMeta) && isArr(v.resolutions, isResolution);
+export const isTicketDetailMutation = (v: unknown): v is TicketDetailMutation =>
+  isObj(v) && isTicketDetail(v.detail) && isStrOrNull(v.auditEventId);
+export const isActivityPage = (v: unknown): v is ActivityPage =>
+  isObj(v) && isStrOrNull(v.nextCursor) &&
+  isArr(v.items, (i) => isObj(i) && isStr(i.id) && isStr(i.at) && isStr(i.action) && isStr(i.label) && isRefOrNull(i.actor));

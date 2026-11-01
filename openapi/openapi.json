@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.8.0-d07",
+    "version": "0.9.0-d08a",
     "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile."
   },
   "servers": [
@@ -106,6 +106,15 @@
           "pattern": "^[A-Za-z0-9_:.-]{8,128}$"
         },
         "description": "One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout."
+      },
+      "RelatedWorkId": {
+        "name": "related_work_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
       }
     },
     "schemas": {
@@ -3029,6 +3038,631 @@
             "format": "uuid"
           }
         }
+      },
+      "Labeled": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "TicketProperties": {
+        "type": "object",
+        "required": [
+          "subject",
+          "chronology",
+          "receivedAt",
+          "intakeChannel",
+          "priority",
+          "category",
+          "product",
+          "receivingUnit",
+          "region",
+          "merchant",
+          "transactionActivity",
+          "cause",
+          "foreignBranchReference"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "chronology": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "intakeChannel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivingUnit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "region": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merchant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Dummy CIF directory; not editable in D08a."
+          },
+          "transactionActivity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foreignBranchReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "JiraLink": {
+        "type": "object",
+        "required": [
+          "issueKey",
+          "externalStatus",
+          "safeUrl"
+        ],
+        "description": "Simulated provider link; status is informational and never completes work.",
+        "properties": {
+          "issueKey": {
+            "type": "string"
+          },
+          "externalStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "safeUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RelatedWork": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "safeDescription",
+          "blocking",
+          "completionState",
+          "completionSummary",
+          "completionEvidence",
+          "requestedBy",
+          "completedBy",
+          "completedAt",
+          "jira",
+          "version",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "safeDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "completionState": {
+            "type": "string",
+            "enum": [
+              "open",
+              "completed"
+            ],
+            "description": "Local completion; independent of Jira status."
+          },
+          "completionSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completionEvidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "jira": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JiraLink"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AttachmentMeta": {
+        "type": "object",
+        "required": [
+          "id",
+          "fileName",
+          "inspectedMime",
+          "sizeBytes",
+          "scanStatus",
+          "visibility",
+          "createdAt"
+        ],
+        "description": "Metadata of an attachment bound to the ticket (bound implies a clean scan). No object key, no URL.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "inspectedMime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "scanStatus": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResolutionEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "cycleNo",
+          "summary",
+          "actor",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "reopen"
+            ]
+          },
+          "cycleNo": {
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DetailCapabilities": {
+        "type": "object",
+        "required": [
+          "readOnly",
+          "editProperties",
+          "manageRelatedWork"
+        ],
+        "properties": {
+          "readOnly": {
+            "type": "boolean",
+            "description": "Closed archive; every write is refused (422)."
+          },
+          "editProperties": {
+            "type": "boolean"
+          },
+          "manageRelatedWork": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TicketDetail": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "properties",
+          "can",
+          "relatedWork",
+          "attachments",
+          "resolutions"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/TicketListItem"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/TicketProperties"
+          },
+          "can": {
+            "$ref": "#/components/schemas/DetailCapabilities"
+          },
+          "relatedWork": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedWork"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "description": "Empty without attachment.read."
+          },
+          "resolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolutionEvent"
+            }
+          }
+        }
+      },
+      "TicketDetailMutation": {
+        "type": "object",
+        "required": [
+          "detail",
+          "auditEventId"
+        ],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null when nothing changed."
+          }
+        }
+      },
+      "TicketPropertiesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "description": "Only the fields present change; `null` clears a nullable field. A new catalog value must be active in this workspace (422 validation_failed otherwise).",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Ticket version the client saw; stale = 409."
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "chronology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "priorityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "categoryId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "productId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receivingUnitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "regionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "transactionActivity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "foreignBranchReference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "ActivityItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "action",
+          "label",
+          "actor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "Server-built sentence from safe audit fields; never free text."
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ActivityPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RelatedWorkCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "blocking"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "safeDescription": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "blocking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RelatedWorkCompletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "summary",
+          "evidence"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        }
       }
     },
     "responses": {
@@ -4298,6 +4932,65 @@
             "$ref": "#/components/responses/NotFound"
           }
         }
+      },
+      "patch": {
+        "operationId": "updateTicketProperties",
+        "summary": "Edit ticket properties (D08)",
+        "description": "ticket.update. Closed archive = 422 before the version check; stale `version` = 409 and nothing changes. A field error answers 422 validation_failed with the field name. Update, version bump and audit (field names only, never values) commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketPropertiesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh detail and the audit entry (null when nothing changed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetailMutation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
       }
     },
     "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}": {
@@ -4758,6 +5451,236 @@
           },
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail": {
+      "get": {
+        "operationId": "getTicketDetail",
+        "summary": "Ticket detail (D08)",
+        "description": "ticket.read. One read-only snapshot: header (list projection with allowed actions), labelled properties, related work, bound attachment metadata (attachment.read) and resolution history. Another workspace's ticket = 404.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity": {
+      "get": {
+        "operationId": "listTicketActivity",
+        "summary": "Ticket activity log (D08)",
+        "description": "ticket.read. Successful audit entries of this ticket, newest first, keyset-paginated. Labels are server-built from safe audit fields only.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activity page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work": {
+      "post": {
+        "operationId": "createRelatedWork",
+        "summary": "Add related work (D08)",
+        "description": "related_work.manage. Refused (422) on a closed or resolved ticket (reopen first). Row and audit commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelatedWorkCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetailMutation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion": {
+      "post": {
+        "operationId": "completeRelatedWork",
+        "summary": "Complete related work locally (D08)",
+        "description": "related_work.manage. Needs summary and evidence from a person; Jira status never completes work. Stale related-work `version` = 409; already completed or closed ticket = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/RelatedWorkId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelatedWorkCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetailMutation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
           }
         }
       }

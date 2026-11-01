@@ -36,8 +36,8 @@ use crate::routes::workspaces::parse_id;
 use crate::session::Session;
 
 const IDEMPOTENCY_HEADER: &str = "idempotency-key";
-const MAX_SUBJECT_CHARS: usize = 300;
-const MAX_CHRONOLOGY_CHARS: usize = 20_000;
+pub(crate) const MAX_SUBJECT_CHARS: usize = 300;
+pub(crate) const MAX_CHRONOLOGY_CHARS: usize = 20_000;
 const MAX_JIRA_TITLE_CHARS: usize = 300;
 const MAX_ISSUE_KEY_CHARS: usize = 64;
 /// Clock skew accepted for a receive time "now" typed on another device.
@@ -114,7 +114,11 @@ pub struct CreateResult {
     integrations: Vec<SyncView>,
 }
 
-fn required_text(raw: &str, max: usize, field: &'static str) -> Result<String, AppError> {
+pub(crate) fn required_text(
+    raw: &str,
+    max: usize,
+    field: &'static str,
+) -> Result<String, AppError> {
     let t = raw.trim();
     if t.is_empty() || t.chars().count() > max {
         return Err(AppError::Validation(field));
@@ -246,7 +250,7 @@ async fn active_in(
         .unwrap_or(false))
 }
 
-async fn require_active(
+pub(crate) async fn require_active(
     conn: &mut PgConnection,
     table: &'static str,
     ws: Uuid,

@@ -214,3 +214,26 @@ export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
  */
 export const leavesScope = (from: Route, to: Route) =>
   from.workspaceId !== to.workspaceId || from.page !== to.page;
+
+/**
+ * D08 deep link on top of the ticket query: `ticket=<id>` opens the side peek, `detail=full` the
+ * full-page mode of the same ticket. Neither is part of the List API scope.
+ */
+export interface DetailParams { ticketId: string | null; full: boolean }
+
+export function parseDetailQuery(query: string): DetailParams {
+  const q = new URLSearchParams(query);
+  const ticketId = q.get('ticket')?.trim() || null;
+  return { ticketId, full: !!ticketId && q.get('detail') === 'full' };
+}
+
+export function withDetail(query: string, ticketId: string | null, full = false): string {
+  const q = new URLSearchParams(query);
+  q.delete('ticket');
+  q.delete('detail');
+  if (ticketId) {
+    q.set('ticket', ticketId);
+    if (full) q.set('detail', 'full');
+  }
+  return q.toString();
+}
