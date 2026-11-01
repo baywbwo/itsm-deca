@@ -5416,6 +5416,20 @@
             "type": "boolean"
           }
         }
+      },
+      "CsrfIssued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "csrfToken"
+        ],
+        "properties": {
+          "csrfToken": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43
+          }
+        }
       }
     },
     "responses": {
@@ -6423,6 +6437,41 @@
         "responses": {
           "204": {
             "description": "Session revoked; cookie cleared"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/session/csrf": {
+      "post": {
+        "operationId": "refreshCsrf",
+        "description": "D11. Re-issues the CSRF synchronizer token of the current session (a reloaded tab keeps the HttpOnly cookie but lost the in-memory token). Requires the session cookie and header `X-ITSM-CSRF-Refresh: 1`; when the browser sends `Sec-Fetch-Site` it must be `same-origin`. Rotates the token: the previous token of this session stops working. Sets no cookie.",
+        "parameters": [
+          {
+            "name": "X-ITSM-CSRF-Refresh",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New CSRF token (shown once; only its digest is stored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CsrfIssued"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthenticated"

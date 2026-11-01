@@ -191,6 +191,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/v1/session",
             get(session::current).merge(delete(session::logout)),
         )
+        .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))
