@@ -16,7 +16,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode, header};
 use http_body_util::BodyExt;
 use itsm_api::config::Config;
-use itsm_api::{AppState, app, seed, session};
+use itsm_api::{AppState, app, db, seed, session};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -823,26 +823,49 @@ async fn too_many_rows_is_a_failed_run_not_a_truncated_file(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migration_0010_rolls_back(pool: PgPool) {
-    let down = include_str!("../migrations/0010_d10_reports.down.sql");
-    ok(sqlx::raw_sql(down).execute(&pool).await, "down");
-    let n: i64 = ok(
+async fn migration_0010_rolls_back_with_runs_and_reapplies(pool: PgPool) {
+    let f = fixture(&pool).await;
+    data(&pool, &f).await;
+    let st = state(&pool, None);
+    let cs = tok(&pool, f.cs).await;
+    let r = export(&st, f.a, &cs, "d10-mig-000001", &oct_body("received")).await;
+    assert_eq!(r.status, StatusCode::CREATED);
+
+    // Contract: artifacts and D10 columns go; the run rows (pre-D10 table) stay.
+    ok(db::MIGRATOR.undo(&pool, 9).await, "undo to 0009");
+    let cols: i64 = ok(
         sqlx::query_scalar(
             "SELECT count(*) FROM information_schema.columns \
-             WHERE table_name = 'report_runs' AND column_name IN ('basis', 'artifact_sha256', 'expires_at')",
+             WHERE table_name = 'report_runs' AND column_name IN \
+             ('basis', 'idempotency_key', 'request_hash', 'row_count', 'artifact_sha256', \
+              'artifact_bytes', 'expires_at', 'failure_code')",
         )
         .fetch_one(&pool)
         .await,
         "columns",
     );
-    assert_eq!(n, 0);
-    let t: Option<String> = ok(
-        sqlx::query_scalar("SELECT to_regclass('report_artifacts')::text")
-            .fetch_one(&pool)
-            .await,
-        "table",
+    assert_eq!(cols, 0);
+    let (artifacts, runs): (Option<String>, i64) = ok(
+        sqlx::query_as(
+            "SELECT to_regclass('report_artifacts')::text, (SELECT count(*) FROM report_runs)",
+        )
+        .fetch_one(&pool)
+        .await,
+        "after undo",
     );
-    assert_eq!(t, None);
-    let up = include_str!("../migrations/0010_d10_reports.up.sql");
-    ok(sqlx::raw_sql(up).execute(&pool).await, "up again");
+    assert_eq!((artifacts, runs), (None, 1));
+
+    // Expand again on top of the kept rows; a fresh export works end to end.
+    ok(db::MIGRATOR.run(&pool).await, "reapply");
+    let r = export(&st, f.a, &cs, "d10-mig-000002", &oct_body("received")).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    assert_eq!(r.json["run"]["state"], "succeeded");
+    let id = s(&r.json["run"]["id"]);
+    let dl = get(
+        &st,
+        &format!("/api/v1/workspaces/{}/report-runs/{id}/content", f.a),
+        &cs,
+    )
+    .await;
+    assert_eq!(dl.status, StatusCode::OK);
 }
