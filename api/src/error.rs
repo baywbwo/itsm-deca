@@ -226,7 +226,13 @@ impl IntoResponse for AppError {
             }
             _ => json!({ "error": { "code": code, "message": message } }),
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if matches!(self, AppError::Forbidden) {
+            response
+                .extensions_mut()
+                .insert(crate::denied_audit::ForbiddenMarker);
+        }
+        response
     }
 }
 

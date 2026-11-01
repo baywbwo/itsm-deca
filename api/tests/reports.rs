@@ -869,3 +869,72 @@ async fn migration_0010_rolls_back_with_runs_and_reapplies(pool: PgPool) {
     .await;
     assert_eq!(dl.status, StatusCode::OK);
 }
+
+/// D11 (Arka's decision): the operational export keeps `report.view` and is never wider than
+/// the preview. For every filter the exported rows are exactly the preview rows; a member whose
+/// membership is revoked can neither export nor download what they exported before.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn export_is_never_wider_than_the_preview_and_stops_on_revoke(pool: PgPool) {
+    let f = fixture(&pool).await;
+    data(&pool, &f).await;
+    let st = state(&pool, None);
+    let cs = tok(&pool, f.cs).await;
+    let cases: [(String, Value); 5] = [
+        (String::new(), json!({})),
+        ("&basis=resolved".into(), json!({"basis": "resolved"})),
+        ("&status=new".into(), json!({"status": ["new"]})),
+        ("&owner=unassigned".into(), json!({"owner": "unassigned"})),
+        (format!("&owner={}", f.cs), json!({"owner": f.cs})),
+    ];
+    let mut last = String::new();
+    for (i, (q, extra)) in cases.iter().enumerate() {
+        let p = get(&st, &preview_uri(f.a, &format!("{OCT}{q}")), &cs).await;
+        assert_eq!(p.status, StatusCode::OK, "{q}");
+        let mut want: Vec<String> = p.json["rows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| s(&r["displayNumber"]))
+            .collect();
+        let mut body = oct_body("received");
+        if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        let r = export(&st, f.a, &cs, &format!("d11-wide-{i:06}"), &body).await;
+        assert_eq!(r.status, StatusCode::CREATED, "{q}: {}", r.json);
+        assert_eq!(r.json["run"]["rowCount"], json!(want.len()), "{q}");
+        let id = s(&r.json["run"]["id"]);
+        let uri = format!("/api/v1/workspaces/{}/report-runs/{id}/content", f.a);
+        let dl = get(&st, &uri, &cs).await;
+        assert_eq!(dl.status, StatusCode::OK);
+        let mut got: Vec<String> = csv_lines(&dl.bytes)
+            .iter()
+            .map(|l| {
+                want.iter()
+                    .find(|n| l.contains(&format!("\"{n}\"")))
+                    .cloned()
+                    .unwrap_or_else(|| panic!("{q}: exported row not in preview: {l}"))
+            })
+            .collect();
+        got.sort();
+        want.sort();
+        assert_eq!(got, want, "{q}");
+        last = uri;
+    }
+
+    // Revoke CS Alfa's membership: the next export and download are refused (404, no leak).
+    ok(
+        sqlx::query(
+            "UPDATE workspace_memberships SET active = false, version = version + 1 \
+             WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(f.a)
+        .bind(f.cs)
+        .execute(&pool)
+        .await,
+        "revoke",
+    );
+    assert_eq!(get(&st, &last, &cs).await.status, StatusCode::NOT_FOUND);
+    let r = export(&st, f.a, &cs, "d11-wide-revoked", &oct_body("received")).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}

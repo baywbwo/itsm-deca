@@ -712,3 +712,115 @@ async fn migration_0003_rolls_back_and_reapplies_on_dummy_data(pool: PgPool) {
     assert_eq!(live, 0);
     grant(&pool, fx.a, lead_m, "admin.members", fx.admin).await;
 }
+
+// ---------- D11: denied audit ----------
+
+async fn denied_rows(pool: &PgPool) -> Vec<(Uuid, Option<Uuid>, Value, Option<String>)> {
+    ok(
+        sqlx::query_as(
+            "SELECT workspace_id, actor_id, safe_change, correlation_id FROM audit_events \
+             WHERE action = 'access.denied' AND outcome = 'denied' AND entity_type = 'access' \
+             ORDER BY occurred_at",
+        )
+        .fetch_all(pool)
+        .await,
+        "denied rows",
+    )
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn member_403_leaves_one_safe_denied_audit_row_and_nothing_else_does(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let cs = ok(
+        session::issue(&pool, fx.cs, "uat_superadmin").await,
+        "issue",
+    );
+    let cookie = format!("{}={}", session::cookie_name(false), cs.token);
+    let grants_a = format!("/api/v1/workspaces/{}/grants", fx.a);
+
+    // 401, 404 (non-member and unknown workspace) and 200 write nothing.
+    assert_eq!(
+        get(&pool, &grants_a, None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    for uri in [
+        format!("/api/v1/workspaces/{}/grants", fx.b),
+        format!("/api/v1/workspaces/{}/grants", Uuid::new_v4()),
+    ] {
+        assert_eq!(
+            get(&pool, &uri, Some(&cs.token)).await.status,
+            StatusCode::NOT_FOUND
+        );
+    }
+    let me = format!("/api/v1/workspaces/{}/permissions", fx.a);
+    assert_eq!(
+        get(&pool, &me, Some(&cs.token)).await.status,
+        StatusCode::OK
+    );
+    assert!(denied_rows(&pool).await.is_empty());
+
+    // Missing permission inside the member's workspace: one row, safe projection only.
+    let r = get(&pool, &grants_a, Some(&cs.token)).await;
+    assert_eq!(
+        (r.status, r.json["error"]["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden"))
+    );
+    let rows = denied_rows(&pool).await;
+    assert_eq!(rows.len(), 1);
+    let (w, actor, change, _) = &rows[0];
+    assert_eq!((*w, *actor), (fx.a, Some(fx.cs)));
+    assert_eq!(change["permission"], "admin.members");
+    assert_eq!(change["method"], "GET");
+    assert_eq!(change["route"], "/api/v1/workspaces/{workspace_id}/grants");
+    let text = change.to_string();
+    assert!(!text.contains(&fx.a.to_string()) && !text.contains(&cs.token));
+
+    // CSRF refusal is not a permission denial: no row.
+    let t = ticket(&pool, fx.a, fx.admin).await;
+    let assign = format!("/api/v1/workspaces/{}/tickets/{t}/assignment", fx.a);
+    let body =
+        serde_json::json!({ "ownerUserId": fx.lead, "version": 1, "reason": "uji" }).to_string();
+    let no_csrf = Request::builder()
+        .method("POST")
+        .uri(&assign)
+        .header(header::COOKIE, &cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.clone()));
+    let r = call_state(state_with(&pool, uat_config()), ok(no_csrf, "req")).await;
+    assert_eq!(r.json["error"]["code"], "csrf_failed");
+    assert_eq!(denied_rows(&pool).await.len(), 1);
+
+    // CS reassigning to someone else: 403, a row naming ticket.assign_any and the request id;
+    // the ticket is unchanged.
+    let req = Request::builder()
+        .method("POST")
+        .uri(&assign)
+        .header(header::COOKIE, &cookie)
+        .header(session::CSRF_HEADER, &cs.csrf_token)
+        .header("x-request-id", "d11-denied-probe")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body));
+    let r = call_state(state_with(&pool, uat_config()), ok(req, "req")).await;
+    assert_eq!(
+        (r.status, r.json["error"]["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("forbidden"))
+    );
+    let rows = denied_rows(&pool).await;
+    assert_eq!(rows.len(), 2);
+    let (w, actor, change, corr) = &rows[1];
+    assert_eq!((*w, *actor), (fx.a, Some(fx.cs)));
+    assert_eq!(change["permission"], "ticket.assign_any");
+    assert_eq!(
+        change["route"],
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment"
+    );
+    assert_eq!(corr.as_deref(), Some("d11-denied-probe"));
+    let owner: Option<Uuid> = ok(
+        sqlx::query_scalar("SELECT owner_user_id FROM tickets WHERE id = $1")
+            .bind(t)
+            .fetch_one(&pool)
+            .await,
+        "owner",
+    );
+    assert_eq!(owner, None);
+}

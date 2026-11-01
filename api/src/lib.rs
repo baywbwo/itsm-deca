@@ -4,6 +4,7 @@ pub mod authz;
 pub mod clamd;
 pub mod config;
 pub mod db;
+pub mod denied_audit;
 pub mod domain;
 pub mod error;
 pub mod outbox;
@@ -40,7 +41,10 @@ pub struct AppState {
 pub fn app(state: AppState) -> Router {
     let request_id = HeaderName::from_static("x-request-id");
     let session = axum::middleware::from_fn_with_state(state.clone(), session::session_layer);
-    let api = routes::api_router().layer(session.clone());
+    let denied = axum::middleware::from_fn_with_state(state.clone(), denied_audit::layer);
+    let api = routes::api_router()
+        .route_layer(denied.clone())
+        .layer(session.clone());
     let bounded = Router::new()
         .merge(routes::health::router())
         .merge(api)
@@ -50,6 +54,7 @@ pub fn app(state: AppState) -> Router {
             REQUEST_TIMEOUT,
         ));
     let upload = routes::upload_router()
+        .route_layer(denied)
         .layer(session)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,

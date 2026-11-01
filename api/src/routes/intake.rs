@@ -289,6 +289,7 @@ fn check_owner(access: &WorkspaceAccess, owner: Option<Uuid>) -> Result<(), AppE
         Some(_) if access.allows(Permission::TicketAssignAny) => Ok(()),
         Some(_) => {
             tracing::info!(workspace_id = %access.workspace_id, "intake owner denied");
+            crate::denied_audit::record_permission(Permission::TicketAssignAny.code());
             Err(AppError::Forbidden)
         }
     }

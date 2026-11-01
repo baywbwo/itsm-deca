@@ -300,6 +300,7 @@ fn grant_code(access: &WorkspaceAccess, raw: &str) -> Result<Permission, AppErro
     if !access.allows(p) {
         tracing::info!(workspace_id = %access.workspace_id, permission = p.code(),
             "grant beyond grantor's own rights denied");
+        crate::denied_audit::record_permission(p.code());
         return Err(AppError::Forbidden);
     }
     Ok(p)

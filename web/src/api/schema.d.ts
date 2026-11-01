@@ -944,7 +944,7 @@ export interface paths {
         put?: never;
         /**
          * Export the operational report as CSV (D10)
-         * @description report.view (no export-specific permission exists in the D01 catalog). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).
+         * @description report.view (decision Arka D11, 2 Nov 2026: the scoped OPERATIONAL export keeps report.view from the D01 catalog; no new permission without a contract need; not BI or platform access; the export rows are exactly the preview rows of the same filter in this workspace, never wider). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).
          */
         post: operations["createReportRun"];
         delete?: never;
