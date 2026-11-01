@@ -1,0 +1,33 @@
+{
+  "name": "itsm-web",
+  "private": true,
+  "version": "0.7.1-d07r",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "gen:api": "openapi-typescript ../openapi/openapi.json -o src/api/schema.d.ts",
+    "check:api": "node scripts/check-api-types.mjs",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "build": "tsc -b && vite build",
+    "build:review": "vite build --mode review --outDir dist-review && node scripts/inline-review.mjs dist-review",
+    "preview": "vite preview --host 127.0.0.1 --port 4183 --strictPort",
+    "it:api": "node scripts/it-api.mjs"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  }
+}
