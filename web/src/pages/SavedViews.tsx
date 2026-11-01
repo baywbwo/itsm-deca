@@ -70,7 +70,10 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
   useEffect(() => { if (editing) editRef.current?.focus(); }, [editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = load.status === 'ready' ? load.items : [];
-  const current = items.find((v) => sameSavedScope(paramsFromSavedView(v), params)) ?? null;
+  // Several views can share one scope; the one last saved or applied here wins, else the first match.
+  const [picked, setPicked] = useState<string | null>(null);
+  const matches = items.filter((v) => sameSavedScope(paramsFromSavedView(v), params));
+  const current = matches.find((v) => v.id === picked) ?? matches[0] ?? null;
   const put = (v: SavedView) => setLoad({ status: 'ready', items: [...items.filter((x) => x.id !== v.id), v].sort(byName) });
   const refreshAfter = (e: unknown) => {
     if (e instanceof ApiError && (e.code === 'version_conflict' || e.code === 'not_found')) setAttempt((n) => n + 1);
@@ -87,6 +90,7 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
         name: n, view: params.view, query: savedViewQuery(params), columns: params.columns,
       });
       put(v);
+      setPicked(v.id);
       setName('');
       setMessage({ tone: 'ok', text: `View "${v.name}" disimpan.` });
     } catch (e) {
@@ -120,6 +124,7 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
     try {
       const next = await api.renameSavedView(workspaceId, v.id, { columns: params.columns, version: v.version });
       put(next);
+      setPicked(next.id);
       setFocusNext(`${row(next.id)} .saved-apply`);
       setMessage({ tone: 'ok', text: `Kolom view "${next.name}" diperbarui: ${next.columns.map((c) => COLUMN_LABELS[c]).join(', ')}.` });
     } catch (e) {
@@ -201,7 +206,7 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
                   ) : (
                     <>
                       <button type="button" className="saved-apply" aria-current={current?.id === v.id ? 'true' : undefined}
-                        onClick={() => { onApply(paramsFromSavedView(v)); close(); }}>
+                        onClick={() => { setPicked(v.id); onApply(paramsFromSavedView(v)); close(); }}>
                         <span className="saved-name">{v.name}</span>
                         <Badge>{v.view === 'board' ? 'Board' : 'List'}</Badge>
                       </button>
