@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type { ReportBreakdown, ReportPreview, ReportRow, ReportRun, Workspace } from '../api/types';
 import { instantLabel, num, rangeLabel, tzLabel } from '../app/format';
 import { navigate } from '../app/hooks';
@@ -250,6 +250,7 @@ function exportErrorText(e: unknown): { title: string; body: string; requestId: 
   const requestId = e instanceof ApiError ? e.requestId : null;
   if (e instanceof ApiError) {
     if (e.code === 'regulator_mapping_unavailable') return { title: 'Ekspor BI belum tersedia', body: e.message, requestId };
+    if (e.status === 429) return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} Ekspor belum dibuat; filter Anda tetap.`, requestId };
     if (e.status === 409) return { title: 'Permintaan ekspor bertabrakan', body: 'Kunci permintaan sudah dipakai untuk parameter lain. Klik ekspor lagi.', requestId };
     if (e.status === 403) return { title: 'Akses ditolak', body: 'Anda tidak memiliki izin ekspor di workspace ini.', requestId };
     if (e.status === 422) return { title: 'Parameter tidak valid', body: e.message, requestId };

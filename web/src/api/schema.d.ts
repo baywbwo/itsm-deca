@@ -1132,10 +1132,12 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
+                /** @description rate_limited only: seconds until the next request is accepted (same value as the Retry-After header). */
+                retryAfterSeconds?: number;
             };
         };
         Meta: {
@@ -2561,6 +2563,17 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description rate_limited: too many requests for this user (reads and writes counted separately) or, without a session, for this client address. Nothing was processed. Limits are per server process. Clients must not retry mutations automatically. */
+        RateLimited: {
+            headers: {
+                /** @description Seconds until the next request is accepted. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description Unknown, malformed or foreign IDs all return 404. */
@@ -2616,6 +2629,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createSavedView: {
@@ -2648,6 +2662,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     deleteSavedView: {
@@ -2674,6 +2689,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     renameSavedView: {
@@ -2709,6 +2725,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTickets: {
@@ -2765,6 +2782,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createTicket: {
@@ -2810,6 +2828,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketBoard: {
@@ -2864,6 +2883,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     transitionTicket: {
@@ -2899,6 +2919,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     assignTicket: {
@@ -2934,6 +2955,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     healthLive: {
@@ -2997,6 +3019,7 @@ export interface operations {
                     "application/json": components["schemas"]["Meta"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     enterUatSuperadmin: {
@@ -3028,6 +3051,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
             /** @description uat_not_available */
             503: {
                 headers: {
@@ -3058,6 +3082,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     logout: {
@@ -3078,6 +3103,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     refreshCsrf: {
@@ -3102,6 +3128,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaces: {
@@ -3125,6 +3152,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getWorkspace: {
@@ -3150,6 +3178,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaceMembers: {
@@ -3176,6 +3205,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     addWorkspaceMember: {
@@ -3209,6 +3239,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTicketStatuses: {
@@ -3232,6 +3263,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getPermissionCatalog: {
@@ -3253,6 +3285,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getMyWorkspacePermissions: {
@@ -3278,6 +3311,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaceGrants: {
@@ -3306,6 +3340,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getWorkspaceCatalogs: {
@@ -3332,6 +3367,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicket: {
@@ -3360,6 +3396,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateTicketProperties: {
@@ -3395,6 +3432,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketAttachment: {
@@ -3425,6 +3463,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getReportRun: {
@@ -3453,6 +3492,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getDashboard: {
@@ -3490,6 +3530,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getAssignmentHistory: {
@@ -3518,6 +3559,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketIntegrations: {
@@ -3546,6 +3588,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getIntakeDirectory: {
@@ -3572,6 +3615,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     setSimulationOutcome: {
@@ -3605,6 +3649,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
+            429: components["responses"]["RateLimited"];
         };
     };
     retryOutbox: {
@@ -3640,6 +3685,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     reconcileOutbox: {
@@ -3675,6 +3721,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketDetail: {
@@ -3704,6 +3751,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTicketActivity: {
@@ -3736,6 +3784,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createRelatedWork: {
@@ -3783,6 +3832,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     completeRelatedWork: {
@@ -3819,6 +3869,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTicketNotes: {
@@ -3851,6 +3902,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createTicketNote: {
@@ -3898,6 +3950,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketConversations: {
@@ -3926,6 +3979,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     uploadTicketAttachment: {
@@ -3966,6 +4020,7 @@ export interface operations {
             413: components["responses"]["AttachmentTooLarge"];
             415: components["responses"]["AttachmentTypeRefused"];
             422: components["responses"]["AttachmentRejected"];
+            429: components["responses"]["RateLimited"];
             502: components["responses"]["ScanFailed"];
             503: components["responses"]["ScannerUnavailable"];
         };
@@ -4000,6 +4055,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
             503: components["responses"]["DependencyUnavailable"];
         };
     };
@@ -4027,6 +4083,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateWorkspaceSettings: {
@@ -4060,6 +4117,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listCompanies: {
@@ -4083,6 +4141,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createCompany: {
@@ -4113,6 +4172,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     setCompanyActive: {
@@ -4145,6 +4205,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listCatalogEntries: {
@@ -4172,6 +4233,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createCatalogEntry: {
@@ -4206,6 +4268,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateCatalogEntry: {
@@ -4241,6 +4304,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateWorkspaceMember: {
@@ -4275,6 +4339,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     addMemberGrant: {
@@ -4309,6 +4374,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     revokeMemberGrant: {
@@ -4343,6 +4409,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listIntegrations: {
@@ -4369,6 +4436,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createIntegration: {
@@ -4402,6 +4470,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     updateIntegration: {
@@ -4436,6 +4505,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     testIntegration: {
@@ -4470,6 +4540,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     activateIntegration: {
@@ -4504,6 +4575,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     disableIntegration: {
@@ -4538,6 +4610,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     previewReport: {
@@ -4593,6 +4666,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     listReportRuns: {
@@ -4619,6 +4693,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createReportRun: {
@@ -4672,6 +4747,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     downloadReportRun: {
@@ -4702,6 +4778,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             410: components["responses"]["ReportExpired"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

@@ -136,10 +136,23 @@ export class ApiError extends Error {
     readonly requestId: string | null = null,
     /** validation_failed only: the request field to fix. */
     readonly field: string | null = null,
+    /** rate_limited only: seconds until the server accepts the next request (Retry-After). */
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/**
+ * 429 copy: when to try again. A rate-limited request was not processed, so the caller keeps the
+ * input and leaves the retry to the person (mutations are never re-sent automatically).
+ */
+export function rateLimitText(e: ApiError): string {
+  const n = e.retryAfterSeconds;
+  return n !== null && n > 0
+    ? `Terlalu banyak permintaan dalam waktu singkat. Coba lagi dalam ${n} detik.`
+    : 'Terlalu banyak permintaan dalam waktu singkat. Coba lagi sebentar lagi.';
 }
 
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
@@ -200,6 +213,7 @@ export function createApi(transport: Transport) {
   // session (same origin, custom header) before the first unsafe request, and once more if the
   // server refuses it (another tab of the same session rotated it). A CSRF refusal happens before
   // any handler runs, so the single retry cannot apply a change twice.
+  // A 429 is returned to the caller as is: never re-sent here (a person decides when to retry).
   let csrfToken: string | null = null;
   let refreshing: Promise<string> | null = null;
 
@@ -213,8 +227,10 @@ export function createApi(transport: Transport) {
         signal: AbortSignal.timeout(10_000),
       });
       if (res.status !== 200 || !isCsrfIssued(res.body)) {
+        const wait = isErrorBody(res.body) ? (res.body.error as { retryAfterSeconds?: unknown }).retryAfterSeconds : null;
         throw isErrorBody(res.body)
-          ? new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId)
+          ? new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId, null,
+            typeof wait === 'number' && Number.isFinite(wait) ? wait : null)
           : new ApiError(res.status, 'internal', 'Terjadi kesalahan pada server.', res.requestId);
       }
       csrfToken = res.body.csrfToken;
@@ -236,9 +252,10 @@ export function createApi(transport: Transport) {
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
-      const field = (res.body.error as { field?: unknown }).field;
+      const { field, retryAfterSeconds: wait } = res.body.error as { field?: unknown; retryAfterSeconds?: unknown };
       throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
-        typeof field === 'string' ? field : null);
+        typeof field === 'string' ? field : null,
+        typeof wait === 'number' && Number.isFinite(wait) ? wait : null);
     }
     if (okStatus) {
       throw new ApiError(0, 'bad_response', 'Respons server tidak sesuai kontrak.', res.requestId);

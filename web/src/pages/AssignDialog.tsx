@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type { AssignmentEvent, Member, TicketListItem, Workspace, WorkspacePermissions } from '../api/types';
 import { instantLabel } from '../app/format';
 import { Button } from '../components/Button';
@@ -155,6 +155,8 @@ function assignError(e: unknown): { title: string; body: string; conflict: boole
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
+      case 429:
+        return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} PIC belum berubah; pilihan dan alasan Anda tetap di sini.${rid}`, conflict: false };
       case 409:
         return { title: 'Tiket sudah diubah pihak lain', body: `PIC tidak disimpan. Pilihan dan alasan Anda tetap di sini; muat ulang data lalu coba lagi.${rid}`, conflict: true };
       case 403:

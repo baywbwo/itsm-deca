@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
   AttachmentMeta,
@@ -913,6 +913,8 @@ function saveError(e: unknown, what: string): SaveError {
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
+      case 429:
+        return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} ${what} tidak dikirim; isian Anda tetap di sini.${rid}`, conflict: false };
       case 409:
         if (e.code === 'idempotency_conflict') {
           return { title: 'Sudah tersimpan sebelumnya', body: `Pengiriman sebelumnya dengan isian lain sudah diterima. Muat ulang detail untuk memeriksa; isian Anda tetap di sini.${rid}`, conflict: true };
@@ -932,6 +934,6 @@ function saveError(e: unknown, what: string): SaveError {
 }
 
 function message(e: unknown): string {
-  if (e instanceof ApiError) return e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
+  if (e instanceof ApiError) return e.code === 'rate_limited' ? rateLimitText(e) : e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
   return 'Terjadi kesalahan tak terduga.';
 }

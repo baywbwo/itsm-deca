@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, createApi, type TransportRequest, type TransportResponse } from './client';
+import { ApiError, createApi, rateLimitText, type TransportRequest, type TransportResponse } from './client';
+import { writeError } from '../pages/adminKit';
 
 function fake(responses: Record<string, TransportResponse>) {
   const seen: TransportRequest[] = [];
@@ -241,5 +242,57 @@ describe('D11 CSRF re-issue after a reload', () => {
     await expect(api.createSavedView('w1', view as never)).rejects.toMatchObject({ status: 401, code: 'unauthenticated' });
     await api.createSavedView('w1', view as never).catch(() => undefined);
     expect(seen.map((r) => r.path)).toEqual(['/api/v1/session/csrf', '/api/v1/session/csrf', '/api/v1/workspaces/w1/saved-views']);
+  });
+});
+
+describe('D11 rework: 429 rate_limited', () => {
+  const limited = (wait: number) => ({
+    status: 429,
+    body: { error: { code: 'rate_limited', message: 'Terlalu banyak permintaan.', retryAfterSeconds: wait } },
+    requestId: 'r429',
+  });
+  function scripted(answers: Array<() => TransportResponse>) {
+    const seen: TransportRequest[] = [];
+    const api = createApi(async (req) => {
+      seen.push(req);
+      const next = answers.shift();
+      if (!next) throw new Error(`unexpected ${req.method} ${req.path}`);
+      return next();
+    });
+    return { api, seen };
+  }
+  const issued = () => ({ status: 200, body: { csrfToken: 't1' }, requestId: null });
+
+  it('a rate-limited mutation is sent once, never retried, and carries Retry-After seconds', async () => {
+    const { api, seen } = scripted([issued, () => limited(7)]);
+    const e = await api.createTicket('w1', 'key-1', { subject: 's' } as never).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e).toMatchObject({ status: 429, code: 'rate_limited', retryAfterSeconds: 7, requestId: 'r429' });
+    expect(seen.filter((r) => r.path === '/api/v1/workspaces/w1/tickets')).toHaveLength(1);
+    expect(seen[1]?.headers['Idempotency-Key']).toBe('key-1');
+  });
+
+  it('a rate-limited CSRF refresh is surfaced, not looped, and the mutation is not sent', async () => {
+    const { api, seen } = scripted([() => limited(3)]);
+    await expect(api.transitionTicket('w1', 't', { to: 'open', version: 1 } as never))
+      .rejects.toMatchObject({ status: 429, code: 'rate_limited', retryAfterSeconds: 3 });
+    expect(seen.map((r) => r.path)).toEqual(['/api/v1/session/csrf']);
+  });
+
+  it('a rate-limited read is not retried either', async () => {
+    const { api, seen } = scripted([() => limited(2)]);
+    await expect(api.listWorkspaces()).rejects.toMatchObject({ code: 'rate_limited' });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('copy names the wait and keeps the input; a missing value falls back to a neutral wait', () => {
+    const e = new ApiError(429, 'rate_limited', 'x', 'r1', null, 12);
+    expect(rateLimitText(e)).toContain('12 detik');
+    expect(rateLimitText(new ApiError(429, 'rate_limited', 'x'))).toContain('sebentar lagi');
+    const w = writeError(e, 'Pengaturan');
+    expect(w).toMatchObject({ title: 'Terlalu banyak permintaan', conflict: false, field: null });
+    expect(w.body).toContain('12 detik');
+    expect(w.body).toContain('isian Anda tetap');
+    expect(w.body).toContain('r1');
   });
 });

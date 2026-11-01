@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ApiError } from '../api/client';
+import { ApiError, rateLimitText } from '../api/client';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 
@@ -17,6 +17,8 @@ export function writeError(e: unknown, what: string): WriteError {
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
+      case 429:
+        return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} ${what} tidak dikirim; isian Anda tetap di sini.${rid}`, conflict: false, field: null };
       case 409:
         return {
           title: 'Data sudah diubah pihak lain',

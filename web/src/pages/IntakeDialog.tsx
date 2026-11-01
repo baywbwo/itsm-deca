@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type {
   Catalogs,
   CatalogItem,
@@ -390,6 +390,8 @@ function classify(e: unknown): Outcome {
     return { kind: 'unknown', message: `Server belum memberi jawaban pasti; tiket mungkin sudah tersimpan. Kirim ulang memakai kunci yang sama tidak membuat duplikat.${rid}` };
   }
   switch (e.status) {
+    case 429:
+      return { kind: 'definite', title: 'Terlalu banyak permintaan', message: `${rateLimitText(e)} Tiket belum dibuat; isian Anda tetap di sini dan kirim ulang memakai kunci yang sama.${rid}` };
     case 422:
       if (e.field) return { kind: 'definite', title: 'Isian ditolak', message: fieldMessage(e.field), field: e.field };
       return { kind: 'definite', title: 'Isian ditolak', message: `Periksa isian lalu coba lagi. Tidak ada tiket yang dibuat.${rid}` };
@@ -619,6 +621,7 @@ function ReconcileForm({ api, workspaceId, item, onDone, onError, onCancel }: {
 
 function recoveryError(e: unknown): string {
   if (e instanceof ApiError) {
+    if (e.status === 429) return `${rateLimitText(e)} Aksi pemulihan belum dikirim.`;
     if (e.status === 409) return 'Status integrasi sudah berubah oleh pihak lain. Status terbaru dimuat ulang.';
     if (e.status === 422) return 'Aksi ini tidak berlaku untuk status integrasi sekarang.';
     if (e.status === 403) return 'Anda tidak memiliki izin pemulihan integrasi.';

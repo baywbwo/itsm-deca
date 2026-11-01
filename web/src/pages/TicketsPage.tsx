@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type {
   CatalogItem,
   TicketAllowedAction,
@@ -918,6 +918,8 @@ function transitionError(e: unknown): { title: string; body: string; conflict: b
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
+      case 429:
+        return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} Status belum berubah; isian Anda tetap di sini.${rid}`, conflict: false };
       case 409:
         return { title: 'Tiket sudah diubah pihak lain', body: `Status tidak disimpan. Isian Anda tetap di sini; muat ulang data lalu coba lagi.${rid}`, conflict: true };
       case 403:
@@ -965,7 +967,7 @@ function TicketError({ error, onRetry, onReset }: { error: unknown; onRetry: () 
 }
 
 function errorMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
+  if (e instanceof ApiError) return e.code === 'rate_limited' ? rateLimitText(e) : e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
   return 'Terjadi kesalahan tak terduga.';
 }
 
