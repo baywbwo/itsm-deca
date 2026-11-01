@@ -190,7 +190,7 @@ fn non_empty(raw: Option<&str>) -> Option<&str> {
 }
 
 /// RFC 3339 shape check before PostgreSQL validates the calendar value.
-fn instant(raw: Option<&str>) -> Result<Option<String>, AppError> {
+pub(crate) fn instant(raw: Option<&str>) -> Result<Option<String>, AppError> {
     let Some(s) = non_empty(raw) else {
         return Ok(None);
     };
@@ -1104,7 +1104,7 @@ pub struct MutationResult {
     audit_event_id: Uuid,
 }
 
-fn note(raw: Option<String>, max: usize) -> Result<Option<String>, AppError> {
+pub(crate) fn note(raw: Option<String>, max: usize) -> Result<Option<String>, AppError> {
     match raw {
         None => Ok(None),
         Some(s) => {
@@ -1125,7 +1125,7 @@ pub(crate) fn body<T>(b: Result<Json<T>, JsonRejection>) -> Result<T, AppError> 
     })
 }
 
-fn correlation(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn correlation(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
@@ -1160,7 +1160,7 @@ async fn lock(
     Ok((t, status))
 }
 
-async fn audit(
+pub(crate) async fn audit(
     conn: &mut PgConnection,
     access: &WorkspaceAccess,
     action: &str,
@@ -1183,7 +1183,7 @@ async fn audit(
     .await?)
 }
 
-async fn reload(
+pub(crate) async fn reload(
     conn: &mut PgConnection,
     access: &WorkspaceAccess,
     id: Uuid,

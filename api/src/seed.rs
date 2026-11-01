@@ -120,6 +120,16 @@ const CATALOG_SEED: &[(&str, &str, &str)] = &[
     ("categories", "kategori_uji_b", "Kategori uji B (dummy)"),
 ];
 
+/// Dummy directory of the simulated Jira/Lark connections (no real accounts or chats).
+const JIRA_ASSIGNEES: &[(&str, &str)] = &[
+    ("dummy-assignee-1", "Assignee Jira uji (dummy)"),
+    ("dummy-assignee-2", "Assignee Jira uji B (dummy)"),
+];
+const LARK_DESTINATIONS: &[(&str, &str)] = &[
+    ("dummy-chat-1", "Grup Lark uji (dummy)"),
+    ("dummy-chat-2", "Grup Lark eskalasi uji (dummy)"),
+];
+
 async fn seed_reference_data(tx: &mut sqlx::PgConnection, ws: Uuid) -> Result<(), sqlx::Error> {
     for (order, (table, code, label)) in (0_i32..).zip(CATALOG_SEED) {
         // Table names come from the constant above, never from input.
@@ -145,25 +155,46 @@ async fn seed_reference_data(tx: &mut sqlx::PgConnection, ws: Uuid) -> Result<()
     .await?;
 
     let jira = simulation_connection(tx, ws, "jira", "Jira (simulasi)").await?;
-    sqlx::query(
-        "INSERT INTO jira_assignees (workspace_id, connection_id, external_account_ref, display_name) \
-         VALUES ($1, $2, 'dummy-assignee-1', 'Assignee Jira uji (dummy)') \
-         ON CONFLICT (connection_id, external_account_ref) DO NOTHING",
-    )
-    .bind(ws)
-    .bind(jira)
-    .execute(&mut *tx)
-    .await?;
+    for (account, name) in JIRA_ASSIGNEES {
+        sqlx::query(
+            "INSERT INTO jira_assignees (workspace_id, connection_id, external_account_ref, display_name) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT (connection_id, external_account_ref) DO NOTHING",
+        )
+        .bind(ws)
+        .bind(jira)
+        .bind(account)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // Existing issues in the SIMULATED provider (link mode); keys carry the workspace code so
+    // a key from another workspace never resolves here.
+    for n in [101, 102] {
+        sqlx::query(
+            "INSERT INTO jira_issues (workspace_id, connection_id, external_issue_id, issue_key, external_status) \
+             SELECT $1, $2, 'sim-seed-' || $3::text, 'SIM-' || w.code || '-' || $3::text, 'Simulasi' \
+             FROM workspaces w WHERE w.id = $1 \
+             ON CONFLICT (connection_id, external_issue_id) DO NOTHING",
+        )
+        .bind(ws)
+        .bind(jira)
+        .bind(n)
+        .execute(&mut *tx)
+        .await?;
+    }
     let lark = simulation_connection(tx, ws, "lark", "Lark (simulasi)").await?;
-    sqlx::query(
-        "INSERT INTO lark_destinations (workspace_id, connection_id, external_chat_ref, display_name) \
-         VALUES ($1, $2, 'dummy-chat-1', 'Grup Lark uji (dummy)') \
-         ON CONFLICT (connection_id, external_chat_ref) DO NOTHING",
-    )
-    .bind(ws)
-    .bind(lark)
-    .execute(&mut *tx)
-    .await?;
+    for (chat, name) in LARK_DESTINATIONS {
+        sqlx::query(
+            "INSERT INTO lark_destinations (workspace_id, connection_id, external_chat_ref, display_name) \
+             VALUES ($1, $2, $3, $4) ON CONFLICT (connection_id, external_chat_ref) DO NOTHING",
+        )
+        .bind(ws)
+        .bind(lark)
+        .bind(chat)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    }
     Ok(())
 }
 

@@ -1122,8 +1122,9 @@ async fn seed_reference_data_is_idempotent_and_labelled(pool: PgPool) {
         ("categories", 4),
         ("merchants", 2),
         ("integration_connections", 4),
-        ("jira_assignees", 2),
-        ("lark_destinations", 2),
+        ("jira_assignees", 4),
+        ("jira_issues", 4),
+        ("lark_destinations", 4),
     ] {
         let n: i64 = ok(
             sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))

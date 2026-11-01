@@ -32,6 +32,14 @@ pub enum AppError {
     /// A query or body value is outside the documented contract.
     #[error("invalid_request")]
     InvalidRequest,
+    /// A body value failed a business validation; `field` names the request field (camelCase,
+    /// dotted for nested objects) so the client can focus it. Never carries the value.
+    #[error("validation_failed")]
+    Validation(&'static str),
+    /// The idempotency key was already used by this user in this workspace for a different
+    /// request. Nothing was created.
+    #[error("idempotency_conflict")]
+    IdempotencyConflict,
     #[error("uat_not_available")]
     UatNotAvailable,
     #[error("dependency_unavailable")]
@@ -77,6 +85,16 @@ impl AppError {
                 StatusCode::BAD_REQUEST,
                 "invalid_request",
                 "Parameter permintaan tidak valid.",
+            ),
+            AppError::Validation(_) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "validation_failed",
+                "Isian belum valid. Periksa kolom yang ditandai.",
+            ),
+            AppError::IdempotencyConflict => (
+                StatusCode::CONFLICT,
+                "idempotency_conflict",
+                "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada tiket baru yang dibuat.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -145,11 +163,13 @@ impl IntoResponse for AppError {
             tracing::error!(error = %err, "internal error");
         }
         let (status, code, message) = self.parts();
-        (
-            status,
-            Json(json!({ "error": { "code": code, "message": message } })),
-        )
-            .into_response()
+        let body = match &self {
+            AppError::Validation(field) => {
+                json!({ "error": { "code": code, "message": message, "field": field } })
+            }
+            _ => json!({ "error": { "code": code, "message": message } }),
+        };
+        (status, Json(body)).into_response()
     }
 }
 

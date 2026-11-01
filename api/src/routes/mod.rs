@@ -2,14 +2,16 @@ pub mod access;
 pub mod catalogs;
 pub mod dashboard;
 pub mod health;
+pub mod intake;
 pub mod saved_views;
 pub mod session;
+pub mod sync;
 pub mod ticket_list;
 pub mod tickets;
 pub mod workspaces;
 
 use axum::Router;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 
 use crate::AppState;
 
@@ -39,7 +41,21 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "delete",
         "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}",
     ),
+    ("get", "/api/v1/workspaces/{workspace_id}/intake-directory"),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/simulation",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/retry",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/reconcile",
+    ),
     ("get", "/api/v1/workspaces/{workspace_id}/tickets"),
+    ("post", "/api/v1/workspaces/{workspace_id}/tickets"),
     ("get", "/api/v1/workspaces/{workspace_id}/tickets/board"),
     (
         "get",
@@ -52,6 +68,14 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     (
         "post",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment-history",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/integrations",
     ),
     (
         "get",
@@ -108,7 +132,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets",
-            get(ticket_list::list),
+            get(ticket_list::list).merge(post(intake::create)),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/board",
@@ -125,6 +149,30 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment",
             post(ticket_list::assign),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment-history",
+            get(intake::assignment_history),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/integrations",
+            get(sync::ticket_sync),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/intake-directory",
+            get(intake::directory),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/simulation",
+            put(sync::set_simulation),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/retry",
+            post(sync::retry),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/reconcile",
+            post(sync::reconcile),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",
