@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.12.0-d09",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease → unknown)."
+    "version": "0.12.0-d10",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease → unknown). + D10 operational company reports (O06/C21/C22): server preview over the whole scope (Jakarta-day period, received/resolved basis, status + PIC/kanal/kategori/prioritas filters, unique tickets vs resolution cycles kept apart) and an idempotent, audited CSV export with scoped download, SHA-256, expiry and formula-injection neutralization. Official BI/regulator report stays held (422 regulator_mapping_unavailable); the export is labelled non-regulator."
   },
   "servers": [
     {
@@ -150,6 +150,18 @@
           "type": "string",
           "format": "uuid"
         }
+      },
+      "ReportIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_:.-]{8,128}$"
+        },
+        "description": "One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409."
       }
     },
     "schemas": {
@@ -723,7 +735,9 @@
                   "attachment_type_refused",
                   "attachment_infected",
                   "scan_failed",
-                  "scanner_unavailable"
+                  "scanner_unavailable",
+                  "regulator_mapping_unavailable",
+                  "report_expired"
                 ]
               },
               "message": {
@@ -1266,7 +1280,7 @@
       },
       "ReportRun": {
         "type": "object",
-        "description": "Operational report run metadata. Official BI export is held. The artifact reference is not exposed.",
+        "description": "Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed.",
         "required": [
           "id",
           "reportType",
@@ -1275,7 +1289,18 @@
           "state",
           "generatedAt",
           "hasArtifact",
-          "createdAt"
+          "createdAt",
+          "basis",
+          "filters",
+          "downloadable",
+          "requestedBy",
+          "rowCount",
+          "artifactSha256",
+          "artifactBytes",
+          "expiresAt",
+          "expired",
+          "failureCode",
+          "fileName"
         ],
         "properties": {
           "id": {
@@ -1313,11 +1338,72 @@
             "format": "date-time"
           },
           "hasArtifact": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "The run produced an artifact (D02 meaning). Use downloadable for the download link."
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/ReportRunFilters"
+          },
+          "downloadable": {
+            "type": "boolean",
+            "description": "True while the stored CSV can be downloaded (D10 artifact, not expired)."
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/PersonRef"
+          },
+          "rowCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "artifactSha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the exact bytes served by the download."
+          },
+          "artifactBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "failureCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "row_limit",
+              "internal",
+              null
+            ]
+          },
+          "fileName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -4737,6 +4823,599 @@
           }
         },
         "additionalProperties": false
+      },
+      "ReportBasis": {
+        "type": "string",
+        "enum": [
+          "received",
+          "resolved"
+        ],
+        "description": "`received`: received_at in the period. `resolved`: at least one resolve event in the period (a later reopen keeps it)."
+      },
+      "ReportTypeOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label",
+          "available",
+          "reason"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "operational",
+              "bi_regulator"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportHeader": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Company header from the database (one workspace = one reporting company). Never taken from the client.",
+        "required": [
+          "companyName",
+          "companyCode",
+          "reporterCode",
+          "workspaceId",
+          "workspaceCode",
+          "timezone",
+          "periodStart",
+          "periodEnd",
+          "startAt",
+          "endAt",
+          "basis",
+          "basisLabel"
+        ],
+        "properties": {
+          "companyName": {
+            "type": "string"
+          },
+          "companyCode": {
+            "type": "string"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "null until configured; never guessed."
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceCode": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "examples": [
+              "Asia/Jakarta"
+            ]
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "startAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive, UTC."
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive, UTC (local midnight after periodEnd)."
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "basisLabel": {
+            "type": "string"
+          }
+        }
+      },
+      "ReportAppliedFilters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "owner",
+          "channel",
+          "category",
+          "priority"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportTotals": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tickets",
+          "resolutionCycles",
+          "resolvedTickets",
+          "unassigned",
+          "missingChannel",
+          "missingCategory",
+          "missingPriority"
+        ],
+        "properties": {
+          "tickets": {
+            "type": "integer",
+            "description": "Unique tickets in the report = rows of the export."
+          },
+          "resolutionCycles": {
+            "type": "integer",
+            "description": "Resolve events in the period among those tickets (never added to tickets)."
+          },
+          "resolvedTickets": {
+            "type": "integer",
+            "description": "Distinct tickets with at least one resolve event in the period."
+          },
+          "unassigned": {
+            "type": "integer"
+          },
+          "missingChannel": {
+            "type": "integer"
+          },
+          "missingCategory": {
+            "type": "integer"
+          },
+          "missingPriority": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportStatusCount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportBreakdown": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "count"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null = not recorded / belum ditugaskan."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportValidationItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "level",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "regulator_mapping_unavailable",
+              "reporter_code_missing",
+              "missing_priority",
+              "missing_category",
+              "missing_channel",
+              "unassigned",
+              "row_limit"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "blocking"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticketId",
+          "displayNumber",
+          "subject",
+          "status",
+          "priority",
+          "category",
+          "channel",
+          "owner",
+          "receivedLocal",
+          "resolutionCycles",
+          "lastResolvedLocal"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayNumber": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PIC display name; null = belum ditugaskan."
+          },
+          "receivedLocal": {
+            "type": "string",
+            "description": "Workspace local time, YYYY-MM-DD HH:MM."
+          },
+          "resolutionCycles": {
+            "type": "integer"
+          },
+          "lastResolvedLocal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One REPEATABLE READ snapshot: totals, breakdowns and rows read the same SQL source as the export. Rows are the first previewLimit in export order; totals cover every row.",
+        "required": [
+          "reportType",
+          "reportLabel",
+          "reportTypes",
+          "header",
+          "asOf",
+          "filters",
+          "filterOptions",
+          "totals",
+          "byStatus",
+          "byPriority",
+          "byChannel",
+          "byCategory",
+          "byOwner",
+          "validation",
+          "rows",
+          "previewLimit",
+          "exportMaxRows",
+          "exportable",
+          "notice"
+        ],
+        "properties": {
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "operational"
+            ]
+          },
+          "reportLabel": {
+            "type": "string"
+          },
+          "reportTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportTypeOption"
+            }
+          },
+          "header": {
+            "$ref": "#/components/schemas/ReportHeader"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/ReportAppliedFilters"
+          },
+          "filterOptions": {
+            "$ref": "#/components/schemas/DashboardFilterOptions"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ReportTotals"
+          },
+          "byStatus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportStatusCount"
+            }
+          },
+          "byPriority": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byChannel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byCategory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byOwner": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportValidationItem"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportRow"
+            }
+          },
+          "previewLimit": {
+            "type": "integer"
+          },
+          "exportMaxRows": {
+            "type": "integer"
+          },
+          "exportable": {
+            "type": "boolean"
+          },
+          "notice": {
+            "type": "string"
+          }
+        }
+      },
+      "ReportExportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reportType",
+          "periodStart",
+          "periodEnd"
+        ],
+        "properties": {
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "operational",
+              "bi_regulator"
+            ],
+            "description": "`bi_regulator` answers 422 regulator_mapping_unavailable."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date",
+            "description": "Inclusive; >= periodStart; at most 366 days."
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "status": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": "string",
+            "description": "Member UUID or `unassigned`."
+          },
+          "channel": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "category": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "priority": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          }
+        }
+      },
+      "ReportRunFilters": {
+        "type": "object",
+        "description": "Validated filters of the run (null = not filtered). Empty object for runs created before D10.",
+        "properties": {
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportRunList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "limit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportRun"
+            }
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportExportResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run",
+          "replayed"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/ReportRun"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "responses": {
@@ -4882,6 +5561,26 @@
       },
       "ScannerUnavailable": {
         "description": "scanner_unavailable (clamd not configured/unreachable, file deleted, not bound) or dependency_unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RegulatorMappingUnavailable": {
+        "description": "Official BI / regulator report requested: held until a verified mapping exists (regulator_mapping_unavailable). Nothing is created.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ReportExpired": {
+        "description": "The report artifact expired (report_expired); create a new export.",
         "content": {
           "application/json": {
             "schema": {
@@ -6249,7 +6948,9 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           }
-        }
+        },
+        "summary": "Report run metadata",
+        "description": "report.view, this workspace only."
       }
     },
     "/api/v1/workspaces/{workspace_id}/dashboard": {
@@ -8108,6 +8809,310 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/reports/preview": {
+      "get": {
+        "operationId": "previewReport",
+        "summary": "Operational report preview over the whole scope (D10)",
+        "description": "report.view (CS, Lead CS). Same SQL source as the export. Filter values must belong to this workspace (422 + field).",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "periodStart",
+            "in": "query",
+            "required": true,
+            "description": "First local day (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "periodEnd",
+            "in": "query",
+            "required": true,
+            "description": "Last local day, inclusive; at most 366 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "reportType",
+            "in": "query",
+            "required": false,
+            "description": "`operational` (default). `bi_regulator` = 422 regulator_mapping_unavailable.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "operational",
+                "bi_regulator"
+              ]
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "description": "Date basis.",
+            "schema": {
+              "$ref": "#/components/schemas/ReportBasis"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated TicketStatusCode values; absent = all.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "Member UUID or `unassigned`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "validation_failed (+ field) or regulator_mapping_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs": {
+      "get": {
+        "operationId": "listReportRuns",
+        "summary": "Latest report runs of this workspace (D10)",
+        "description": "report.view. Newest first, at most `limit`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportRunList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createReportRun",
+        "summary": "Export the operational report as CSV (D10)",
+        "description": "report.view (no export-specific permission exists in the D01 catalog). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ReportIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay (replayed=true)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportExportResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Run created (succeeded or failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportExportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "description": "validation_failed (+ field) or regulator_mapping_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content": {
+      "get": {
+        "operationId": "downloadReportRun",
+        "summary": "Download the CSV of a succeeded run (D10)",
+        "description": "Membership + report.view re-checked on every request; workspace-scoped; hash verified before sending; expired = 410. UTF-8 with BOM, CRLF, every cell quoted, formula-leading cells prefixed with '. Audited (report.download). Headers: Content-Disposition attachment, X-Content-SHA256, Cache-Control no-store, CSP sandbox.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ReportRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV bytes",
+            "headers": {
+              "X-Content-SHA256": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/ReportExpired"
           }
         }
       }

@@ -7,6 +7,7 @@ pub mod health;
 pub mod intake;
 pub mod integrations;
 pub mod members;
+pub mod reports;
 pub mod saved_views;
 pub mod session;
 pub mod settings;
@@ -107,9 +108,16 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",
     ),
+    ("get", "/api/v1/workspaces/{workspace_id}/reports/preview"),
+    ("get", "/api/v1/workspaces/{workspace_id}/report-runs"),
+    ("post", "/api/v1/workspaces/{workspace_id}/report-runs"),
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content",
     ),
     (
         "get",
@@ -284,7 +292,19 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
-            get(tickets::report_run),
+            get(reports::get_run),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/reports/preview",
+            get(reports::preview),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/report-runs",
+            get(reports::list_runs).post(reports::create_run),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content",
+            get(reports::download),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",

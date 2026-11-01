@@ -40,6 +40,13 @@ pub enum AppError {
     /// request. Nothing was created.
     #[error("idempotency_conflict")]
     IdempotencyConflict,
+    /// An official BI / regulator report was requested. It stays held until a verified
+    /// mapping exists (D01); nothing was created.
+    #[error("regulator_mapping_unavailable")]
+    RegulatorMappingUnavailable,
+    /// The report artifact is past its expiry. Request a new export.
+    #[error("report_expired")]
+    ReportExpired,
     #[error("uat_not_available")]
     UatNotAvailable,
     /// Upload larger than the configured cap. Nothing was kept.
@@ -110,6 +117,16 @@ impl AppError {
                 StatusCode::CONFLICT,
                 "idempotency_conflict",
                 "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada data baru yang disimpan.",
+            ),
+            AppError::RegulatorMappingUnavailable => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "regulator_mapping_unavailable",
+                "Ekspor resmi BI ditahan: format, kode dan field wajib belum diverifikasi. Gunakan rekap operasional.",
+            ),
+            AppError::ReportExpired => (
+                StatusCode::GONE,
+                "report_expired",
+                "Berkas laporan sudah kedaluwarsa. Buat ekspor baru.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,

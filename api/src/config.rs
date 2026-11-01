@@ -85,6 +85,9 @@ pub struct Config {
     pub outbox_worker: bool,
     /// Worker poll interval in ms (`ITSM_OUTBOX_POLL_MS`, 200–60000, default 2000).
     pub outbox_poll_ms: u64,
+    /// Most rows one operational report export may hold (`ITSM_REPORT_MAX_ROWS`, 1–200000,
+    /// default 50000). A larger result is recorded as a failed run, never truncated.
+    pub report_max_rows: i64,
 }
 
 impl Config {
@@ -193,6 +196,17 @@ impl Config {
                 })?,
         };
 
+        let report_max_rows = match optional("ITSM_REPORT_MAX_ROWS") {
+            None => 50_000,
+            Some(v) => v
+                .parse::<i64>()
+                .ok()
+                .filter(|n| (1..=200_000).contains(n))
+                .ok_or(ConfigError::Invalid {
+                    name: "ITSM_REPORT_MAX_ROWS",
+                })?,
+        };
+
         Ok(Config {
             environment,
             access_mode,
@@ -204,6 +218,7 @@ impl Config {
             attachment_max_bytes,
             outbox_worker,
             outbox_poll_ms,
+            report_max_rows,
         })
     }
 }
