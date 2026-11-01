@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { allowedPages, drilldownHash, filterToQuery, parseHash, toHash } from './routes';
+import {
+  allowedPages,
+  dashboardQuery,
+  drilldownHash,
+  filterToQuery,
+  hasDashboardFilter,
+  parseDashboardQuery,
+  parseHash,
+  toHash,
+} from './routes';
 
 describe('routes', () => {
   it('round-trips workspace and page through the hash', () => {
@@ -41,5 +50,30 @@ describe('routes', () => {
     expect(q.get('receivedFrom')).toBe('2026-10-31T17:00:00.000000Z');
     expect(filterToQuery({})).toBe('');
     expect(toHash({ workspaceId: id, page: 'tickets', query: '' })).toBe(`#/w/${id}/tickets`);
+  });
+
+  it('keeps dashboard period and filters in a canonical URL query', () => {
+    const id = '7f1c2a8e-0000-4000-8000-000000000001';
+    const ch = '7f1c2a8e-0000-4000-8000-0000000000c1';
+    // Order and empty values in a hand-written link do not matter; unknown period falls back.
+    const p = parseDashboardQuery(`priority=none&owner=unassigned&channel=${ch}&category=&period=this_month`);
+    expect(p).toEqual({
+      period: 'this_month',
+      filters: { owner: 'unassigned', channel: ch, category: null, priority: 'none' },
+    });
+    expect(dashboardQuery(p)).toBe(`period=this_month&owner=unassigned&channel=${ch}&priority=none`);
+    expect(hasDashboardFilter(p)).toBe(true);
+    // Reload: the hash parses back to the same params.
+    const hash = toHash({ workspaceId: id, page: 'dashboard', query: dashboardQuery(p) });
+    expect(parseDashboardQuery(parseHash(hash).query)).toEqual(p);
+    const none = parseDashboardQuery('period=7d');
+    expect(none.period).toBe('today');
+    expect(hasDashboardFilter(none)).toBe(false);
+    expect(dashboardQuery(none)).toBe('period=today');
+  });
+
+  it('carries channel and category in drilldowns', () => {
+    const q = new URLSearchParams(filterToQuery({ channel: 'none', category: 'c1', priority: ['p1', 'p2'] }));
+    expect([q.get('channel'), q.get('category'), q.get('priority')]).toEqual(['none', 'c1', 'p1,p2']);
   });
 });

@@ -117,6 +117,7 @@ const CATALOG_SEED: &[(&str, &str, &str)] = &[
     ("products", "produk_uji", "Produk uji (dummy)"),
     ("receiving_units", "unit_uji", "Unit penerima uji (dummy)"),
     ("regions", "wilayah_uji", "Wilayah uji (dummy)"),
+    ("categories", "kategori_uji_b", "Kategori uji B (dummy)"),
 ];
 
 async fn seed_reference_data(tx: &mut sqlx::PgConnection, ws: Uuid) -> Result<(), sqlx::Error> {
@@ -427,7 +428,9 @@ pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, Se
         if existing > 0 {
             continue;
         }
-        for &(subject, status, owner, channel, priority, recv_h, resolved_h, reopened_h) in rows {
+        for (i, &(subject, status, owner, channel, priority, recv_h, resolved_h, reopened_h)) in
+            rows.iter().enumerate()
+        {
             let owner = match owner {
                 1 => Some(cs),
                 2 => Some(lead),
@@ -435,10 +438,11 @@ pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, Se
             };
             let id: Uuid = sqlx::query_scalar(
                 "INSERT INTO tickets (workspace_id, subject, chronology, received_at, created_by, \
-                   owner_user_id, intake_channel_id, priority_id) \
+                   owner_user_id, intake_channel_id, priority_id, category_id) \
                  VALUES ($1, $2, 'Kronologi uji (dummy).', now() - make_interval(hours => $3), $4, $5, \
                    (SELECT id FROM intake_channels WHERE workspace_id = $1 AND code = $6), \
-                   (SELECT id FROM priorities WHERE workspace_id = $1 AND code = $7)) \
+                   (SELECT id FROM priorities WHERE workspace_id = $1 AND code = $7), \
+                   (SELECT id FROM categories WHERE workspace_id = $1 AND code = $8)) \
                  RETURNING id",
             )
             .bind(ws)
@@ -448,6 +452,7 @@ pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, Se
             .bind(owner)
             .bind(channel)
             .bind(priority)
+            .bind(uat_category(i))
             .fetch_one(&mut *tx)
             .await?;
             if let Some(h) = resolved_h {
@@ -466,6 +471,16 @@ pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, Se
     }
     tx.commit().await?;
     Ok(created)
+}
+
+/// Spreads dummy tickets over two test categories and "not recorded", so the dashboard
+/// category breakdown and filter have something to show.
+pub fn uat_category(index: usize) -> Option<&'static str> {
+    match index % 3 {
+        0 => Some("kategori_uji"),
+        1 => Some("kategori_uji_b"),
+        _ => None,
+    }
 }
 
 async fn event(

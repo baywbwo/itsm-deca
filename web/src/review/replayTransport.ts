@@ -27,9 +27,10 @@ function zeroed(body: unknown): unknown {
   d.statusDistribution = counts(d.statusDistribution, ['count']);
   d.picLoad = [];
   d.channels = [];
+  d.categories = [];
   d.age = counts(d.age, ['count']);
   d.trend = counts(d.trend, ['received', 'resolved']);
-  d.attention = { total: 0, items: [] };
+  d.attention = { rule: 'operational_rule', total: 0, limit: 10, items: [] };
   return d;
 }
 
@@ -68,6 +69,14 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
     }
     if (dash && scenario === 'forbidden') {
       return { status: 403, body: { error: { code: 'forbidden', message: 'Simulasi review: tidak diizinkan.' } }, requestId: 'review-simulasi' };
+    }
+    if (dash && !f.responses[key]) {
+      // Only single filters are recorded; a combination is not invented from other answers.
+      return {
+        status: 503,
+        body: { error: { code: 'dependency_unavailable', message: 'Paket review: kombinasi filter ini tidak direkam.' } },
+        requestId: 'review-tidak-direkam',
+      };
     }
     if (!hit) return { status: 404, body: null, requestId: null };
     const body = dash && scenario === 'empty' && hit.status === 200 ? zeroed(hit.body) : structuredClone(hit.body);

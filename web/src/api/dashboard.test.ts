@@ -15,8 +15,20 @@ function dashboardFixture(workspaceId = WS_A, key: Dashboard['period']['key'] = 
     workspaceCode: workspaceId === WS_A ? 'DUMA' : 'DUMB',
     asOf: '2026-11-01T07:00:00.000000Z',
     period: {
-      key, basis: 'received', timezone: 'Asia/Jakarta', startDate: '2026-11-01', endDate: '2026-11-01',
+      key, timezone: 'Asia/Jakarta', startDate: '2026-11-01', endDate: '2026-11-01',
       startAt: '2026-10-31T17:00:00.000000Z', endAt: '2026-11-01T17:00:00.000000Z',
+    },
+    filters: { owner: null, channel: null, category: null, priority: null },
+    filterOptions: {
+      owners: [{ id: WS_A, code: null, label: 'CS Dummy', active: true }],
+      channels: [], categories: [], priorities: [],
+    },
+    metricBasis: {
+      active: 'current_status', unassigned: 'current_status', pendingCustomer: 'current_status',
+      receivedInPeriod: 'received_at', resolvedInPeriod: 'resolution_event',
+      resolvedTicketsInPeriod: 'resolution_event_distinct_ticket', statusDistribution: 'current_status',
+      picLoad: 'current_status', age: 'current_status', channels: 'received_at', categories: 'received_at',
+      trendReceived: 'received_at', trendResolved: 'resolution_event', attention: 'current_status',
     },
     slaConfigured: false,
     totals: {
@@ -32,10 +44,11 @@ function dashboardFixture(workspaceId = WS_A, key: Dashboard['period']['key'] = 
       { status: { code: 'resolved', label: 'Terselesaikan', selectable: true, archived: false }, active: false, count: 1, filter },
     ],
     picLoad: [{ userId: null, displayName: null, memberActive: true, activeTickets: 2, filter }],
-    channels: [{ channelId: null, code: null, label: null, count: 3 }],
+    channels: [{ id: null, code: null, label: null, count: 3, filter }],
+    categories: [{ id: null, code: null, label: null, count: 3, filter }],
     age: [{ key: 'lt_1d', label: '< 1 hari', count: 2 }],
     trend: [{ date: '2026-11-01', received: 3, resolved: 1 }],
-    attention: { total: 0, limit: 10, items: [] },
+    attention: { rule: 'operational_rule', total: 0, limit: 10, items: [] },
   };
 }
 
@@ -76,6 +89,13 @@ describe('dashboard api', () => {
     expect(isDashboard(broken)).toBe(false);
     expect(isDashboard({ ...dashboardFixture(), period: { ...dashboardFixture().period, key: '7d' } })).toBe(false);
     expect(isDashboard({ ...dashboardFixture(), attention: { total: 0, items: [{}] } })).toBe(false);
+    // The new contract parts are checked too: basis enum, filter echo, nullable drilldowns only.
+    const fx = dashboardFixture();
+    expect(isDashboard({ ...fx, metricBasis: { ...fx.metricBasis, picLoad: 'received' } })).toBe(false);
+    expect(isDashboard({ ...fx, filters: { ...fx.filters, owner: 3 } })).toBe(false);
+    expect(isDashboard({ ...fx, drilldown: { ...fx.drilldown, active: null } })).toBe(false);
+    expect(isDashboard({ ...fx, drilldown: { ...fx.drilldown, unassigned: null, attention: null } })).toBe(true);
+    expect(isDashboard({ ...fx, categories: undefined })).toBe(false);
     const { api } = fake({
       [`GET /api/v1/workspaces/${WS_A}/dashboard?period=today`]: { status: 200, body: broken, requestId: null },
     });
@@ -93,6 +113,20 @@ describe('dashboard api', () => {
     });
     await expect(api.getDashboard(WS_B, 'today')).rejects.toMatchObject({ status: 404, code: 'not_found' });
     await expect(api.getDashboard(WS_A, 'this_month')).rejects.toMatchObject({ status: 400, code: 'invalid_request' });
+  });
+});
+
+describe('dashboard filters', () => {
+  it('sends the canonical filter query and keeps it in the request key', async () => {
+    const q = 'period=today&owner=unassigned&priority=none';
+    const body = { ...dashboardFixture(), filters: { owner: 'unassigned', channel: null, category: null, priority: 'none' } };
+    const { api, seen } = fake({
+      [`GET /api/v1/workspaces/${WS_A}/dashboard?${q}`]: { status: 200, body, requestId: 'r2' },
+    });
+    const d = await api.getDashboard(WS_A, q);
+    expect(d.filters.owner).toBe('unassigned');
+    expect(seen.map((r) => r.path)).toEqual([`/api/v1/workspaces/${WS_A}/dashboard?${q}`]);
+    expect(dashboardKey(WS_A, q)).not.toBe(dashboardKey(WS_A, 'period=today'));
   });
 });
 

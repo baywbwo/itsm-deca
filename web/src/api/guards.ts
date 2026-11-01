@@ -81,6 +81,16 @@ const TOTALS = [
   'resolvedTicketsInPeriod',
 ] as const;
 
+const FILTER_KEYS = ['owner', 'channel', 'category', 'priority'] as const;
+const BASES = ['current_status', 'received_at', 'resolution_event', 'resolution_event_distinct_ticket'];
+const BASIS_KEYS = [
+  'active', 'unassigned', 'pendingCustomer', 'receivedInPeriod', 'resolvedInPeriod', 'resolvedTicketsInPeriod',
+  'statusDistribution', 'picLoad', 'age', 'channels', 'categories', 'trendReceived', 'trendResolved', 'attention',
+] as const;
+const DRILLS = ['active', 'pendingCustomer', 'receivedInPeriod', 'resolvedInPeriod'] as const;
+const isOption = (o: unknown) => isObj(o) && isStr(o.id) && isStrOrNull(o.code) && isStr(o.label) && typeof o.active === 'boolean';
+const isDimension = (c: unknown) => isObj(c) && isStrOrNull(c.id) && isStrOrNull(c.label) && isNum(c.count) && isFilter(c.filter);
+
 /** Shape check of the dashboard aggregate; numbers must be numbers, lists must be lists. */
 export function isDashboard(v: unknown): v is Dashboard {
   if (!isObj(v) || !isStr(v.workspaceId) || !isStr(v.workspaceCode) || !isStr(v.asOf)) return false;
@@ -90,14 +100,23 @@ export function isDashboard(v: unknown): v is Dashboard {
   const t = v.totals;
   if (!isObj(t) || !TOTALS.every((k) => isNum(t[k]))) return false;
   const a = v.attention;
+  const f = v.filters;
+  const o = v.filterOptions;
+  const b = v.metricBasis;
+  const dr = v.drilldown;
   return (
-    typeof v.slaConfigured === 'boolean' && isObj(v.drilldown) &&
+    isObj(f) && FILTER_KEYS.every((k) => isStrOrNull(f[k])) &&
+    isObj(o) && (['owners', 'channels', 'categories', 'priorities'] as const).every((k) => isArr(o[k], isOption)) &&
+    isObj(b) && BASIS_KEYS.every((k) => BASES.includes(b[k] as string)) &&
+    isObj(dr) && DRILLS.every((k) => isFilter(dr[k])) &&
+    (dr.unassigned === null || isFilter(dr.unassigned)) && (dr.attention === null || isFilter(dr.attention)) &&
+    typeof v.slaConfigured === 'boolean' &&
     isArr(v.statusDistribution, (s) => isObj(s) && isStatus(s.status) && isNum(s.count) && isFilter(s.filter)) &&
     isArr(v.picLoad, (r) => isObj(r) && isStrOrNull(r.userId) && isStrOrNull(r.displayName) && isNum(r.activeTickets)) &&
-    isArr(v.channels, (c) => isObj(c) && isStrOrNull(c.label) && isNum(c.count)) &&
+    isArr(v.channels, isDimension) && isArr(v.categories, isDimension) &&
     isArr(v.age, (b) => isObj(b) && isStr(b.label) && isNum(b.count)) &&
     isArr(v.trend, (d) => isObj(d) && isStr(d.date) && isNum(d.received) && isNum(d.resolved)) &&
-    isObj(a) && isNum(a.total) &&
+    isObj(a) && a.rule === 'operational_rule' && isNum(a.total) &&
     isArr(a.items, (i) => isObj(i) && isStr(i.id) && isStr(i.displayNumber) && isStr(i.subject) && isStatus(i.status) && isNum(i.ageSeconds))
   );
 }

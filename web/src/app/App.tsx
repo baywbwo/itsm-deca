@@ -217,7 +217,7 @@ function Content({ api, scope, page, pages, query, uat, firstWorkspace, onRetry,
 function Page({ id, api, data, query, uat }: { id: PageId; api: Api; data: ScopeData; query: string; uat: boolean }) {
   switch (id) {
     case 'dashboard':
-      return <DashboardPage api={api} workspace={data.workspace} uat={uat}
+      return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;

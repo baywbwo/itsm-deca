@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.4.0-d05",
+    "version": "0.5.0-d05",
     "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
@@ -301,11 +301,13 @@
       },
       "TicketFilter": {
         "type": "object",
-        "description": "Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. Time bounds are half-open [from, before).",
+        "description": "Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before).",
         "properties": {
           "status": { "type": "array", "items": { "$ref": "#/components/schemas/TicketStatusCode" } },
           "owner": { "type": "string", "description": "Member user UUID, or the literal `unassigned`.", "examples": ["unassigned"] },
-          "priority": { "type": "array", "items": { "type": "string" } },
+          "channel": { "type": "string", "description": "Intake channel UUID, or the literal `none`.", "examples": ["none"] },
+          "category": { "type": "string", "description": "Category UUID, or the literal `none`.", "examples": ["none"] },
+          "priority": { "type": "array", "description": "Priority UUIDs (any of), or [`none`].", "items": { "type": "string" } },
           "receivedFrom": { "type": "string", "format": "date-time" },
           "receivedBefore": { "type": "string", "format": "date-time" },
           "resolvedFrom": { "type": "string", "format": "date-time" },
@@ -318,10 +320,10 @@
       },
       "DashboardPeriod": {
         "type": "object",
-        "required": ["key", "basis", "timezone", "startDate", "endDate", "startAt", "endAt"],
+        "description": "Period bounds. Which date each number uses is given per metric in Dashboard.metricBasis.",
+        "required": ["key", "timezone", "startDate", "endDate", "startAt", "endAt"],
         "properties": {
           "key": { "$ref": "#/components/schemas/DashboardPeriodKey" },
-          "basis": { "type": "string", "enum": ["received"] },
           "timezone": { "type": "string", "examples": ["Asia/Jakarta"] },
           "startDate": { "type": "string", "format": "date", "description": "First local day (inclusive)." },
           "endDate": { "type": "string", "format": "date", "description": "Last local day (inclusive)." },
@@ -329,17 +331,74 @@
           "endAt": { "type": "string", "format": "date-time", "description": "Exclusive end instant (UTC)." }
         }
       },
+      "DashboardAppliedFilters": {
+        "type": "object",
+        "description": "Echo of the shared filters applied to every number; null = no restriction.",
+        "required": ["owner", "channel", "category", "priority"],
+        "properties": {
+          "owner": { "type": ["string", "null"], "description": "Member user UUID or `unassigned`." },
+          "channel": { "type": ["string", "null"], "description": "Intake channel UUID or `none`." },
+          "category": { "type": ["string", "null"], "description": "Category UUID or `none`." },
+          "priority": { "type": ["string", "null"], "description": "Priority UUID or `none`." }
+        }
+      },
+      "DashboardFilterOption": {
+        "type": "object",
+        "required": ["id", "code", "label", "active"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "code": { "type": ["string", "null"], "description": "Null for people." },
+          "label": { "type": "string" },
+          "active": { "type": "boolean", "description": "False for an inactive membership/catalog row (still filterable for history)." }
+        }
+      },
+      "DashboardFilterOptions": {
+        "type": "object",
+        "description": "Filter values scoped to this workspace: members (active, or holding tickets) and catalog rows.",
+        "required": ["owners", "channels", "categories", "priorities"],
+        "properties": {
+          "owners": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardFilterOption" } },
+          "channels": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardFilterOption" } },
+          "categories": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardFilterOption" } },
+          "priorities": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardFilterOption" } }
+        }
+      },
+      "DashboardBasis": {
+        "type": "string",
+        "enum": ["current_status", "received_at", "resolution_event", "resolution_event_distinct_ticket"],
+        "description": "current_status = snapshot at asOf, not period-bound; received_at = received in the period; resolution_event = resolve events in the period (one per cycle, kept after reopen); resolution_event_distinct_ticket = distinct tickets with such an event."
+      },
+      "DashboardMetricBasis": {
+        "type": "object",
+        "required": ["active", "unassigned", "pendingCustomer", "receivedInPeriod", "resolvedInPeriod", "resolvedTicketsInPeriod", "statusDistribution", "picLoad", "age", "channels", "categories", "trendReceived", "trendResolved", "attention"],
+        "properties": {
+          "active": { "$ref": "#/components/schemas/DashboardBasis" },
+          "unassigned": { "$ref": "#/components/schemas/DashboardBasis" },
+          "pendingCustomer": { "$ref": "#/components/schemas/DashboardBasis" },
+          "receivedInPeriod": { "$ref": "#/components/schemas/DashboardBasis" },
+          "resolvedInPeriod": { "$ref": "#/components/schemas/DashboardBasis" },
+          "resolvedTicketsInPeriod": { "$ref": "#/components/schemas/DashboardBasis" },
+          "statusDistribution": { "$ref": "#/components/schemas/DashboardBasis" },
+          "picLoad": { "$ref": "#/components/schemas/DashboardBasis" },
+          "age": { "$ref": "#/components/schemas/DashboardBasis" },
+          "channels": { "$ref": "#/components/schemas/DashboardBasis" },
+          "categories": { "$ref": "#/components/schemas/DashboardBasis" },
+          "trendReceived": { "$ref": "#/components/schemas/DashboardBasis" },
+          "trendResolved": { "$ref": "#/components/schemas/DashboardBasis" },
+          "attention": { "$ref": "#/components/schemas/DashboardBasis" }
+        }
+      },
       "DashboardTotals": {
         "type": "object",
-        "description": "Aggregated server-side over the whole workspace scope, never over a page.",
+        "description": "Aggregated server-side over the whole workspace scope after the shared filters, never over a page.",
         "required": ["tickets", "active", "unassigned", "pendingCustomer", "receivedInPeriod", "resolvedInPeriod", "resolvedTicketsInPeriod"],
         "properties": {
-          "tickets": { "type": "integer", "minimum": 0, "description": "All tickets in the workspace, any status (snapshot)." },
+          "tickets": { "type": "integer", "minimum": 0, "description": "All tickets in scope, any status (snapshot)." },
           "active": { "type": "integer", "minimum": 0, "description": "new + open + pending_customer + pending_engineering now (snapshot, not period-bound)." },
           "unassigned": { "type": "integer", "minimum": 0, "description": "Active tickets without a PIC now." },
           "pendingCustomer": { "type": "integer", "minimum": 0, "description": "Tickets in pending_customer now." },
           "receivedInPeriod": { "type": "integer", "minimum": 0, "description": "Tickets with received_at in [startAt, endAt)." },
-          "resolvedInPeriod": { "type": "integer", "minimum": 0, "description": "Resolve events with occurred_at in the period; a later reopen does not remove them." },
+          "resolvedInPeriod": { "type": "integer", "minimum": 0, "description": "Resolve events (cycles) with occurred_at in the period, whatever the ticket's received_at; a later reopen does not remove them." },
           "resolvedTicketsInPeriod": { "type": "integer", "minimum": 0, "description": "Distinct tickets behind resolvedInPeriod." }
         }
       },
@@ -348,11 +407,11 @@
         "required": ["active", "unassigned", "pendingCustomer", "receivedInPeriod", "resolvedInPeriod", "attention"],
         "properties": {
           "active": { "$ref": "#/components/schemas/TicketFilter" },
-          "unassigned": { "$ref": "#/components/schemas/TicketFilter" },
+          "unassigned": { "oneOf": [{ "$ref": "#/components/schemas/TicketFilter" }, { "type": "null" }], "description": "Null when the PIC filter is a person (the number is 0 by definition)." },
           "pendingCustomer": { "$ref": "#/components/schemas/TicketFilter" },
           "receivedInPeriod": { "$ref": "#/components/schemas/TicketFilter" },
           "resolvedInPeriod": { "$ref": "#/components/schemas/TicketFilter" },
-          "attention": { "$ref": "#/components/schemas/TicketFilter" }
+          "attention": { "oneOf": [{ "$ref": "#/components/schemas/TicketFilter" }, { "type": "null" }], "description": "Null when the priority filter excludes every urgent/high priority." }
         }
       },
       "DashboardStatusCount": {
@@ -367,7 +426,7 @@
       },
       "DashboardPicLoad": {
         "type": "object",
-        "description": "One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null).",
+        "description": "Every active ticket in scope per PIC, whatever its received_at. One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null) unless the PIC filter is a person. With a PIC filter only that row is listed.",
         "required": ["userId", "displayName", "memberActive", "activeTickets", "filter"],
         "properties": {
           "userId": { "type": ["string", "null"], "format": "uuid" },
@@ -377,15 +436,16 @@
           "filter": { "$ref": "#/components/schemas/TicketFilter" }
         }
       },
-      "DashboardChannelCount": {
+      "DashboardDimensionCount": {
         "type": "object",
-        "description": "Tickets received in the period per intake channel; null channel = not recorded.",
-        "required": ["channelId", "code", "label", "count"],
+        "description": "Tickets received in the period per catalog value (intake channel or category); null id = not recorded. With a filter on that dimension only the selected value is listed.",
+        "required": ["id", "code", "label", "count", "filter"],
         "properties": {
-          "channelId": { "type": ["string", "null"], "format": "uuid" },
+          "id": { "type": ["string", "null"], "format": "uuid" },
           "code": { "type": ["string", "null"] },
           "label": { "type": ["string", "null"] },
-          "count": { "type": "integer", "minimum": 0 }
+          "count": { "type": "integer", "minimum": 0 },
+          "filter": { "$ref": "#/components/schemas/TicketFilter" }
         }
       },
       "DashboardAgeBucket": {
@@ -400,6 +460,7 @@
       },
       "DashboardTrendPoint": {
         "type": "object",
+        "description": "received = tickets by received_at; resolved = resolve events (cycles). Never summed.",
         "required": ["date", "received", "resolved"],
         "properties": {
           "date": { "type": "string", "format": "date" },
@@ -418,7 +479,7 @@
       },
       "DashboardAttentionTicket": {
         "type": "object",
-        "required": ["id", "number", "displayNumber", "subject", "status", "priority", "owner", "channel", "receivedAt", "ageSeconds"],
+        "required": ["id", "number", "displayNumber", "subject", "status", "priority", "owner", "channel", "category", "receivedAt", "ageSeconds"],
         "properties": {
           "id": { "type": "string", "format": "uuid" },
           "number": { "type": "integer", "minimum": 1 },
@@ -428,15 +489,17 @@
           "priority": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
           "owner": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
           "channel": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
+          "category": { "oneOf": [{ "$ref": "#/components/schemas/DashboardNamed" }, { "type": "null" }] },
           "receivedAt": { "type": "string", "format": "date-time" },
           "ageSeconds": { "type": "integer", "minimum": 0 }
         }
       },
       "DashboardAttention": {
         "type": "object",
-        "description": "Active urgent/high tickets, urgent first then oldest received; at most `limit` items, `total` over the scope.",
-        "required": ["total", "limit", "items"],
+        "description": "Operational rule, not an SLA: active urgent/high tickets in scope, urgent first then oldest received; at most `limit` items, `total` over the scope.",
+        "required": ["rule", "total", "limit", "items"],
         "properties": {
+          "rule": { "type": "string", "enum": ["operational_rule"] },
           "total": { "type": "integer", "minimum": 0 },
           "limit": { "type": "integer", "minimum": 0 },
           "items": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardAttentionTicket" } }
@@ -444,19 +507,23 @@
       },
       "Dashboard": {
         "type": "object",
-        "description": "Read-only snapshot from one REPEATABLE READ transaction. Synthetic dummy data in UAT.",
-        "required": ["workspaceId", "workspaceCode", "asOf", "period", "slaConfigured", "totals", "drilldown", "statusDistribution", "picLoad", "channels", "age", "trend", "attention"],
+        "description": "Read-only snapshot from one REPEATABLE READ transaction. The shared filters narrow every number, chart, table and drilldown using the ticket's current owner/channel/category/priority. Synthetic dummy data in UAT.",
+        "required": ["workspaceId", "workspaceCode", "asOf", "period", "filters", "filterOptions", "metricBasis", "slaConfigured", "totals", "drilldown", "statusDistribution", "picLoad", "channels", "categories", "age", "trend", "attention"],
         "properties": {
           "workspaceId": { "type": "string", "format": "uuid" },
           "workspaceCode": { "type": "string" },
           "asOf": { "type": "string", "format": "date-time" },
           "period": { "$ref": "#/components/schemas/DashboardPeriod" },
+          "filters": { "$ref": "#/components/schemas/DashboardAppliedFilters" },
+          "filterOptions": { "$ref": "#/components/schemas/DashboardFilterOptions" },
+          "metricBasis": { "$ref": "#/components/schemas/DashboardMetricBasis" },
           "slaConfigured": { "type": "boolean" },
           "totals": { "$ref": "#/components/schemas/DashboardTotals" },
           "drilldown": { "$ref": "#/components/schemas/DashboardDrilldowns" },
           "statusDistribution": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardStatusCount" } },
           "picLoad": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardPicLoad" } },
-          "channels": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardChannelCount" } },
+          "channels": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardDimensionCount" } },
+          "categories": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardDimensionCount" } },
           "age": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardAgeBucket" } },
           "trend": { "type": "array", "items": { "$ref": "#/components/schemas/DashboardTrendPoint" } },
           "attention": { "$ref": "#/components/schemas/DashboardAttention" }
@@ -683,7 +750,11 @@
         "security": [{ "sessionCookie": [] }],
         "parameters": [
           { "$ref": "#/components/parameters/WorkspaceId" },
-          { "name": "period", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/DashboardPeriodKey", "default": "today" } }
+          { "name": "period", "in": "query", "required": false, "schema": { "$ref": "#/components/schemas/DashboardPeriodKey", "default": "today" } },
+          { "name": "owner", "in": "query", "required": false, "description": "PIC: a member user UUID of this workspace, or `unassigned`.", "schema": { "type": "string" } },
+          { "name": "channel", "in": "query", "required": false, "description": "Intake channel UUID of this workspace, or `none`.", "schema": { "type": "string" } },
+          { "name": "category", "in": "query", "required": false, "description": "Category UUID of this workspace, or `none`.", "schema": { "type": "string" } },
+          { "name": "priority", "in": "query", "required": false, "description": "Priority UUID of this workspace, or `none`. Values outside the workspace, non-canonical UUIDs and empty values are 400 invalid_request.", "schema": { "type": "string" } }
         ],
         "responses": {
           "200": { "description": "Dashboard", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Dashboard" } } } },

@@ -115,9 +115,12 @@ export function createApi(transport: Transport) {
       get(ws(id), isWorkspace, signal),
     getMyPermissions: (id: string, signal?: AbortSignal): Promise<WorkspacePermissions> =>
       get(`${ws(id)}/permissions`, isWorkspacePermissions, signal),
-    /** Whole-scope aggregates for one workspace and period (server-side, not a page). */
-    getDashboard: (id: string, period: DashboardPeriodKey, signal?: AbortSignal): Promise<Dashboard> =>
-      get(`${ws(id)}/dashboard?period=${encodeURIComponent(period)}`, isDashboard, signal),
+    /**
+     * Whole-scope aggregates for one workspace, period and shared filters (server-side, not a
+     * page). `query` is the canonical dashboard query (`dashboardQuery`) or a bare period key.
+     */
+    getDashboard: (id: string, query: DashboardPeriodKey | string, signal?: AbortSignal): Promise<Dashboard> =>
+      get(`${ws(id)}/dashboard?${query.includes('=') ? query : `period=${encodeURIComponent(query)}`}`, isDashboard, signal),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders(): Record<string, string> {
       return csrfToken ? { 'X-CSRF-Token': csrfToken } : {};

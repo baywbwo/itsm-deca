@@ -6,6 +6,8 @@ import { PageHeader } from '../components/PageHeader';
 const FILTER_LABELS: Record<string, string> = {
   status: 'Status',
   owner: 'PIC',
+  channel: 'Kanal',
+  category: 'Kategori',
   priority: 'Prioritas',
   receivedFrom: 'Diterima sejak',
   receivedBefore: 'Diterima sebelum',

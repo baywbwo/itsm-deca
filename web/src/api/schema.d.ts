@@ -517,7 +517,7 @@ export interface components {
          * @enum {string}
          */
         DashboardPeriodKey: "today" | "last_7_days" | "this_month";
-        /** @description Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. Time bounds are half-open [from, before). */
+        /** @description Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before). */
         TicketFilter: {
             status?: components["schemas"]["TicketStatusCode"][];
             /**
@@ -525,6 +525,17 @@ export interface components {
              * @example unassigned
              */
             owner?: string;
+            /**
+             * @description Intake channel UUID, or the literal `none`.
+             * @example none
+             */
+            channel?: string;
+            /**
+             * @description Category UUID, or the literal `none`.
+             * @example none
+             */
+            category?: string;
+            /** @description Priority UUIDs (any of), or [`none`]. */
             priority?: string[];
             /** Format: date-time */
             receivedFrom?: string;
@@ -537,10 +548,9 @@ export interface components {
         };
         /** @enum {string} */
         TicketStatusCode: "new" | "open" | "pending_customer" | "pending_engineering" | "resolved" | "closed";
+        /** @description Period bounds. Which date each number uses is given per metric in Dashboard.metricBasis. */
         DashboardPeriod: {
             key: components["schemas"]["DashboardPeriodKey"];
-            /** @enum {string} */
-            basis: "received";
             /** @example Asia/Jakarta */
             timezone: string;
             /**
@@ -564,9 +574,57 @@ export interface components {
              */
             endAt: string;
         };
-        /** @description Aggregated server-side over the whole workspace scope, never over a page. */
+        /** @description Echo of the shared filters applied to every number; null = no restriction. */
+        DashboardAppliedFilters: {
+            /** @description Member user UUID or `unassigned`. */
+            owner: string | null;
+            /** @description Intake channel UUID or `none`. */
+            channel: string | null;
+            /** @description Category UUID or `none`. */
+            category: string | null;
+            /** @description Priority UUID or `none`. */
+            priority: string | null;
+        };
+        DashboardFilterOption: {
+            /** Format: uuid */
+            id: string;
+            /** @description Null for people. */
+            code: string | null;
+            label: string;
+            /** @description False for an inactive membership/catalog row (still filterable for history). */
+            active: boolean;
+        };
+        /** @description Filter values scoped to this workspace: members (active, or holding tickets) and catalog rows. */
+        DashboardFilterOptions: {
+            owners: components["schemas"]["DashboardFilterOption"][];
+            channels: components["schemas"]["DashboardFilterOption"][];
+            categories: components["schemas"]["DashboardFilterOption"][];
+            priorities: components["schemas"]["DashboardFilterOption"][];
+        };
+        /**
+         * @description current_status = snapshot at asOf, not period-bound; received_at = received in the period; resolution_event = resolve events in the period (one per cycle, kept after reopen); resolution_event_distinct_ticket = distinct tickets with such an event.
+         * @enum {string}
+         */
+        DashboardBasis: "current_status" | "received_at" | "resolution_event" | "resolution_event_distinct_ticket";
+        DashboardMetricBasis: {
+            active: components["schemas"]["DashboardBasis"];
+            unassigned: components["schemas"]["DashboardBasis"];
+            pendingCustomer: components["schemas"]["DashboardBasis"];
+            receivedInPeriod: components["schemas"]["DashboardBasis"];
+            resolvedInPeriod: components["schemas"]["DashboardBasis"];
+            resolvedTicketsInPeriod: components["schemas"]["DashboardBasis"];
+            statusDistribution: components["schemas"]["DashboardBasis"];
+            picLoad: components["schemas"]["DashboardBasis"];
+            age: components["schemas"]["DashboardBasis"];
+            channels: components["schemas"]["DashboardBasis"];
+            categories: components["schemas"]["DashboardBasis"];
+            trendReceived: components["schemas"]["DashboardBasis"];
+            trendResolved: components["schemas"]["DashboardBasis"];
+            attention: components["schemas"]["DashboardBasis"];
+        };
+        /** @description Aggregated server-side over the whole workspace scope after the shared filters, never over a page. */
         DashboardTotals: {
-            /** @description All tickets in the workspace, any status (snapshot). */
+            /** @description All tickets in scope, any status (snapshot). */
             tickets: number;
             /** @description new + open + pending_customer + pending_engineering now (snapshot, not period-bound). */
             active: number;
@@ -576,18 +634,20 @@ export interface components {
             pendingCustomer: number;
             /** @description Tickets with received_at in [startAt, endAt). */
             receivedInPeriod: number;
-            /** @description Resolve events with occurred_at in the period; a later reopen does not remove them. */
+            /** @description Resolve events (cycles) with occurred_at in the period, whatever the ticket's received_at; a later reopen does not remove them. */
             resolvedInPeriod: number;
             /** @description Distinct tickets behind resolvedInPeriod. */
             resolvedTicketsInPeriod: number;
         };
         DashboardDrilldowns: {
             active: components["schemas"]["TicketFilter"];
-            unassigned: components["schemas"]["TicketFilter"];
+            /** @description Null when the PIC filter is a person (the number is 0 by definition). */
+            unassigned: components["schemas"]["TicketFilter"] | null;
             pendingCustomer: components["schemas"]["TicketFilter"];
             receivedInPeriod: components["schemas"]["TicketFilter"];
             resolvedInPeriod: components["schemas"]["TicketFilter"];
-            attention: components["schemas"]["TicketFilter"];
+            /** @description Null when the priority filter excludes every urgent/high priority. */
+            attention: components["schemas"]["TicketFilter"] | null;
         };
         DashboardStatusCount: {
             status: components["schemas"]["TicketStatus"];
@@ -595,7 +655,7 @@ export interface components {
             count: number;
             filter: components["schemas"]["TicketFilter"];
         };
-        /** @description One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null). */
+        /** @description Every active ticket in scope per PIC, whatever its received_at. One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null) unless the PIC filter is a person. With a PIC filter only that row is listed. */
         DashboardPicLoad: {
             /** Format: uuid */
             userId: string | null;
@@ -604,13 +664,14 @@ export interface components {
             activeTickets: number;
             filter: components["schemas"]["TicketFilter"];
         };
-        /** @description Tickets received in the period per intake channel; null channel = not recorded. */
-        DashboardChannelCount: {
+        /** @description Tickets received in the period per catalog value (intake channel or category); null id = not recorded. With a filter on that dimension only the selected value is listed. */
+        DashboardDimensionCount: {
             /** Format: uuid */
-            channelId: string | null;
+            id: string | null;
             code: string | null;
             label: string | null;
             count: number;
+            filter: components["schemas"]["TicketFilter"];
         };
         /** @description Active tickets by age since received_at. Not an SLA breach. */
         DashboardAgeBucket: {
@@ -619,6 +680,7 @@ export interface components {
             label: string;
             count: number;
         };
+        /** @description received = tickets by received_at; resolved = resolve events (cycles). Never summed. */
         DashboardTrendPoint: {
             /** Format: date */
             date: string;
@@ -641,17 +703,20 @@ export interface components {
             priority: components["schemas"]["DashboardNamed"] | null;
             owner: components["schemas"]["DashboardNamed"] | null;
             channel: components["schemas"]["DashboardNamed"] | null;
+            category: components["schemas"]["DashboardNamed"] | null;
             /** Format: date-time */
             receivedAt: string;
             ageSeconds: number;
         };
-        /** @description Active urgent/high tickets, urgent first then oldest received; at most `limit` items, `total` over the scope. */
+        /** @description Operational rule, not an SLA: active urgent/high tickets in scope, urgent first then oldest received; at most `limit` items, `total` over the scope. */
         DashboardAttention: {
+            /** @enum {string} */
+            rule: "operational_rule";
             total: number;
             limit: number;
             items: components["schemas"]["DashboardAttentionTicket"][];
         };
-        /** @description Read-only snapshot from one REPEATABLE READ transaction. Synthetic dummy data in UAT. */
+        /** @description Read-only snapshot from one REPEATABLE READ transaction. The shared filters narrow every number, chart, table and drilldown using the ticket's current owner/channel/category/priority. Synthetic dummy data in UAT. */
         Dashboard: {
             /** Format: uuid */
             workspaceId: string;
@@ -659,12 +724,16 @@ export interface components {
             /** Format: date-time */
             asOf: string;
             period: components["schemas"]["DashboardPeriod"];
+            filters: components["schemas"]["DashboardAppliedFilters"];
+            filterOptions: components["schemas"]["DashboardFilterOptions"];
+            metricBasis: components["schemas"]["DashboardMetricBasis"];
             slaConfigured: boolean;
             totals: components["schemas"]["DashboardTotals"];
             drilldown: components["schemas"]["DashboardDrilldowns"];
             statusDistribution: components["schemas"]["DashboardStatusCount"][];
             picLoad: components["schemas"]["DashboardPicLoad"][];
-            channels: components["schemas"]["DashboardChannelCount"][];
+            channels: components["schemas"]["DashboardDimensionCount"][];
+            categories: components["schemas"]["DashboardDimensionCount"][];
             age: components["schemas"]["DashboardAgeBucket"][];
             trend: components["schemas"]["DashboardTrendPoint"][];
             attention: components["schemas"]["DashboardAttention"];
@@ -1184,6 +1253,14 @@ export interface operations {
         parameters: {
             query?: {
                 period?: components["schemas"]["DashboardPeriodKey"];
+                /** @description PIC: a member user UUID of this workspace, or `unassigned`. */
+                owner?: string;
+                /** @description Intake channel UUID of this workspace, or `none`. */
+                channel?: string;
+                /** @description Category UUID of this workspace, or `none`. */
+                category?: string;
+                /** @description Priority UUID of this workspace, or `none`. Values outside the workspace, non-canonical UUIDs and empty values are 400 invalid_request. */
+                priority?: string;
             };
             header?: never;
             path: {

@@ -1119,7 +1119,7 @@ async fn seed_reference_data_is_idempotent_and_labelled(pool: PgPool) {
     for (table, expected) in [
         ("priorities", 8_i64),
         ("intake_channels", 6),
-        ("categories", 2),
+        ("categories", 4),
         ("merchants", 2),
         ("integration_connections", 4),
         ("jira_assignees", 2),

@@ -20,10 +20,11 @@ export function EmptyState({ title, body, action }: { title: string; body: strin
   );
 }
 
-export function ErrorState({ title, body, onRetry, requestId }: {
+export function ErrorState({ title, body, onRetry, retryLabel = 'Coba lagi', requestId }: {
   title: string;
   body: string;
   onRetry?: (() => void) | undefined;
+  retryLabel?: string;
   requestId?: string | null | undefined;
 }) {
   return (
@@ -31,7 +32,7 @@ export function ErrorState({ title, body, onRetry, requestId }: {
       <h2>{title}</h2>
       <p>{body}</p>
       {requestId && <p className="tiny">ID permintaan: {requestId}</p>}
-      {onRetry && <Button onClick={onRetry}>Coba lagi</Button>}
+      {onRetry && <Button onClick={onRetry}>{retryLabel}</Button>}
     </div>
   );
 }

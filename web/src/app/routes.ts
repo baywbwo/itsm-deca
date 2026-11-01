@@ -1,4 +1,4 @@
-import type { PermissionCode, TicketFilter } from '../api/types';
+import type { DashboardPeriodKey, PermissionCode, TicketFilter } from '../api/types';
 
 export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'components';
 
@@ -69,6 +69,8 @@ export function filterToQuery(f: TicketFilter): string {
   const q = new URLSearchParams();
   if (f.status?.length) q.set('status', f.status.join(','));
   if (f.owner) q.set('owner', f.owner);
+  if (f.channel) q.set('channel', f.channel);
+  if (f.category) q.set('category', f.category);
   if (f.priority?.length) q.set('priority', f.priority.join(','));
   if (f.receivedFrom) q.set('receivedFrom', f.receivedFrom);
   if (f.receivedBefore) q.set('receivedBefore', f.receivedBefore);
@@ -79,3 +81,37 @@ export function filterToQuery(f: TicketFilter): string {
 
 export const drilldownHash = (workspaceId: string, f: TicketFilter) =>
   toHash({ workspaceId, page: 'tickets', query: filterToQuery(f) });
+
+export const DASHBOARD_FILTERS = ['owner', 'channel', 'category', 'priority'] as const;
+export type DashboardFilterKey = (typeof DASHBOARD_FILTERS)[number];
+
+/** Dashboard state kept in the URL so reload, back and shared links show the same numbers. */
+export interface DashboardParams {
+  period: DashboardPeriodKey;
+  /** Raw values (UUID or `unassigned`/`none`); the server validates them against the workspace. */
+  filters: Record<DashboardFilterKey, string | null>;
+}
+
+const PERIOD_KEYS: readonly string[] = ['today', 'last_7_days', 'this_month'];
+
+/** Unknown period → today; empty filter values are dropped (no filter). */
+export function parseDashboardQuery(query: string): DashboardParams {
+  const q = new URLSearchParams(query);
+  const p = q.get('period');
+  const period = (p && PERIOD_KEYS.includes(p) ? p : 'today') as DashboardPeriodKey;
+  const filters = Object.fromEntries(DASHBOARD_FILTERS.map((k) => [k, q.get(k) || null])) as DashboardParams['filters'];
+  return { period, filters };
+}
+
+/** Canonical query in a fixed order; the same params always give the same string. */
+export function dashboardQuery(p: DashboardParams): string {
+  const q = new URLSearchParams();
+  q.set('period', p.period);
+  for (const k of DASHBOARD_FILTERS) {
+    const v = p.filters[k];
+    if (v) q.set(k, v);
+  }
+  return q.toString();
+}
+
+export const hasDashboardFilter = (p: DashboardParams) => DASHBOARD_FILTERS.some((k) => p.filters[k]);
