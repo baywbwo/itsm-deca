@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-11-01T13:47:30.104Z",
-  "origin": "http://127.0.0.1:4183",
-  "backendSha": "cd9e32e3daf40c889449b56540ddcf91d2c695da",
+  "recordedAt": "2026-11-01T14:59:30.275Z",
+  "origin": "http://127.0.0.1:8080",
+  "backendSha": "7027cf8f47b1a000d9970ce1012fcb1c09378b37",
   "responses": {
     "GET /api/v1/meta": {
       "status": 200,
@@ -16,7 +16,7 @@
           "superadminProvesRbac": false
         }
       },
-      "requestId": "b28242ea-b43d-470d-856d-8f3d8fda6609"
+      "requestId": "ab3c1ade-e1cd-4ea8-8657-046f36b7efc8"
     },
     "GET /api/v1/session#anonymous": {
       "status": 401,
@@ -26,7 +26,7 @@
           "message": "Sesi tidak ada atau sudah berakhir."
         }
       },
-      "requestId": "f3c1fd08-084d-4d5d-b7d5-69727674662d"
+      "requestId": "b92951f1-84e8-4886-9fe7-6cd20834a75c"
     },
     "POST /api/v1/uat/session": {
       "status": 201,
@@ -39,7 +39,7 @@
         "uatSuperadmin": true,
         "csrfToken": "rekaman-token-disensor"
       },
-      "requestId": "9e1dd3e2-ff9f-4f01-81fe-e69a8f9e22ce"
+      "requestId": "7ef434cd-eceb-4421-a364-348aeea8cd19"
     },
     "GET /api/v1/session": {
       "status": 200,
@@ -51,7 +51,7 @@
         "banner": "Mode uji — Superadmin",
         "uatSuperadmin": true
       },
-      "requestId": "d8133f8b-87a4-4164-bebf-9e835da4080e"
+      "requestId": "32264609-eaf2-4ee5-8db8-15e13c41395e"
     },
     "GET /api/v1/workspaces": {
       "status": 200,
@@ -77,7 +77,7 @@
           }
         ]
       },
-      "requestId": "e159e291-f4f2-43be-9a7e-87e55be3df16"
+      "requestId": "8f5df166-b478-4e69-b3fb-c343bff37a3c"
     },
     "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b": {
       "status": 200,
@@ -90,7 +90,7 @@
         "version": 1,
         "myRole": null
       },
-      "requestId": "42fe24a3-8fac-4c80-bdb2-d4bf5729938a"
+      "requestId": "8014fc69-a90d-446f-8f2a-ed3cfb25e576"
     },
     "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b/permissions": {
       "status": 200,
@@ -120,7 +120,1436 @@
         ],
         "grants": []
       },
-      "requestId": "639ca789-e6cc-4466-b90c-7df90ffc4f5c"
+      "requestId": "69c9cb6d-b1d3-4c9b-96a1-7381ec9e7d54"
+    },
+    "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b/dashboard?period=today": {
+      "status": 200,
+      "body": {
+        "workspaceId": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+        "workspaceCode": "DUMA",
+        "asOf": "2026-11-01T14:59:30.205268Z",
+        "period": {
+          "key": "today",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-11-01",
+          "endDate": "2026-11-01",
+          "startAt": "2026-10-31T17:00:00.000000Z",
+          "endAt": "2026-11-01T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 14,
+          "active": 11,
+          "unassigned": 4,
+          "pendingCustomer": 2,
+          "receivedInPeriod": 8,
+          "resolvedInPeriod": 3,
+          "resolvedTicketsInPeriod": 3
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-31T17:00:00.000000Z",
+            "receivedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-31T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 2,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 3,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+            "displayName": "CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "657a2ea7-18c6-411d-8ab5-a638a2154c76"
+            }
+          },
+          {
+            "userId": "618548d3-1ed3-4a46-bcdc-377853cea374",
+            "displayName": "Lead CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "618548d3-1ed3-4a46-bcdc-377853cea374"
+            }
+          },
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 3
+          },
+          {
+            "channelId": "861fb641-5b9c-4e95-b648-db1a25084cd1",
+            "code": "email",
+            "label": "Email",
+            "count": 2
+          },
+          {
+            "channelId": "d4678ae5-54de-43cc-8465-3261237d7a76",
+            "code": "website",
+            "label": "Website",
+            "count": 2
+          },
+          {
+            "channelId": null,
+            "code": null,
+            "label": null,
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 6
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 2
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 3
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-11-01",
+            "received": 8,
+            "resolved": 3
+          }
+        ],
+        "attention": {
+          "total": 6,
+          "limit": 10,
+          "items": [
+            {
+              "id": "5304bc8d-32f2-460e-b4d9-4ba28a2e4eee",
+              "number": 7,
+              "displayNumber": "DUMA-7",
+              "subject": "Settlement merchant tertunda (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-31T12:56:31.238699Z",
+              "ageSeconds": 93778
+            },
+            {
+              "id": "38e441cd-57fa-4faa-84e0-534f25c00e24",
+              "number": 1,
+              "displayNumber": "DUMA-1",
+              "subject": "Saldo tidak masuk setelah top up (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": null,
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T12:56:31.238699Z",
+              "ageSeconds": 7378
+            },
+            {
+              "id": "8d7f08bd-5c66-4625-bcf9-e39d58e5c1e6",
+              "number": 10,
+              "displayNumber": "DUMA-10",
+              "subject": "Error API pembayaran, menunggu tim teknis (dummy)",
+              "status": {
+                "code": "pending_engineering",
+                "label": "Menunggu pekerjaan eksternal",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-28T10:56:31.238699Z",
+              "ageSeconds": 360178
+            },
+            {
+              "id": "12a83822-2a36-48e6-bc01-c9b7782f77cf",
+              "number": 5,
+              "displayNumber": "DUMA-5",
+              "subject": "Status penarikan dana belum berubah (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-10-30T12:56:31.238699Z",
+              "ageSeconds": 180178
+            },
+            {
+              "id": "98a79a34-0993-4e6f-9af4-c28348a24b07",
+              "number": 14,
+              "displayNumber": "DUMA-14",
+              "subject": "Kartu ditolak di EDC (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T04:56:31.238699Z",
+              "ageSeconds": 36178
+            },
+            {
+              "id": "b798340f-e82a-4a0b-ab6b-6eeefb01dc22",
+              "number": 2,
+              "displayNumber": "DUMA-2",
+              "subject": "Transaksi QRIS gagal, saldo terpotong (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-11-01T09:56:31.238699Z",
+              "ageSeconds": 18178
+            }
+          ]
+        }
+      },
+      "requestId": "1125ff36-3935-444b-9405-7b1d60f44410"
+    },
+    "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b/dashboard?period=last_7_days": {
+      "status": 200,
+      "body": {
+        "workspaceId": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+        "workspaceCode": "DUMA",
+        "asOf": "2026-11-01T14:59:30.216497Z",
+        "period": {
+          "key": "last_7_days",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-10-26",
+          "endDate": "2026-11-01",
+          "startAt": "2026-10-25T17:00:00.000000Z",
+          "endAt": "2026-11-01T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 14,
+          "active": 11,
+          "unassigned": 4,
+          "pendingCustomer": 2,
+          "receivedInPeriod": 13,
+          "resolvedInPeriod": 4,
+          "resolvedTicketsInPeriod": 4
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-25T17:00:00.000000Z",
+            "receivedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-25T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 2,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 3,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+            "displayName": "CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "657a2ea7-18c6-411d-8ab5-a638a2154c76"
+            }
+          },
+          {
+            "userId": "618548d3-1ed3-4a46-bcdc-377853cea374",
+            "displayName": "Lead CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "618548d3-1ed3-4a46-bcdc-377853cea374"
+            }
+          },
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 5
+          },
+          {
+            "channelId": "861fb641-5b9c-4e95-b648-db1a25084cd1",
+            "code": "email",
+            "label": "Email",
+            "count": 3
+          },
+          {
+            "channelId": "d4678ae5-54de-43cc-8465-3261237d7a76",
+            "code": "website",
+            "label": "Website",
+            "count": 4
+          },
+          {
+            "channelId": null,
+            "code": null,
+            "label": null,
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 6
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 2
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 3
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-10-26",
+            "received": 0,
+            "resolved": 1
+          },
+          {
+            "date": "2026-10-27",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-28",
+            "received": 1,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-29",
+            "received": 1,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-30",
+            "received": 1,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-31",
+            "received": 2,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-01",
+            "received": 8,
+            "resolved": 3
+          }
+        ],
+        "attention": {
+          "total": 6,
+          "limit": 10,
+          "items": [
+            {
+              "id": "5304bc8d-32f2-460e-b4d9-4ba28a2e4eee",
+              "number": 7,
+              "displayNumber": "DUMA-7",
+              "subject": "Settlement merchant tertunda (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-31T12:56:31.238699Z",
+              "ageSeconds": 93778
+            },
+            {
+              "id": "38e441cd-57fa-4faa-84e0-534f25c00e24",
+              "number": 1,
+              "displayNumber": "DUMA-1",
+              "subject": "Saldo tidak masuk setelah top up (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": null,
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T12:56:31.238699Z",
+              "ageSeconds": 7378
+            },
+            {
+              "id": "8d7f08bd-5c66-4625-bcf9-e39d58e5c1e6",
+              "number": 10,
+              "displayNumber": "DUMA-10",
+              "subject": "Error API pembayaran, menunggu tim teknis (dummy)",
+              "status": {
+                "code": "pending_engineering",
+                "label": "Menunggu pekerjaan eksternal",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-28T10:56:31.238699Z",
+              "ageSeconds": 360178
+            },
+            {
+              "id": "12a83822-2a36-48e6-bc01-c9b7782f77cf",
+              "number": 5,
+              "displayNumber": "DUMA-5",
+              "subject": "Status penarikan dana belum berubah (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-10-30T12:56:31.238699Z",
+              "ageSeconds": 180178
+            },
+            {
+              "id": "98a79a34-0993-4e6f-9af4-c28348a24b07",
+              "number": 14,
+              "displayNumber": "DUMA-14",
+              "subject": "Kartu ditolak di EDC (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T04:56:31.238699Z",
+              "ageSeconds": 36178
+            },
+            {
+              "id": "b798340f-e82a-4a0b-ab6b-6eeefb01dc22",
+              "number": 2,
+              "displayNumber": "DUMA-2",
+              "subject": "Transaksi QRIS gagal, saldo terpotong (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-11-01T09:56:31.238699Z",
+              "ageSeconds": 18178
+            }
+          ]
+        }
+      },
+      "requestId": "27675abb-1659-45bb-ae50-9116a79693f8"
+    },
+    "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b/dashboard?period=this_month": {
+      "status": 200,
+      "body": {
+        "workspaceId": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+        "workspaceCode": "DUMA",
+        "asOf": "2026-11-01T14:59:30.226969Z",
+        "period": {
+          "key": "this_month",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-11-01",
+          "endDate": "2026-11-30",
+          "startAt": "2026-10-31T17:00:00.000000Z",
+          "endAt": "2026-11-30T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 14,
+          "active": 11,
+          "unassigned": 4,
+          "pendingCustomer": 2,
+          "receivedInPeriod": 8,
+          "resolvedInPeriod": 3,
+          "resolvedTicketsInPeriod": 3
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-31T17:00:00.000000Z",
+            "receivedBefore": "2026-11-30T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-31T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-30T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 4,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 2,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 3,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+            "displayName": "CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "657a2ea7-18c6-411d-8ab5-a638a2154c76"
+            }
+          },
+          {
+            "userId": "618548d3-1ed3-4a46-bcdc-377853cea374",
+            "displayName": "Lead CS Alfa (dummy)",
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "618548d3-1ed3-4a46-bcdc-377853cea374"
+            }
+          },
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 4,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 3
+          },
+          {
+            "channelId": "861fb641-5b9c-4e95-b648-db1a25084cd1",
+            "code": "email",
+            "label": "Email",
+            "count": 2
+          },
+          {
+            "channelId": "d4678ae5-54de-43cc-8465-3261237d7a76",
+            "code": "website",
+            "label": "Website",
+            "count": 2
+          },
+          {
+            "channelId": null,
+            "code": null,
+            "label": null,
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 6
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 2
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 3
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-11-01",
+            "received": 8,
+            "resolved": 3
+          },
+          {
+            "date": "2026-11-02",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-03",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-04",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-05",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-06",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-07",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-08",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-09",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-10",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-11",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-12",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-13",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-14",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-15",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-16",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-17",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-18",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-19",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-20",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-21",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-22",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-23",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-24",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-25",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-26",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-27",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-28",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-29",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-30",
+            "received": 0,
+            "resolved": 0
+          }
+        ],
+        "attention": {
+          "total": 6,
+          "limit": 10,
+          "items": [
+            {
+              "id": "5304bc8d-32f2-460e-b4d9-4ba28a2e4eee",
+              "number": 7,
+              "displayNumber": "DUMA-7",
+              "subject": "Settlement merchant tertunda (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-31T12:56:31.238699Z",
+              "ageSeconds": 93778
+            },
+            {
+              "id": "38e441cd-57fa-4faa-84e0-534f25c00e24",
+              "number": 1,
+              "displayNumber": "DUMA-1",
+              "subject": "Saldo tidak masuk setelah top up (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "9f00d957-a773-45b3-a7c2-acf5e0d785a9",
+                "code": "urgent",
+                "label": "Mendesak"
+              },
+              "owner": null,
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T12:56:31.238699Z",
+              "ageSeconds": 7378
+            },
+            {
+              "id": "8d7f08bd-5c66-4625-bcf9-e39d58e5c1e6",
+              "number": 10,
+              "displayNumber": "DUMA-10",
+              "subject": "Error API pembayaran, menunggu tim teknis (dummy)",
+              "status": {
+                "code": "pending_engineering",
+                "label": "Menunggu pekerjaan eksternal",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "618548d3-1ed3-4a46-bcdc-377853cea374",
+                "code": null,
+                "label": "Lead CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-10-28T10:56:31.238699Z",
+              "ageSeconds": 360178
+            },
+            {
+              "id": "12a83822-2a36-48e6-bc01-c9b7782f77cf",
+              "number": 5,
+              "displayNumber": "DUMA-5",
+              "subject": "Status penarikan dana belum berubah (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-10-30T12:56:31.238699Z",
+              "ageSeconds": 180178
+            },
+            {
+              "id": "98a79a34-0993-4e6f-9af4-c28348a24b07",
+              "number": 14,
+              "displayNumber": "DUMA-14",
+              "subject": "Kartu ditolak di EDC (dummy)",
+              "status": {
+                "code": "open",
+                "label": "Ditangani",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": {
+                "id": "657a2ea7-18c6-411d-8ab5-a638a2154c76",
+                "code": null,
+                "label": "CS Alfa (dummy)"
+              },
+              "channel": {
+                "id": "47e72b05-7742-4c8a-bf69-5896f1f5d26c",
+                "code": "whatsapp",
+                "label": "WhatsApp"
+              },
+              "receivedAt": "2026-11-01T04:56:31.238699Z",
+              "ageSeconds": 36178
+            },
+            {
+              "id": "b798340f-e82a-4a0b-ab6b-6eeefb01dc22",
+              "number": 2,
+              "displayNumber": "DUMA-2",
+              "subject": "Transaksi QRIS gagal, saldo terpotong (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "b9e01591-0fb0-464e-b861-eb7e19caf49e",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "d4678ae5-54de-43cc-8465-3261237d7a76",
+                "code": "website",
+                "label": "Website"
+              },
+              "receivedAt": "2026-11-01T09:56:31.238699Z",
+              "ageSeconds": 18178
+            }
+          ]
+        }
+      },
+      "requestId": "721c2aae-c88a-4085-a46a-92d1d26ebe7d"
     },
     "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28": {
       "status": 200,
@@ -133,7 +1562,7 @@
         "version": 1,
         "myRole": null
       },
-      "requestId": "57616ec5-4341-4d5e-9f9c-007d7de08449"
+      "requestId": "3ffe5eab-88c3-45e6-ad4b-0e03b07a7c1b"
     },
     "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28/permissions": {
       "status": 200,
@@ -163,7 +1592,905 @@
         ],
         "grants": []
       },
-      "requestId": "a2e49725-4721-4bf6-bc7b-814aa2db9b26"
+      "requestId": "0fb56d4b-1bc4-417e-8d1f-8ce64cb43e78"
+    },
+    "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28/dashboard?period=today": {
+      "status": 200,
+      "body": {
+        "workspaceId": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+        "workspaceCode": "DUMB",
+        "asOf": "2026-11-01T14:59:30.245800Z",
+        "period": {
+          "key": "today",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-11-01",
+          "endDate": "2026-11-01",
+          "startAt": "2026-10-31T17:00:00.000000Z",
+          "endAt": "2026-11-01T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 3,
+          "active": 3,
+          "unassigned": 3,
+          "pendingCustomer": 1,
+          "receivedInPeriod": 2,
+          "resolvedInPeriod": 0,
+          "resolvedTicketsInPeriod": 0
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-31T17:00:00.000000Z",
+            "receivedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-31T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 0,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 0,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "b44e572c-9433-46ed-b6ee-e367033748cf",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 0
+          },
+          {
+            "channelId": "7435b73c-d764-4628-bf2f-95d70e07708c",
+            "code": "email",
+            "label": "Email",
+            "count": 1
+          },
+          {
+            "channelId": "289a6646-7406-4a08-afba-c3c7a1c32774",
+            "code": "website",
+            "label": "Website",
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 2
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 1
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 0
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-11-01",
+            "received": 2,
+            "resolved": 0
+          }
+        ],
+        "attention": {
+          "total": 1,
+          "limit": 10,
+          "items": [
+            {
+              "id": "70ba7296-f2f0-40a9-b072-2e1b6ec17f99",
+              "number": 1,
+              "displayNumber": "DUMB-1",
+              "subject": "Pengaduan workspace Beta (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "adb91320-fba8-4cf2-b711-22cd889b936a",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "7435b73c-d764-4628-bf2f-95d70e07708c",
+                "code": "email",
+                "label": "Email"
+              },
+              "receivedAt": "2026-11-01T10:56:31.238699Z",
+              "ageSeconds": 14579
+            }
+          ]
+        }
+      },
+      "requestId": "107be9d2-9a1b-42c2-8cde-7ac578f09afd"
+    },
+    "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28/dashboard?period=last_7_days": {
+      "status": 200,
+      "body": {
+        "workspaceId": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+        "workspaceCode": "DUMB",
+        "asOf": "2026-11-01T14:59:30.254379Z",
+        "period": {
+          "key": "last_7_days",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-10-26",
+          "endDate": "2026-11-01",
+          "startAt": "2026-10-25T17:00:00.000000Z",
+          "endAt": "2026-11-01T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 3,
+          "active": 3,
+          "unassigned": 3,
+          "pendingCustomer": 1,
+          "receivedInPeriod": 3,
+          "resolvedInPeriod": 0,
+          "resolvedTicketsInPeriod": 0
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-25T17:00:00.000000Z",
+            "receivedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-25T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-01T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 0,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 0,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "b44e572c-9433-46ed-b6ee-e367033748cf",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 1
+          },
+          {
+            "channelId": "7435b73c-d764-4628-bf2f-95d70e07708c",
+            "code": "email",
+            "label": "Email",
+            "count": 1
+          },
+          {
+            "channelId": "289a6646-7406-4a08-afba-c3c7a1c32774",
+            "code": "website",
+            "label": "Website",
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 2
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 1
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 0
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-10-26",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-27",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-28",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-29",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-30",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-10-31",
+            "received": 1,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-01",
+            "received": 2,
+            "resolved": 0
+          }
+        ],
+        "attention": {
+          "total": 1,
+          "limit": 10,
+          "items": [
+            {
+              "id": "70ba7296-f2f0-40a9-b072-2e1b6ec17f99",
+              "number": 1,
+              "displayNumber": "DUMB-1",
+              "subject": "Pengaduan workspace Beta (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "adb91320-fba8-4cf2-b711-22cd889b936a",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "7435b73c-d764-4628-bf2f-95d70e07708c",
+                "code": "email",
+                "label": "Email"
+              },
+              "receivedAt": "2026-11-01T10:56:31.238699Z",
+              "ageSeconds": 14579
+            }
+          ]
+        }
+      },
+      "requestId": "133e8948-52f7-4416-a100-258f5cf67ecf"
+    },
+    "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28/dashboard?period=this_month": {
+      "status": 200,
+      "body": {
+        "workspaceId": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+        "workspaceCode": "DUMB",
+        "asOf": "2026-11-01T14:59:30.262926Z",
+        "period": {
+          "key": "this_month",
+          "basis": "received",
+          "timezone": "Asia/Jakarta",
+          "startDate": "2026-11-01",
+          "endDate": "2026-11-30",
+          "startAt": "2026-10-31T17:00:00.000000Z",
+          "endAt": "2026-11-30T17:00:00.000000Z"
+        },
+        "slaConfigured": false,
+        "totals": {
+          "tickets": 3,
+          "active": 3,
+          "unassigned": 3,
+          "pendingCustomer": 1,
+          "receivedInPeriod": 2,
+          "resolvedInPeriod": 0,
+          "resolvedTicketsInPeriod": 0
+        },
+        "drilldown": {
+          "active": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ]
+          },
+          "unassigned": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "owner": "unassigned"
+          },
+          "pendingCustomer": {
+            "status": [
+              "pending_customer"
+            ]
+          },
+          "receivedInPeriod": {
+            "receivedFrom": "2026-10-31T17:00:00.000000Z",
+            "receivedBefore": "2026-11-30T17:00:00.000000Z"
+          },
+          "resolvedInPeriod": {
+            "resolvedFrom": "2026-10-31T17:00:00.000000Z",
+            "resolvedBefore": "2026-11-30T17:00:00.000000Z"
+          },
+          "attention": {
+            "status": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering"
+            ],
+            "priority": [
+              "urgent",
+              "high"
+            ]
+          }
+        },
+        "statusDistribution": [
+          {
+            "status": {
+              "code": "new",
+              "label": "Baru",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "new"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "open",
+              "label": "Ditangani",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "open"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_customer",
+              "label": "Menunggu pelanggan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 1,
+            "filter": {
+              "status": [
+                "pending_customer"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "pending_engineering",
+              "label": "Menunggu pekerjaan eksternal",
+              "selectable": true,
+              "archived": false
+            },
+            "active": true,
+            "count": 0,
+            "filter": {
+              "status": [
+                "pending_engineering"
+              ]
+            }
+          },
+          {
+            "status": {
+              "code": "resolved",
+              "label": "Terselesaikan",
+              "selectable": true,
+              "archived": false
+            },
+            "active": false,
+            "count": 0,
+            "filter": {
+              "status": [
+                "resolved"
+              ]
+            }
+          }
+        ],
+        "picLoad": [
+          {
+            "userId": null,
+            "displayName": null,
+            "memberActive": true,
+            "activeTickets": 3,
+            "filter": {
+              "status": [
+                "new",
+                "open",
+                "pending_customer",
+                "pending_engineering"
+              ],
+              "owner": "unassigned"
+            }
+          }
+        ],
+        "channels": [
+          {
+            "channelId": "b44e572c-9433-46ed-b6ee-e367033748cf",
+            "code": "whatsapp",
+            "label": "WhatsApp",
+            "count": 0
+          },
+          {
+            "channelId": "7435b73c-d764-4628-bf2f-95d70e07708c",
+            "code": "email",
+            "label": "Email",
+            "count": 1
+          },
+          {
+            "channelId": "289a6646-7406-4a08-afba-c3c7a1c32774",
+            "code": "website",
+            "label": "Website",
+            "count": 1
+          }
+        ],
+        "age": [
+          {
+            "key": "lt_1d",
+            "label": "< 1 hari",
+            "count": 2
+          },
+          {
+            "key": "d1_2",
+            "label": "1–2 hari",
+            "count": 1
+          },
+          {
+            "key": "gt_2d",
+            "label": "≥ 2 hari",
+            "count": 0
+          }
+        ],
+        "trend": [
+          {
+            "date": "2026-11-01",
+            "received": 2,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-02",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-03",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-04",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-05",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-06",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-07",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-08",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-09",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-10",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-11",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-12",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-13",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-14",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-15",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-16",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-17",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-18",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-19",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-20",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-21",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-22",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-23",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-24",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-25",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-26",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-27",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-28",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-29",
+            "received": 0,
+            "resolved": 0
+          },
+          {
+            "date": "2026-11-30",
+            "received": 0,
+            "resolved": 0
+          }
+        ],
+        "attention": {
+          "total": 1,
+          "limit": 10,
+          "items": [
+            {
+              "id": "70ba7296-f2f0-40a9-b072-2e1b6ec17f99",
+              "number": 1,
+              "displayNumber": "DUMB-1",
+              "subject": "Pengaduan workspace Beta (dummy)",
+              "status": {
+                "code": "new",
+                "label": "Baru",
+                "selectable": true,
+                "archived": false
+              },
+              "priority": {
+                "id": "adb91320-fba8-4cf2-b711-22cd889b936a",
+                "code": "high",
+                "label": "Tinggi"
+              },
+              "owner": null,
+              "channel": {
+                "id": "7435b73c-d764-4628-bf2f-95d70e07708c",
+                "code": "email",
+                "label": "Email"
+              },
+              "receivedAt": "2026-11-01T10:56:31.238699Z",
+              "ageSeconds": 14579
+            }
+          ]
+        }
+      },
+      "requestId": "6f92bcf2-3597-4fb1-be7f-b4bffc92fa87"
     },
     "GET #not_found": {
       "status": 404,
@@ -173,7 +2500,7 @@
           "message": "Data tidak ditemukan."
         }
       },
-      "requestId": "1b5d131c-f2a2-408f-b90d-c859b37d6c6d"
+      "requestId": "e46b6f6f-39b1-4827-b45a-8c5657a604ce"
     }
   }
 }
