@@ -1,0 +1,265 @@
+//! Server-side sessions with a synchronizer CSRF token.
+//!
+//! Tokens are 32 bytes from the OS CSPRNG; only their SHA-256 digests are stored.
+//! The CSRF token is compared in constant time. No custom cryptography.
+
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::request::Parts;
+use axum::http::{HeaderMap, Method, header};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Response};
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
+use subtle::ConstantTimeEq;
+use uuid::Uuid;
+
+use crate::AppState;
+use crate::error::AppError;
+
+pub const SESSION_TTL_HOURS: i32 = 8;
+pub const CSRF_HEADER: &str = "x-csrf-token";
+pub const UAT_ENTRY_HEADER: &str = "x-itsm-uat-entry";
+pub const UAT_ENTRY_PATH: &str = "/api/v1/uat/session";
+
+#[derive(Debug, Clone)]
+pub struct Session {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub uat_superadmin: bool,
+    csrf_hash: Vec<u8>,
+}
+
+/// A freshly issued pair of secrets, returned to the client once.
+pub struct IssuedSession {
+    pub token: String,
+    pub csrf_token: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TokenError {
+    #[error("os random source unavailable")]
+    Random,
+}
+
+fn random_token() -> Result<String, TokenError> {
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).map_err(|_| TokenError::Random)?;
+    Ok(URL_SAFE_NO_PAD.encode(buf))
+}
+
+fn digest(token: &str) -> Vec<u8> {
+    Sha256::digest(token.as_bytes()).to_vec()
+}
+
+pub fn cookie_name(secure: bool) -> &'static str {
+    // `__Host-` requires Secure; plain-HTTP local UAT uses an unprefixed name.
+    if secure {
+        "__Host-itsm_session"
+    } else {
+        "itsm_session"
+    }
+}
+
+pub fn set_cookie_value(secure: bool, token: &str) -> String {
+    let max_age = i64::from(SESSION_TTL_HOURS) * 3600;
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure_attr}",
+        cookie_name(secure)
+    )
+}
+
+pub fn clear_cookie_value(secure: bool) -> String {
+    let secure_attr = if secure { "; Secure" } else { "" };
+    format!(
+        "{}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{secure_attr}",
+        cookie_name(secure)
+    )
+}
+
+fn read_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v)
+}
+
+/// Inserts a session row. Callers are responsible for authorising the user first.
+pub async fn issue(
+    pool: &PgPool,
+    user_id: Uuid,
+    access_mode: &str,
+) -> Result<IssuedSession, AppError> {
+    let token = random_token().map_err(AppError::internal)?;
+    let csrf_token = random_token().map_err(AppError::internal)?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, csrf_hash, user_id, access_mode, expires_at) \
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5))",
+    )
+    .bind(digest(&token))
+    .bind(digest(&csrf_token))
+    .bind(user_id)
+    .bind(access_mode)
+    .bind(SESSION_TTL_HOURS)
+    .execute(pool)
+    .await?;
+    Ok(IssuedSession { token, csrf_token })
+}
+
+pub async fn revoke(pool: &PgPool, session_id: Uuid) -> Result<(), AppError> {
+    sqlx::query("UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppError> {
+    let row: Option<(Uuid, Uuid, Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT s.id, s.user_id, s.csrf_hash, \
+                EXISTS (SELECT 1 FROM platform_grants g \
+                        WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin') \
+         FROM sessions s JOIN users u ON u.id = s.user_id \
+         WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
+           AND s.access_mode = $2 AND u.active",
+    )
+    .bind(digest(token))
+    .bind(state.config.access_mode.as_str())
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(row.map(|(id, user_id, csrf_hash, grant)| Session {
+        id,
+        user_id,
+        // The grant is honoured only while the server runs in UAT Superadmin mode;
+        // the session's access_mode was matched above.
+        uat_superadmin: grant,
+        csrf_hash,
+    }))
+}
+
+fn csrf_matches(session: &Session, headers: &HeaderMap) -> bool {
+    headers
+        .get(CSRF_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|presented| digest(presented).ct_eq(&session.csrf_hash).into())
+        .unwrap_or(false)
+}
+
+/// Resolves the session for every `/api/v1` request and enforces CSRF on unsafe
+/// methods (deny by default). The UAT entry endpoint instead requires a custom
+/// header, which forces a CORS preflight for cross-site callers.
+pub async fn session_layer(
+    State(state): State<AppState>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let unsafe_method = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
+    let is_uat_entry = req.uri().path() == UAT_ENTRY_PATH;
+
+    let session = match read_cookie(req.headers(), cookie_name(state.config.cookie_secure)) {
+        Some(token) => match lookup(&state, token).await {
+            Ok(s) => s,
+            Err(e) => return e.into_response(),
+        },
+        None => None,
+    };
+
+    if unsafe_method {
+        let allowed = if is_uat_entry {
+            req.headers()
+                .get(UAT_ENTRY_HEADER)
+                .is_some_and(|v| v.as_bytes() == b"1")
+        } else {
+            session
+                .as_ref()
+                .is_some_and(|s| csrf_matches(s, req.headers()))
+        };
+        if !allowed {
+            return if session.is_none() && !is_uat_entry {
+                AppError::Unauthenticated.into_response()
+            } else {
+                AppError::CsrfFailed.into_response()
+            };
+        }
+    }
+
+    if let Some(s) = session {
+        req.extensions_mut().insert(s);
+    }
+    next.run(req).await
+}
+
+/// Extractor for handlers that require an authenticated session.
+impl<S: Send + Sync> FromRequestParts<S> for Session {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<Session>()
+            .cloned()
+            .ok_or(AppError::Unauthenticated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn tokens_are_random_and_url_safe() {
+        let a = random_token().map_err(|e| e.to_string());
+        let b = random_token().map_err(|e| e.to_string());
+        assert!(matches!((&a, &b), (Ok(x), Ok(y)) if x != y && x.len() == 43));
+        if let Ok(a) = a {
+            assert!(
+                a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            );
+        }
+    }
+
+    #[test]
+    fn cookie_attributes_are_strict() {
+        let c = set_cookie_value(true, "abc");
+        assert!(c.starts_with("__Host-itsm_session=abc;"));
+        for attr in ["HttpOnly", "SameSite=Strict", "Secure", "Path=/"] {
+            assert!(c.contains(attr), "missing {attr}");
+        }
+        assert!(!set_cookie_value(false, "abc").contains("Secure"));
+    }
+
+    #[test]
+    fn cookie_parser_finds_exact_name_only() {
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::COOKIE,
+            HeaderValue::from_static("xitsm_session=bad; itsm_session=good"),
+        );
+        assert_eq!(read_cookie(&h, "itsm_session"), Some("good"));
+        assert_eq!(read_cookie(&h, "other"), None);
+    }
+
+    #[test]
+    fn csrf_compare_rejects_missing_and_wrong_tokens() {
+        let s = Session {
+            id: Uuid::nil(),
+            user_id: Uuid::nil(),
+            uat_superadmin: false,
+            csrf_hash: digest("right"),
+        };
+        let mut h = HeaderMap::new();
+        assert!(!csrf_matches(&s, &h));
+        h.insert(CSRF_HEADER, HeaderValue::from_static("wrong"));
+        assert!(!csrf_matches(&s, &h));
+        h.insert(CSRF_HEADER, HeaderValue::from_static("right"));
+        assert!(csrf_matches(&s, &h));
+    }
+}

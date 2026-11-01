@@ -1,0 +1,210 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ITSM API",
+    "version": "0.1.0-d02a",
+    "description": "D02a foundation contract. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+  },
+  "servers": [{ "url": "/" }],
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-itsm_session",
+        "description": "Server-side session. Plain-HTTP local UAT uses the cookie name `itsm_session`."
+      },
+      "csrfHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token",
+        "description": "Required on every unsafe method under /api/v1 except UAT entry."
+      }
+    },
+    "parameters": {
+      "WorkspaceId": {
+        "name": "workspace_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" },
+        "description": "Unknown, malformed or foreign IDs all return 404."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": ["unauthenticated", "csrf_failed", "not_found", "uat_not_available", "dependency_unavailable", "internal"]
+              },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "required": ["environment", "accessMode", "banner"],
+        "properties": {
+          "environment": { "type": "string", "enum": ["uat", "production"] },
+          "accessMode": { "type": "string", "enum": ["uat_superadmin", "sso"] },
+          "banner": { "type": ["string", "null"], "examples": ["Mode uji — Superadmin"] }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": ["id", "displayName"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "displayName": { "type": "string" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": ["user", "banner", "uatSuperadmin"],
+        "properties": {
+          "user": { "$ref": "#/components/schemas/User" },
+          "banner": { "type": ["string", "null"] },
+          "uatSuperadmin": { "type": "boolean" }
+        }
+      },
+      "SessionIssued": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Session" },
+          {
+            "type": "object",
+            "required": ["csrfToken"],
+            "properties": { "csrfToken": { "type": "string", "description": "Returned once; keep in memory only." } }
+          }
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "required": ["id", "code", "name", "timezone", "companyId", "version", "myRole"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "code": { "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
+          "name": { "type": "string" },
+          "timezone": { "type": "string" },
+          "companyId": { "type": "string", "format": "uuid" },
+          "version": { "type": "integer" },
+          "myRole": { "type": ["string", "null"], "enum": ["cs", "lead_cs", null] }
+        }
+      },
+      "Member": {
+        "type": "object",
+        "required": ["userId", "displayName", "role", "active"],
+        "properties": {
+          "userId": { "type": "string", "format": "uuid" },
+          "displayName": { "type": "string" },
+          "role": { "type": "string", "enum": ["cs", "lead_cs"] },
+          "active": { "type": "boolean" }
+        }
+      }
+    },
+    "responses": {
+      "Unauthenticated": { "description": "No valid session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "CsrfFailed": { "description": "CSRF check failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+      "NotFound": { "description": "Not found or not accessible", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    }
+  },
+  "paths": {
+    "/health/live": {
+      "get": { "operationId": "healthLive", "responses": { "200": { "description": "Process is up" } } }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "responses": {
+          "200": { "description": "Database reachable and runtime guard holds" },
+          "503": { "description": "Not ready" }
+        }
+      }
+    },
+    "/api/v1/meta": {
+      "get": {
+        "operationId": "getMeta",
+        "responses": { "200": { "description": "Environment and banner", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Meta" } } } } }
+      }
+    },
+    "/api/v1/uat/session": {
+      "post": {
+        "operationId": "enterUatSuperadmin",
+        "description": "Direct UAT Superadmin entry. Only in UAT mode on a database marked as dummy test. Requires header `X-ITSM-UAT-Entry: 1`.",
+        "parameters": [{ "name": "X-ITSM-UAT-Entry", "in": "header", "required": true, "schema": { "type": "string", "const": "1" } }],
+        "responses": {
+          "201": { "description": "Session issued; Set-Cookie HttpOnly SameSite=Strict", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SessionIssued" } } } },
+          "403": { "$ref": "#/components/responses/CsrfFailed" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "413": { "description": "Body too large" },
+          "503": { "description": "uat_not_available", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "getSession",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": { "description": "Current session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" }
+        }
+      },
+      "delete": {
+        "operationId": "logout",
+        "security": [{ "sessionCookie": [], "csrfHeader": [] }],
+        "responses": {
+          "204": { "description": "Session revoked; cookie cleared" },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "403": { "$ref": "#/components/responses/CsrfFailed" }
+        }
+      }
+    },
+    "/api/v1/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Active workspaces the caller can access",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Workspace" } } } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}": {
+      "get": {
+        "operationId": "getWorkspace",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+        "responses": {
+          "200": { "description": "Workspace", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Workspace" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/members": {
+      "get": {
+        "operationId": "listWorkspaceMembers",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+        "responses": {
+          "200": {
+            "description": "Members of an accessible workspace",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Member" } } } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    }
+  }
+}
