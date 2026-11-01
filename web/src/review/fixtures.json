@@ -1,0 +1,179 @@
+{
+  "recordedAt": "2026-11-01T13:47:30.104Z",
+  "origin": "http://127.0.0.1:4183",
+  "backendSha": "cd9e32e3daf40c889449b56540ddcf91d2c695da",
+  "responses": {
+    "GET /api/v1/meta": {
+      "status": 200,
+      "body": {
+        "environment": "uat",
+        "accessMode": "uat_superadmin",
+        "banner": "Mode uji — Superadmin",
+        "uat": {
+          "banner": "Mode uji — Superadmin",
+          "persistent": true,
+          "dataScope": "dummy",
+          "superadminProvesRbac": false
+        }
+      },
+      "requestId": "b28242ea-b43d-470d-856d-8f3d8fda6609"
+    },
+    "GET /api/v1/session#anonymous": {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "unauthenticated",
+          "message": "Sesi tidak ada atau sudah berakhir."
+        }
+      },
+      "requestId": "f3c1fd08-084d-4d5d-b7d5-69727674662d"
+    },
+    "POST /api/v1/uat/session": {
+      "status": 201,
+      "body": {
+        "user": {
+          "id": "dc419110-b989-457c-bfb1-388097205fb5",
+          "displayName": "Superadmin Uji (dummy)"
+        },
+        "banner": "Mode uji — Superadmin",
+        "uatSuperadmin": true,
+        "csrfToken": "rekaman-token-disensor"
+      },
+      "requestId": "9e1dd3e2-ff9f-4f01-81fe-e69a8f9e22ce"
+    },
+    "GET /api/v1/session": {
+      "status": 200,
+      "body": {
+        "user": {
+          "id": "dc419110-b989-457c-bfb1-388097205fb5",
+          "displayName": "Superadmin Uji (dummy)"
+        },
+        "banner": "Mode uji — Superadmin",
+        "uatSuperadmin": true
+      },
+      "requestId": "d8133f8b-87a4-4164-bebf-9e835da4080e"
+    },
+    "GET /api/v1/workspaces": {
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "id": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+            "code": "DUMA",
+            "name": "PT Dummy Alfa (uji)",
+            "timezone": "Asia/Jakarta",
+            "companyId": "46965653-b2dc-45c1-a6fd-2abee941bf75",
+            "version": 1,
+            "myRole": null
+          },
+          {
+            "id": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+            "code": "DUMB",
+            "name": "PT Dummy Beta (uji)",
+            "timezone": "Asia/Jakarta",
+            "companyId": "e2cafe4c-dfd4-46bd-b3f3-730de07ae493",
+            "version": 1,
+            "myRole": null
+          }
+        ]
+      },
+      "requestId": "e159e291-f4f2-43be-9a7e-87e55be3df16"
+    },
+    "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b": {
+      "status": 200,
+      "body": {
+        "id": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+        "code": "DUMA",
+        "name": "PT Dummy Alfa (uji)",
+        "timezone": "Asia/Jakarta",
+        "companyId": "46965653-b2dc-45c1-a6fd-2abee941bf75",
+        "version": 1,
+        "myRole": null
+      },
+      "requestId": "42fe24a3-8fac-4c80-bdb2-d4bf5729938a"
+    },
+    "GET /api/v1/workspaces/a1e8dd4a-a301-42f1-ac2a-58db5c57811b/permissions": {
+      "status": 200,
+      "body": {
+        "workspaceId": "a1e8dd4a-a301-42f1-ac2a-58db5c57811b",
+        "role": null,
+        "uatSuperadmin": true,
+        "permissions": [
+          "member.read",
+          "catalog.read",
+          "ticket.read",
+          "ticket.create",
+          "ticket.update",
+          "ticket.transition",
+          "ticket.resolve",
+          "ticket.assign_self",
+          "ticket.assign_any",
+          "related_work.manage",
+          "attachment.read",
+          "attachment.upload",
+          "report.view",
+          "admin.members",
+          "admin.settings",
+          "integration.manage",
+          "integration.credentials",
+          "integration.recovery"
+        ],
+        "grants": []
+      },
+      "requestId": "639ca789-e6cc-4466-b90c-7df90ffc4f5c"
+    },
+    "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28": {
+      "status": 200,
+      "body": {
+        "id": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+        "code": "DUMB",
+        "name": "PT Dummy Beta (uji)",
+        "timezone": "Asia/Jakarta",
+        "companyId": "e2cafe4c-dfd4-46bd-b3f3-730de07ae493",
+        "version": 1,
+        "myRole": null
+      },
+      "requestId": "57616ec5-4341-4d5e-9f9c-007d7de08449"
+    },
+    "GET /api/v1/workspaces/ecc3519f-a894-4269-adbc-64ee540a0e28/permissions": {
+      "status": 200,
+      "body": {
+        "workspaceId": "ecc3519f-a894-4269-adbc-64ee540a0e28",
+        "role": null,
+        "uatSuperadmin": true,
+        "permissions": [
+          "member.read",
+          "catalog.read",
+          "ticket.read",
+          "ticket.create",
+          "ticket.update",
+          "ticket.transition",
+          "ticket.resolve",
+          "ticket.assign_self",
+          "ticket.assign_any",
+          "related_work.manage",
+          "attachment.read",
+          "attachment.upload",
+          "report.view",
+          "admin.members",
+          "admin.settings",
+          "integration.manage",
+          "integration.credentials",
+          "integration.recovery"
+        ],
+        "grants": []
+      },
+      "requestId": "a2e49725-4721-4bf6-bc7b-814aa2db9b26"
+    },
+    "GET #not_found": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "not_found",
+          "message": "Data tidak ditemukan."
+        }
+      },
+      "requestId": "1b5d131c-f2a2-408f-b90d-c859b37d6c6d"
+    }
+  }
+}
