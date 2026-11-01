@@ -1,6 +1,7 @@
 //! ITSM API (D02a foundation + D02 domain schema + D03 permission foundation).
 
 pub mod authz;
+pub mod clamd;
 pub mod config;
 pub mod db;
 pub mod domain;
@@ -27,6 +28,7 @@ use crate::config::Config;
 pub const UAT_BANNER: &str = "Mode uji — Superadmin";
 const BODY_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,20 +38,27 @@ pub struct AppState {
 
 pub fn app(state: AppState) -> Router {
     let request_id = HeaderName::from_static("x-request-id");
-    let api = routes::api_router().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        session::session_layer,
-    ));
-
-    Router::new()
+    let session = axum::middleware::from_fn_with_state(state.clone(), session::session_layer);
+    let api = routes::api_router().layer(session.clone());
+    let bounded = Router::new()
         .merge(routes::health::router())
         .merge(api)
-        .with_state(state)
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             REQUEST_TIMEOUT,
-        ))
+        ));
+    let upload = routes::upload_router()
+        .layer(session)
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            UPLOAD_TIMEOUT,
+        ));
+
+    Router::new()
+        .merge(bounded)
+        .merge(upload)
+        .with_state(state)
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),

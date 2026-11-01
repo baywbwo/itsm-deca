@@ -2,6 +2,11 @@
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
   ActivityPage,
+  AttachmentUploaded,
+  ConversationPanel,
+  NoteCreated,
+  NotePage,
+  RelatedWorkCreated,
   ApiErrorBody,
   TicketDetail,
   TicketDetailMutation,
@@ -260,9 +265,30 @@ export const isTicketDetail = (v: unknown): v is TicketDetail =>
   isObj(v) && isTicketListItem(v.ticket) && isProps(v.properties) &&
   isObj(v.can) && typeof v.can.readOnly === 'boolean' && typeof v.can.editProperties === 'boolean' &&
   typeof v.can.manageRelatedWork === 'boolean' &&
+  typeof v.can.addNote === 'boolean' && typeof v.can.uploadAttachment === 'boolean' &&
   isArr(v.relatedWork, isRelatedWork) && isArr(v.attachments, isAttachmentMeta) && isArr(v.resolutions, isResolution);
 export const isTicketDetailMutation = (v: unknown): v is TicketDetailMutation =>
   isObj(v) && isTicketDetail(v.detail) && isStrOrNull(v.auditEventId);
 export const isActivityPage = (v: unknown): v is ActivityPage =>
   isObj(v) && isStrOrNull(v.nextCursor) &&
   isArr(v.items, (i) => isObj(i) && isStr(i.id) && isStr(i.at) && isStr(i.action) && isStr(i.label) && isRefOrNull(i.actor));
+
+// D08b follow-up: notes, read-only conversation panel, attachment upload, idempotent related work.
+const isNote = (n: unknown) =>
+  isObj(n) && isStr(n.id) && isStr(n.body) && isRefOrNull(n.author) && n.author !== null && isStr(n.createdAt);
+export const isNotePage = (v: unknown): v is NotePage =>
+  isObj(v) && isStrOrNull(v.nextCursor) && isArr(v.items, isNote);
+export const isNoteCreated = (v: unknown): v is NoteCreated =>
+  isObj(v) && isNote(v.note) && typeof v.replayed === 'boolean' && isStrOrNull(v.auditEventId);
+const DIRECTIONS = ['inbound', 'outbound'];
+const DELIVERY = ['received', 'queued', 'sent', 'delivered', 'failed', 'unknown'];
+const isConversation = (c: unknown) =>
+  isObj(c) && isStr(c.id) && c.source === 'simulation' && isStr(c.channelLabel) && isStr(c.externalThreadId) &&
+  isArr(c.messages, (m) => isObj(m) && isStr(m.id) && DIRECTIONS.includes(m.direction as string) && isStr(m.body) &&
+    DELIVERY.includes(m.deliveryState as string) && isStr(m.occurredAt));
+export const isConversationPanel = (v: unknown): v is ConversationPanel =>
+  isObj(v) && typeof v.adapterConfigured === 'boolean' && typeof v.truncated === 'boolean' && isArr(v.conversations, isConversation);
+export const isRelatedWorkCreated = (v: unknown): v is RelatedWorkCreated =>
+  isObj(v) && isTicketDetail(v.detail) && isStr(v.relatedWorkId) && typeof v.replayed === 'boolean' && isStrOrNull(v.auditEventId);
+export const isAttachmentUploaded = (v: unknown): v is AttachmentUploaded =>
+  isObj(v) && isStr(v.attachmentId) && isTicketDetail(v.detail) && isStr(v.auditEventId);

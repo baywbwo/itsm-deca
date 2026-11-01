@@ -1,5 +1,10 @@
 import {
   isActivityPage,
+  isAttachmentUploaded,
+  isConversationPanel,
+  isNoteCreated,
+  isNotePage,
+  isRelatedWorkCreated,
   isTicketDetail,
   isTicketDetailMutation,
   isCatalogs,
@@ -26,6 +31,12 @@ import {
 } from './guards';
 import type {
   ActivityPage,
+  AttachmentUploaded,
+  ConversationPanel,
+  NoteCreateRequest,
+  NoteCreated,
+  NotePage,
+  RelatedWorkCreated,
   RelatedWorkCompletionRequest,
   RelatedWorkCreateRequest,
   TicketDetail,
@@ -65,6 +76,8 @@ export interface TransportRequest {
   signal?: AbortSignal | undefined;
   /** JSON request body (sent as application/json). */
   body?: unknown;
+  /** Raw file body (attachment upload, application/octet-stream); excludes `body`. */
+  file?: Blob;
 }
 export interface TransportResponse {
   status: number;
@@ -91,7 +104,7 @@ export class ApiError extends Error {
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 /** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */
-export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload }) => {
+export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload, file }) => {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -99,9 +112,11 @@ export const fetchTransport: Transport = async ({ method, path, headers, signal,
       headers: {
         Accept: 'application/json',
         ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(file === undefined ? {} : { 'Content-Type': 'application/octet-stream' }),
         ...headers,
       },
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      ...(file === undefined ? {} : { body: file }),
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal ?? null,
@@ -261,10 +276,33 @@ export function createApi(transport: Transport) {
       call({
         method: 'PATCH', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}`, headers: csrf(), body,
       }, isTicketDetailMutation),
-    createRelatedWork: (id: string, ticketId: string, body: RelatedWorkCreateRequest): Promise<TicketDetailMutation> =>
+    /** Idempotent per key: 201 new, 200 replay of the same payload, 409 when the key carried another payload. */
+    createRelatedWork: (id: string, ticketId: string, key: string, body: RelatedWorkCreateRequest): Promise<RelatedWorkCreated> =>
       call({
-        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work`, headers: csrf(), body,
-      }, isTicketDetailMutation),
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work`,
+        headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isRelatedWorkCreated, [200, 201]),
+    /** D08b operational follow-up notes, newest first. */
+    listTicketNotes: (id: string, ticketId: string, cursor: string | null, signal?: AbortSignal): Promise<NotePage> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/notes${withParam('', 'cursor', cursor)}`, isNotePage, signal),
+    createTicketNote: (id: string, ticketId: string, key: string, body: NoteCreateRequest): Promise<NoteCreated> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/notes`,
+        headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isNoteCreated, [200, 201]),
+    /** Read-only; no omnichannel adapter exists, so nothing can be sent from here. */
+    getTicketConversations: (id: string, ticketId: string, signal?: AbortSignal): Promise<ConversationPanel> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/conversations`, isConversationPanel, signal),
+    /** Quarantine -> scan -> bind on the server; only a clean scan binds. Fails closed otherwise. */
+    uploadTicketAttachment: (id: string, ticketId: string, file: File, visibility: 'internal' | 'public'): Promise<AttachmentUploaded> =>
+      call({
+        method: 'POST',
+        path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/attachments?visibility=${visibility}`,
+        headers: { ...csrf(), 'X-File-Name': encodeURIComponent(file.name) }, file,
+      }, isAttachmentUploaded, 201),
+    /** Same-origin link; the server re-checks scope, scan state and integrity on every download. */
+    attachmentContentUrl: (id: string, ticketId: string, attachmentId: string): string =>
+      `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/attachments/${encodeURIComponent(attachmentId)}/content`,
     /** A person completes related work with summary + evidence; a Jira status never does. */
     completeRelatedWork: (id: string, ticketId: string, workId: string, body: RelatedWorkCompletionRequest): Promise<TicketDetailMutation> =>
       call({

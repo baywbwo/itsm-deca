@@ -145,3 +145,30 @@ describe('saved views client (C32)', () => {
     await expect(api.createSavedView('w', { name: 'x', view: 'list', query: {} })).rejects.toMatchObject({ code: 'bad_response' });
   });
 });
+
+describe('D08b follow-up client', () => {
+  it('upload sends the raw file with CSRF, an encoded file name and the visibility; errors keep their code', async () => {
+    const path = '/api/v1/workspaces/w/tickets/t/attachments?visibility=public';
+    const { api, seen } = fake({
+      [`POST ${path}`]: { status: 503, body: { error: { code: 'scanner_unavailable', message: 'x' } }, requestId: 'r' },
+    });
+    const file = new File(['%PDF-1.4'], 'laporan akhir/ä.pdf', { type: 'application/pdf' });
+    await expect(api.uploadTicketAttachment('w', 't', file, 'public')).rejects.toMatchObject({ status: 503, code: 'scanner_unavailable' });
+    expect(seen[0]?.file).toBe(file);
+    expect(seen[0]?.body).toBeUndefined();
+    expect(seen[0]?.headers['X-File-Name']).toBe(encodeURIComponent('laporan akhir/ä.pdf'));
+  });
+
+  it('notes and related work carry the Idempotency-Key; a note without an author is not trusted', async () => {
+    const path = '/api/v1/workspaces/w/tickets/t/notes';
+    const note = { id: 'n', body: 'b', author: null, createdAt: '2026-11-01T00:00:00Z' };
+    const { api, seen } = fake({ [`POST ${path}`]: { status: 201, body: { note, replayed: false, auditEventId: 'a' }, requestId: null } });
+    await expect(api.createTicketNote('w', 't', 'k', { body: 'b' })).rejects.toMatchObject({ code: 'bad_response' });
+    expect(seen[0]?.headers['Idempotency-Key']).toBe('k');
+  });
+
+  it('download link stays same-origin and encoded', () => {
+    const { api } = fake({});
+    expect(api.attachmentContentUrl('w', 't', 'a/b')).toBe('/api/v1/workspaces/w/tickets/t/attachments/a%2Fb/content');
+  });
+});

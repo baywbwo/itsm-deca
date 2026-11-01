@@ -173,6 +173,10 @@ async fn write(pool: &PgPool, method: &str, uri: &str, t: &Tok, csrf: bool, body
     if csrf {
         r = r.header(session::CSRF_HEADER, &t.csrf);
     }
+    // D08b: related-work create needs an Idempotency-Key; a fresh one per call here.
+    if uri.ends_with("/related-work") {
+        r = r.header("idempotency-key", format!("uji-{}", Uuid::new_v4()));
+    }
     send(pool, ok(r.body(Body::from(body.to_string())), "request")).await
 }
 
@@ -430,7 +434,7 @@ async fn related_work_completion_is_explicit_and_jira_done_never_unblocks(pool: 
         &json!({"title": " Perbaikan modul uji (dummy) ", "blocking": true}),
     )
     .await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.raw);
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.raw);
     let rw = &r.json["detail"]["relatedWork"][0];
     assert_eq!(rw["title"], "Perbaikan modul uji (dummy)");
     assert_eq!(rw["completionState"], "open");
@@ -633,7 +637,8 @@ async fn detail_responses_conform_to_openapi(pool: PgPool) {
         &json!({"title": "Uji kontrak (dummy)", "safeDescription": "Deskripsi (dummy)", "blocking": false}),
     )
     .await;
-    conform(&r.json, &schemas["TicketDetailMutation"], &root, "related");
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.raw);
+    conform(&r.json, &schemas["RelatedWorkCreated"], &root, "related");
     let r = write(
         &pool,
         "PATCH",

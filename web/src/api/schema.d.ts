@@ -566,7 +566,7 @@ export interface paths {
         put?: never;
         /**
          * Add related work (D08)
-         * @description related_work.manage. Refused (422) on a closed or resolved ticket (reopen first). Row and audit commit atomically.
+         * @description related_work.manage. Requires Idempotency-Key (scoped to user + workspace): same key + same payload replays (200, replayed=true, nothing written); same key + different payload = 409. Refused (422) on a closed or resolved ticket. Row and audit commit atomically.
          */
         post: operations["createRelatedWork"];
         delete?: never;
@@ -589,6 +589,90 @@ export interface paths {
          * @description related_work.manage. Needs summary and evidence from a person; Jira status never completes work. Stale related-work `version` = 409; already completed or closed ticket = 422.
          */
         post: operations["completeRelatedWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operational follow-up notes (D08b)
+         * @description ticket.read. Newest first; cursor `createdAt~id`.
+         */
+        get: operations["listTicketNotes"];
+        put?: never;
+        /**
+         * Add an operational note (D08b)
+         * @description ticket.update. A handling record, not team chat. Idempotent per user + workspace + Idempotency-Key (replay 200, different payload 409). Allowed on resolved, refused on closed (422). Audit stores the note id only.
+         */
+        post: operations["createTicketNote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer conversation panel, read only (D08b)
+         * @description ticket.read. No adapter in this build (adapterConfigured=false); only labelled simulation rows can exist. No send operation.
+         */
+        get: operations["getTicketConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload an attachment: quarantine → scan → bind (D08b)
+         * @description attachment.upload. Raw file body (any Content-Type; the server sniffs PDF/PNG/JPEG). File name in X-File-Name, percent-encoded UTF-8. Bound to the ticket only after an explicit clean clamd verdict; infected/scan error/scanner unavailable are recorded, audited as failed, the bytes deleted, and nothing is bound. Closed ticket = 422.
+         */
+        post: operations["uploadTicketAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a bound clean attachment (D08b)
+         * @description ticket.read + attachment.read, checked at request time. Only clean, bound files of this ticket; hash verified before sending. Content-Disposition attachment, CSP sandbox. Audited.
+         */
+        get: operations["downloadTicketAttachment"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -737,7 +821,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -874,7 +958,10 @@ export interface components {
             fileName: string;
             inspectedMime: string | null;
             sizeBytes: number;
-            /** @enum {string} */
+            /**
+             * @description pending | clean | infected | scan_error | scanner_unavailable | rejected
+             * @enum {string}
+             */
             scanStatus: "pending" | "clean" | "infected" | "scanner_unavailable" | "rejected";
             /** @enum {string} */
             visibility: "public" | "internal";
@@ -1488,6 +1575,10 @@ export interface components {
             readOnly: boolean;
             editProperties: boolean;
             manageRelatedWork: boolean;
+            /** @description ticket.update and not closed. */
+            addNote: boolean;
+            /** @description attachment.upload and not closed. */
+            uploadAttachment: boolean;
         };
         TicketDetail: {
             ticket: components["schemas"]["TicketListItem"];
@@ -1549,6 +1640,73 @@ export interface components {
             version: number;
             summary: string;
             evidence: string;
+        };
+        RelatedWorkCreated: {
+            detail: components["schemas"]["TicketDetail"];
+            /** Format: uuid */
+            relatedWorkId: string;
+            /** @description true = same Idempotency-Key and payload already accepted; nothing new written. */
+            replayed: boolean;
+            /**
+             * Format: uuid
+             * @description null on replay.
+             */
+            auditEventId: string | null;
+        };
+        Note: {
+            /** Format: uuid */
+            id: string;
+            body: string;
+            author: components["schemas"]["PersonRef"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotePage: {
+            items: components["schemas"]["Note"][];
+            nextCursor: string | null;
+        };
+        NoteCreateRequest: {
+            /** @description Trimmed; 1..5000 characters. */
+            body: string;
+        };
+        NoteCreated: {
+            note: components["schemas"]["Note"];
+            replayed: boolean;
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        ConversationMessage: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            direction: "inbound" | "outbound";
+            body: string;
+            /** @enum {string} */
+            deliveryState: "received" | "queued" | "sent" | "delivered" | "failed" | "unknown";
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        Conversation: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            source: "simulation";
+            channelLabel: string;
+            externalThreadId: string;
+            messages: components["schemas"]["ConversationMessage"][];
+        };
+        ConversationPanel: {
+            /** @description No omnichannel adapter exists in this build: always false, nothing can be sent. */
+            adapterConfigured: boolean;
+            conversations: components["schemas"]["Conversation"][];
+            truncated: boolean;
+        };
+        AttachmentUploaded: {
+            /** Format: uuid */
+            attachmentId: string;
+            detail: components["schemas"]["TicketDetail"];
+            /** Format: uuid */
+            auditEventId: string;
         };
     };
     responses: {
@@ -1626,6 +1784,60 @@ export interface components {
         };
         /** @description Idempotency-Key already used by this user in this workspace for a different payload (idempotency_conflict); nothing created */
         IdempotencyConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A dependency (storage, upload slots) is not available (dependency_unavailable); nothing bound */
+        DependencyUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description File is larger than the configured cap (attachment_too_large) */
+        AttachmentTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Server-side sniffing found a type other than PDF/PNG/JPEG (attachment_type_refused) */
+        AttachmentTypeRefused: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description rule_violation (closed ticket) or attachment_infected (scanner verdict; file deleted, not bound) */
+        AttachmentRejected: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description clamd reached but gave no verdict (scan_failed); file deleted, not bound */
+        ScanFailed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description scanner_unavailable (clamd not configured/unreachable, file deleted, not bound) or dependency_unavailable */
+        ScannerUnavailable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2752,7 +2964,10 @@ export interface operations {
     createRelatedWork: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
             path: {
                 /** @description Unknown, malformed or foreign IDs all return 404. */
                 workspace_id: components["parameters"]["WorkspaceId"];
@@ -2767,19 +2982,29 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Fresh detail */
+            /** @description Replay of an earlier create */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TicketDetailMutation"];
+                    "application/json": components["schemas"]["RelatedWorkCreated"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedWorkCreated"];
                 };
             };
             400: components["responses"]["InvalidRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["RuleViolation"];
         };
     };
@@ -2817,6 +3042,188 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+        };
+    };
+    listTicketNotes: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotePage"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createTicketNote: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteCreated"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteCreated"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            422: components["responses"]["ValidationFailed"];
+        };
+    };
+    getTicketConversations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Panel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationPanel"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    uploadTicketAttachment: {
+        parameters: {
+            query?: {
+                visibility?: "internal" | "public";
+            };
+            header: {
+                "X-File-Name": string;
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Clean and bound */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentUploaded"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["AttachmentTooLarge"];
+            415: components["responses"]["AttachmentTypeRefused"];
+            422: components["responses"]["AttachmentRejected"];
+            502: components["responses"]["ScanFailed"];
+            503: components["responses"]["ScannerUnavailable"];
+        };
+    };
+    downloadTicketAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+                /** @description Scoped to workspace_id and ticket_id; otherwise 404. */
+                attachment_id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                    "image/png": string;
+                    "image/jpeg": string;
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["DependencyUnavailable"];
         };
     };
 }

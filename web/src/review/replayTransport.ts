@@ -25,6 +25,11 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * D08 detail replays one real edit sequence per package: properties (s1), a blocking related work
  * (s2) and its completion (s3); after each step the detail/activity answer recorded at that step is
  * served. - conflict: the properties save and the completion replay the real 409.
+ * D08b adds s4: a follow-up note (same key + text replays the recorded 200). Related work replays the
+ * recorded 200 for the same key + payload and the recorded 409 for the same key with another payload.
+ * Uploads replay the live server's real refusals: no malware scanner is reachable on this host, so a
+ * PDF/PNG/JPEG gets the recorded fail-closed 503 and any other file the recorded 415. No clean upload
+ * or download exists in the package; those are proven by the cargo tests only.
  * Retry/reconcile and other combinations are not recorded; the replay says so.
  */
 export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict' | 'intake-unknown' | 'intake-degraded';
@@ -32,7 +37,9 @@ export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error',
 
 const DASHBOARD = /^\/api\/v1\/workspaces\/([^/]+)\/dashboard\?/;
 const DETAIL_MUTATION = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+))(\/related-work(\/[^/]+\/completion)?)?$/;
-const DETAIL_READ = /^\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+)\/(detail|activity)$/;
+const DETAIL_READ = /^\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+)\/(detail|activity|notes)$/;
+const NOTES = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/([^/?]+))\/notes$/;
+const UPLOAD = /^(\/api\/v1\/workspaces\/[^/]+\/tickets\/[^/?]+\/attachments)\?/;
 const TICKETS = /^\/api\/v1\/workspaces\/[^/]+\/tickets(\/board)?(\?|$)/;
 
 function emptied(body: unknown): unknown {
@@ -131,7 +138,30 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
   let networkFailed = false;
   const after = new Set<string>(); // GET keys that now answer with their '#after' recording
   const stage = new Map<string, number>(); // ticket id -> D08 recorded edit step reached
-  return async ({ method, path, signal, headers, body: payload }) => {
+  const detailKeys = new Map<string, string>(); // D08b related work/note key -> payload JSON
+  return async ({ method, path, signal, headers, body: payload, file }) => {
+    const up = method === 'POST' ? UPLOAD.exec(path) : null;
+    if (up) {
+      await wait(latencyMs, signal, true);
+      const allowed = /\.(pdf|png|jpe?g)$/i.test((file as File | undefined)?.name ?? '');
+      const hit = f.responses[`POST ${up[1]}#${allowed ? 'scanner' : 'type'}`];
+      if (!hit) return notRecorded('unggahan lampiran untuk tiket ini');
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    const nm = method === 'POST' ? NOTES.exec(path) : null;
+    if (nm) {
+      await wait(latencyMs, signal, true);
+      const key = headers['Idempotency-Key'] ?? '';
+      const json = JSON.stringify(payload);
+      const seen = detailKeys.get(key);
+      if (seen !== undefined && seen !== json) return notRecorded('catatan dengan isian lain');
+      const ok = f.responses[`POST ${path}#ok`];
+      if (!ok || (seen === undefined && (stage.get(nm[2]!) ?? 0) !== 3)) return notRecorded('catatan ini (hanya satu catatan setelah urutan edit yang direkam)');
+      detailKeys.set(key, json);
+      const hit = seen === undefined ? ok : f.responses[`POST ${path}#replayed`] ?? ok;
+      stage.set(nm[2]!, 4);
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
     if (method === 'POST' && CREATE.test(path)) {
       await wait(latencyMs, signal, true);
       const key = headers['Idempotency-Key'] ?? '';
@@ -173,10 +203,26 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
     if (dm && (method === 'PATCH' ? !dm[3] : !!dm[3])) {
       await wait(latencyMs, signal, true);
       const step = method === 'PATCH' ? 1 : dm[4] ? 3 : 2;
-      const variant = scenario === 'conflict' && step !== 2 ? 'stale' : 'ok';
+      let claim: [string, string] | null = null;
+      let variant = scenario === 'conflict' && step !== 2 ? 'stale' : 'ok';
+      if (step === 2) {
+        const key = headers['Idempotency-Key'] ?? '';
+        const json = JSON.stringify(payload);
+        const seen = detailKeys.get(key);
+        if (seen !== undefined) {
+          const again = f.responses[`${method} ${path}#${seen === json ? 'replayed' : 'conflict'}`];
+          if (!again) return notRecorded('pengiriman ulang pekerjaan terkait');
+          return { status: again.status, body: structuredClone(again.body), requestId: again.requestId };
+        }
+        variant = 'ok';
+        claim = [key, json];
+      }
       const hit = (stage.get(dm[2]!) ?? 0) === step - 1 ? f.responses[`${method} ${path}#${variant}`] : undefined;
       if (!hit) return notRecorded('perubahan detail ini (hanya satu urutan edit yang direkam)');
-      if (hit.status === 200 || hit.status === 201) stage.set(dm[2]!, step);
+      if (hit.status === 200 || hit.status === 201) {
+        stage.set(dm[2]!, step);
+        if (claim) detailKeys.set(...claim);
+      }
       return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
     }
     const dr = method === 'GET' ? DETAIL_READ.exec(path) : null;

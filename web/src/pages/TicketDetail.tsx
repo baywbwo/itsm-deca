@@ -2,6 +2,9 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { ApiError, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
+  AttachmentMeta,
+  ConversationPanel,
+  Note,
   AssignmentEvent,
   Catalogs,
   CatalogItem,
@@ -21,6 +24,7 @@ import {
   type PropertiesError,
   type PropertiesForm,
 } from '../app/detail';
+import { newKey } from '../app/drafts';
 import { instantLabel, num } from '../app/format';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -112,9 +116,10 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
           <DetailTabs tab={tab} onChange={setTab} panelId={`detail-panel-${ticketId}`} />
           <div id={`detail-panel-${ticketId}`} role="tabpanel" aria-labelledby={`detail-tab-${tab}`} className="detail-panel">
             {tab === 'summary' && <Summary api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={() => setAttempt((n) => n + 1)} />}
-            {tab === 'activity' && <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} />}
+            {tab === 'summary' && <Conversations api={api} workspace={workspace} ticketId={t.id} />}
+            {tab === 'activity' && <FollowUp api={api} workspace={workspace} detail={detail} />}
             {tab === 'work' && <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={() => setAttempt((n) => n + 1)} />}
-            {tab === 'attachments' && <Attachments detail={detail} tz={workspace.timezone} />}
+            {tab === 'attachments' && <Attachments api={api} workspace={workspace} detail={detail} onSaved={applied} />}
             {tab === 'history' && <History api={api} workspace={workspace} detail={detail} />}
           </div>
         </>
@@ -369,7 +374,7 @@ function Summary({ api, workspace, detail, onSaved, onReload }: {
   );
 }
 
-function Activity({ api, workspace, ticketId, version }: { api: Api; workspace: Workspace; ticketId: string; version: number }) {
+function Activity({ api, workspace, ticketId, version, refresh }: { api: Api; workspace: Workspace; ticketId: string; version: number; refresh: number }) {
   const [items, setItems] = useState<ActivityItem[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -388,7 +393,7 @@ function Activity({ api, workspace, ticketId, version }: { api: Api; workspace: 
       setBusy(false);
     }, (e: unknown) => { if (!isAbort(e)) { setError(e); setBusy(false); } });
   }
-  useEffect(() => { page(null); return () => ctl.current?.abort(); }, [workspace.id, ticketId, version]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { page(null); return () => ctl.current?.abort(); }, [workspace.id, ticketId, version, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error && !items) return <ErrorState title="Aktivitas belum dapat dimuat" body={message(error)} onRetry={() => page(null)} />;
   if (!items) return <LoadingState label="Memuat aktivitas…" rows={3} />;
@@ -427,6 +432,8 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
   const [error, setError] = useState<SaveError | null>(null);
   const [fieldErr, setFieldErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // One key per opened form: a resend after a lost answer replays instead of creating twice.
+  const key = useRef(newKey());
   const resolvedOrClosed = t.status.code === 'resolved' || t.status.archived;
 
   async function add() {
@@ -435,14 +442,17 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.createRelatedWork(workspace.id, t.id, {
+      const res = await api.createRelatedWork(workspace.id, t.id, key.current, {
         title: title.trim(), safeDescription: desc.trim() || null, blocking,
       });
       setBusy(false);
       setAdding(false);
       setTitle('');
       setDesc('');
-      setNotice('Pekerjaan terkait tersimpan dan tercatat di audit. Tidak ada issue Jira kantor yang dibuat.');
+      key.current = newKey();
+      setNotice(res.replayed
+        ? 'Pekerjaan terkait ini sudah tersimpan sebelumnya; tidak dibuat dua kali.'
+        : 'Pekerjaan terkait tersimpan dan tercatat di audit. Tidak ada issue Jira kantor yang dibuat.');
       onSaved(res.detail);
     } catch (e) {
       setBusy(false);
@@ -456,7 +466,7 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
       <div className="row between">
         <h3>Pekerjaan terkait</h3>
         {detail.can.manageRelatedWork && !resolvedOrClosed && !adding && (
-          <Button onClick={() => { setAdding(true); setNotice(null); }}>＋ Tambah pekerjaan</Button>
+          <Button onClick={() => { key.current = newKey(); setAdding(true); setNotice(null); }}>＋ Tambah pekerjaan</Button>
         )}
       </div>
       <p className="tiny muted">
@@ -588,6 +598,145 @@ function WorkCard({ api, workspace, ticket, work: w, canComplete, onSaved, onRel
   );
 }
 
+/** Aktivitas tab: operational follow-up notes (a ticket record, not team chat) above the audit trail. */
+function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; detail: TicketDetail }) {
+  const id = useId();
+  const t = detail.ticket;
+  const [notes, setNotes] = useState<Note[] | null>(null);
+  const [next, setNext] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<SaveError | null>(null);
+  const [fieldErr, setFieldErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [audit, setAudit] = useState(0);
+  // One key per draft: resending the same text after a lost answer replays (200) instead of duplicating.
+  const key = useRef(newKey());
+  const ctl = useRef<AbortController | null>(null);
+
+  function page(cursor: string | null) {
+    ctl.current?.abort();
+    const c = new AbortController();
+    ctl.current = c;
+    setLoadError(null);
+    api.listTicketNotes(workspace.id, t.id, cursor, c.signal).then((r) => {
+      setNotes((old) => (cursor && old ? [...old, ...r.items] : r.items));
+      setNext(r.nextCursor);
+    }, (e: unknown) => { if (!isAbort(e)) setLoadError(e); });
+  }
+  useEffect(() => { page(null); return () => ctl.current?.abort(); }, [workspace.id, t.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function add() {
+    if (busy) return;
+    if (!text.trim()) { setFieldErr('Catatan wajib diisi.'); document.getElementById(`${id}-note`)?.focus(); return; }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.createTicketNote(workspace.id, t.id, key.current, { body: text.trim() });
+      setBusy(false);
+      setText('');
+      key.current = newKey();
+      setNotice(res.replayed ? 'Catatan ini sudah tersimpan sebelumnya; tidak dicatat dua kali.' : 'Catatan tersimpan dan tercatat di audit.');
+      setNotes((old) => [res.note, ...(old ?? []).filter((n) => n.id !== res.note.id)]);
+      setAudit((n) => n + 1);
+    } catch (e) {
+      setBusy(false);
+      if (e instanceof ApiError && e.field === 'body') setFieldErr(e.message);
+      else setError(saveError(e, 'Catatan'));
+    }
+  }
+
+  const tz = workspace.timezone;
+  return (
+    <div>
+      <h3>Tindak lanjut operasional</h3>
+      <p className="tiny muted">Catatan penanganan tiket, bukan chat tim. Jangan menulis identitas atau data rahasia nasabah.</p>
+      {notice && <p className="notice" role="status">{notice}</p>}
+      {detail.can.addNote ? (
+        <form className="formgrid" aria-label="Tambah catatan tindak lanjut" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+          {error && <div className="full state-error" role="alert"><h3>{error.title}</h3><p>{error.body}</p></div>}
+          <div className="field full">
+            <label htmlFor={`${id}-note`}>Catatan tindak lanjut *</label>
+            <textarea id={`${id}-note`} className="field-control" value={text} maxLength={LIMITS.note} disabled={busy}
+              aria-invalid={fieldErr ? true : undefined} aria-describedby={fieldErr ? `${id}-note-err` : undefined}
+              onChange={(e) => { setText(e.target.value); setFieldErr(null); setNotice(null); }} />
+            {fieldErr && <span id={`${id}-note-err`} className="field-error">{fieldErr}</span>}
+          </div>
+          <div className="full row">
+            <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
+          </div>
+        </form>
+      ) : (
+        <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: catatan baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat menambah catatan.'}</p>
+      )}
+      {loadError && !notes ? <ErrorState title="Catatan belum dapat dimuat" body={message(loadError)} onRetry={() => page(null)} />
+        : !notes ? <LoadingState label="Memuat catatan…" rows={2} />
+          : notes.length === 0 ? <p className="muted">Belum ada catatan tindak lanjut.</p> : (
+            <ol className="plain" aria-label="Catatan tindak lanjut">
+              {notes.map((n) => (
+                <li key={n.id} className="activity">
+                  <p className="prewrap">{n.body}</p>
+                  <span className="tiny muted">{instantLabel(n.createdAt, tz)} · oleh {n.author.label}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+      {loadError && notes ? <p className="field-error" role="alert">{message(loadError)}</p> : null}
+      {next && <Button onClick={() => page(next)}>Muat catatan lebih lama</Button>}
+      <h3 className="spaced">Jejak audit</h3>
+      <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} refresh={audit} />
+    </div>
+  );
+}
+
+const DELIVERY_LABEL: Record<string, string> = {
+  received: 'Diterima', queued: 'Antre (belum terkirim)', sent: 'Terkirim ke provider', delivered: 'Sampai', failed: 'Gagal', unknown: 'Belum diketahui',
+};
+
+/** Customer conversation: read-only. No omnichannel adapter exists in this build, so nothing can be sent. */
+function Conversations({ api, workspace, ticketId }: { api: Api; workspace: Workspace; ticketId: string }) {
+  const [panel, setPanel] = useState<ConversationPanel | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const c = new AbortController();
+    setError(null);
+    api.getTicketConversations(workspace.id, ticketId, c.signal).then(setPanel, (e: unknown) => { if (!isAbort(e)) setError(e); });
+    return () => c.abort();
+  }, [api, workspace.id, ticketId, attempt]);
+  const tz = workspace.timezone;
+  return (
+    <section className="spaced" aria-labelledby={`conv-${ticketId}`}>
+      <h3 id={`conv-${ticketId}`}>Percakapan pelanggan</h3>
+      {error ? <ErrorState title="Percakapan belum dapat dimuat" body={message(error)} onRetry={() => setAttempt((n) => n + 1)} />
+        : !panel ? <LoadingState label="Memuat percakapan…" rows={1} /> : (
+          <>
+            {!panel.adapterConfigured && (
+              <p className="banner" role="note">Kanal omnichannel belum tersambung. Percakapan hanya dapat dibaca; pesan tidak dapat dikirim dari sini.</p>
+            )}
+            {panel.conversations.length === 0 ? <p className="muted">Belum ada percakapan tercatat untuk tiket ini.</p>
+              : panel.conversations.map((cv) => (
+                <article key={cv.id} className="card" aria-label={`Percakapan ${cv.channelLabel}`}>
+                  <p className="tiny">{cv.channelLabel} · utas {cv.externalThreadId} <Badge tone="waiting">SIMULASI</Badge></p>
+                  <ol className="plain">
+                    {cv.messages.map((m) => (
+                      <li key={m.id} className="activity">
+                        <strong>{m.direction === 'inbound' ? 'Pelanggan' : 'Petugas'}</strong>
+                        <span className="tiny muted"> · {instantLabel(m.occurredAt, tz)} · {DELIVERY_LABEL[m.deliveryState] ?? m.deliveryState}</span>
+                        <p className="prewrap tiny">{m.body}</p>
+                      </li>
+                    ))}
+                  </ol>
+                </article>
+              ))}
+            {panel.truncated && <p className="tiny muted">Hanya percakapan terbaru yang ditampilkan.</p>}
+          </>
+        )}
+    </section>
+  );
+}
+
 const SCAN_LABEL: Record<string, string> = {
   pending: 'Menunggu pemindaian',
   clean: 'Bersih',
@@ -595,29 +744,118 @@ const SCAN_LABEL: Record<string, string> = {
   error: 'Gagal dipindai — diblokir',
 };
 
-function Attachments({ detail, tz }: { detail: TicketDetail; tz: string }) {
+const ACCEPT = 'application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg';
+const MAX_UPLOAD_MB = 25;
+
+function uploadError(e: unknown): SaveError {
+  if (e instanceof ApiError) {
+    const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
+    const body = (s: string) => ({ title: 'Lampiran tidak disimpan', body: `${s}${rid}`, conflict: false });
+    switch (e.code) {
+      case 'attachment_too_large': return body(`Ukuran berkas melebihi ${MAX_UPLOAD_MB} MB.`);
+      case 'attachment_type_refused': return body('Hanya PDF, PNG atau JPEG yang diterima (isi berkas diperiksa, bukan hanya namanya).');
+      case 'attachment_infected': return body('Pemindai menandai berkas berbahaya. Berkas dihapus dan tidak dilampirkan.');
+      case 'scan_failed': return body('Pemindaian gagal sehingga berkas tidak dilampirkan. Coba lagi nanti.');
+      case 'scanner_unavailable':
+      case 'dependency_unavailable':
+        return body('Pemindai berkas tidak tersedia, jadi sistem menolak secara aman: berkas tidak disimpan dan tidak dilampirkan.');
+      default: break;
+    }
+  }
+  return saveError(e, 'Lampiran');
+}
+
+/** Lampiran: upload goes quarantine → scan → bind on the server; only clean, bound files are listed and downloadable. */
+function Attachments({ api, workspace, detail, onSaved }: {
+  api: Api;
+  workspace: Workspace;
+  detail: TicketDetail;
+  onSaved: (d: TicketDetail) => void;
+}) {
+  const id = useId();
+  const t = detail.ticket;
+  const [file, setFile] = useState<File | null>(null);
+  const [visibility, setVisibility] = useState<'internal' | 'public'>('internal');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<SaveError | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const input = useRef<HTMLInputElement | null>(null);
+  const errRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => { if (error) errRef.current?.focus(); }, [error]);
+
+  async function upload() {
+    if (busy) return;
+    if (!file) { setError({ title: 'Pilih berkas', body: 'Pilih satu berkas PDF, PNG atau JPEG.', conflict: false }); return; }
+    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) { setError(uploadError(new ApiError(413, 'attachment_too_large', ''))); return; }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await api.uploadTicketAttachment(workspace.id, t.id, file, visibility);
+      setBusy(false);
+      setFile(null);
+      if (input.current) input.current.value = '';
+      setNotice('Berkas dipindai bersih dan dilampirkan. Tercatat di audit.');
+      onSaved(res.detail);
+    } catch (e) {
+      setBusy(false);
+      setError(uploadError(e));
+    }
+  }
+
   return (
     <div>
-      <p className="banner" role="note">
-        Unggah dan unduh lampiran belum dibuka pada versi ini. Pemindai malware belum tersambung di lingkungan uji, sehingga sistem
-        menolak secara aman (fail-closed): tidak ada file yang dapat diunduh sebelum dipindai bersih.
+      <p className="tiny muted">
+        Berkas diunggah ke karantina, dipindai malware, lalu baru dilampirkan bila bersih. Bila pemindai tidak tersedia atau
+        gagal, berkas ditolak (fail-closed). Unduhan diperiksa ulang izin, status pindai dan integritasnya.
       </p>
+      {notice && <p className="notice" role="status">{notice}</p>}
+      {detail.can.uploadAttachment ? (
+        <form className="formgrid card" aria-label="Unggah lampiran" onSubmit={(e) => { e.preventDefault(); void upload(); }}>
+          {error && <div className="full state-error" role="alert" tabIndex={-1} ref={errRef}><h3>{error.title}</h3><p>{error.body}</p></div>}
+          <div className="field">
+            <label htmlFor={`${id}-file`}>Berkas (PDF, PNG, JPEG; maks {MAX_UPLOAD_MB} MB) *</label>
+            <input id={`${id}-file`} ref={input} type="file" accept={ACCEPT} disabled={busy} className="field-control"
+              onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(null); setNotice(null); }} />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-vis`}>Visibilitas</label>
+            <select id={`${id}-vis`} className="field-control" value={visibility} disabled={busy}
+              onChange={(e) => setVisibility(e.target.value === 'public' ? 'public' : 'internal')}>
+              <option value="internal">Internal</option>
+              <option value="public">Publik</option>
+            </select>
+          </div>
+          <div className="full row">
+            <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Memindai dan mengunggah…' : 'Unggah lampiran'}</Button>
+          </div>
+        </form>
+      ) : (
+        <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: lampiran baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat mengunggah lampiran.'}</p>
+      )}
       {detail.attachments.length === 0
         ? <p className="muted">Belum ada lampiran yang dapat Anda lihat.</p>
         : (
-          <ul className="plain">
-            {detail.attachments.map((a) => (
-              <li key={a.id} className="activity row between">
-                <span>
-                  <strong>{a.fileName}</strong>
-                  <span className="tiny muted"> · {num(Math.ceil(a.sizeBytes / 1024))} KB · {a.visibility === 'internal' ? 'Internal' : 'Publik'} · {instantLabel(a.createdAt, tz)}</span>
-                </span>
-                <Badge tone={a.scanStatus === 'clean' ? 'ok' : a.scanStatus === 'pending' ? 'waiting' : 'error'}>{SCAN_LABEL[a.scanStatus] ?? a.scanStatus}</Badge>
-              </li>
-            ))}
+          <ul className="plain" aria-label="Daftar lampiran">
+            {detail.attachments.map((a) => <AttachmentRow key={a.id} a={a} href={api.attachmentContentUrl(workspace.id, t.id, a.id)} tz={workspace.timezone} />)}
           </ul>
         )}
     </div>
+  );
+}
+
+function AttachmentRow({ a, href, tz }: { a: AttachmentMeta; href: string; tz: string }) {
+  return (
+    <li className="activity row between">
+      <span>
+        <strong>{a.fileName}</strong>
+        <span className="tiny muted"> · {num(Math.ceil(a.sizeBytes / 1024))} KB · {a.visibility === 'internal' ? 'Internal' : 'Publik'} · {instantLabel(a.createdAt, tz)}</span>
+      </span>
+      <span className="row">
+        <Badge tone={a.scanStatus === 'clean' ? 'ok' : a.scanStatus === 'pending' ? 'waiting' : 'error'}>{SCAN_LABEL[a.scanStatus] ?? a.scanStatus}</Badge>
+        {a.scanStatus === 'clean' && <a className="btn" href={href} download={a.fileName} aria-label={`Unduh ${a.fileName}`}>Unduh</a>}
+      </span>
+    </li>
   );
 }
 
@@ -676,6 +914,9 @@ function saveError(e: unknown, what: string): SaveError {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
       case 409:
+        if (e.code === 'idempotency_conflict') {
+          return { title: 'Sudah tersimpan sebelumnya', body: `Pengiriman sebelumnya dengan isian lain sudah diterima. Muat ulang detail untuk memeriksa; isian Anda tetap di sini.${rid}`, conflict: true };
+        }
         return { title: 'Sudah diubah pihak lain', body: `${what} tidak disimpan. Isian Anda tetap di sini; muat versi terbaru lalu simpan lagi.${rid}`, conflict: true };
       case 403:
         return { title: 'Tidak diizinkan', body: `Peran atau sesi Anda tidak dapat melakukan perubahan ini. Tidak ada yang berubah.${rid}`, conflict: false };

@@ -198,6 +198,8 @@ for (const w of list.body.items) {
         responses[`GET ${more}`] = await rec("GET", more);
       }
       responses[`GET ${tp}/assignment-history`] ??= await rec("GET", `${tp}/assignment-history`);
+      responses[`GET ${tp}/notes`] = await rec("GET", `${tp}/notes`);
+      responses[`GET ${tp}/conversations`] = await rec("GET", `${tp}/conversations`);
     }
   }
 }
@@ -216,10 +218,16 @@ for (const w of list.body.items) {
     const stage = async (n) => {
       responses[`GET ${tp}/detail#s${n}`] = await rec("GET", `${tp}/detail`);
       responses[`GET ${tp}/activity#s${n}`] = await rec("GET", `${tp}/activity`);
+      responses[`GET ${tp}/notes#s${n}`] = await rec("GET", `${tp}/notes`);
     };
     await stage(1);
-    const rw = await rec("POST", `${tp}/related-work`, h, { title: "Cek log settlement (dummy)", safeDescription: "Tanpa data nasabah.", blocking: true });
+    // D08b: related work is idempotent per key; the same key + payload is the real replay (200).
+    const rwBody = { title: "Cek log settlement (dummy)", safeDescription: "Tanpa data nasabah.", blocking: true };
+    const rwKey = { ...h, "Idempotency-Key": `review-rw-${Date.now()}` };
+    const rw = await rec("POST", `${tp}/related-work`, rwKey, rwBody);
     responses[`POST ${tp}/related-work#ok`] = rw;
+    responses[`POST ${tp}/related-work#replayed`] = await rec("POST", `${tp}/related-work`, rwKey, rwBody);
+    responses[`POST ${tp}/related-work#conflict`] = await rec("POST", `${tp}/related-work`, rwKey, { ...rwBody, title: "Isian lain (dummy)" });
     await stage(2);
     const work = rw.body?.detail?.relatedWork?.find((x) => x.completionState === "open");
     if (work) {
@@ -228,6 +236,24 @@ for (const w of list.body.items) {
       responses[`POST ${cp}#stale`] = await rec("POST", cp, h, { ...body, version: work.version + 1 });
       responses[`POST ${cp}#ok`] = await rec("POST", cp, h, { ...body, version: work.version });
       await stage(3);
+      // s4: an operational follow-up note (same key replays), then upload attempts. This host has no
+      // clamd, so the live server refuses the upload fail-closed; that real answer is recorded.
+      const nKey = { ...h, "Idempotency-Key": `review-note-${Date.now()}` };
+      const nBody = { body: "Merchant dihubungi; menunggu konfirmasi settlement (dummy, rekaman review D08b)." };
+      responses[`POST ${tp}/notes#ok`] = await rec("POST", `${tp}/notes`, nKey, nBody);
+      responses[`POST ${tp}/notes#replayed`] = await rec("POST", `${tp}/notes`, nKey, nBody);
+      await stage(4);
+      const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6360f8cfc0f01f0005000201a5d5ee6b0000000049454e44ae426082", "hex");
+      const up = async (q, bytes, name) => {
+        const res = await fetch(BASE + `${tp}/attachments?visibility=${q}`, {
+          method: "POST", body: bytes,
+          headers: { Accept: "application/json", Cookie: cookie, "X-CSRF-Token": csrf, "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(name) },
+        });
+        const text = await res.text();
+        return { status: res.status, body: text ? JSON.parse(text) : null, requestId: res.headers.get("x-request-id") };
+      };
+      responses[`POST ${tp}/attachments#scanner`] = await up("internal", png, "bukti-dummy.png");
+      responses[`POST ${tp}/attachments#type`] = await up("internal", Buffer.from("bukan berkas yang diizinkan"), "catatan.txt");
     }
   }
 }

@@ -9,8 +9,9 @@
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
@@ -19,7 +20,7 @@ use crate::authz::{self, Permission, WorkspaceAccess};
 use crate::domain::TicketStatus;
 use crate::error::AppError;
 use crate::routes::intake::{
-    MAX_CHRONOLOGY_CHARS, MAX_SUBJECT_CHARS, require_active, required_text,
+    MAX_CHRONOLOGY_CHARS, MAX_SUBJECT_CHARS, idempotency_key, require_active, required_text,
 };
 use crate::routes::ticket_list::{TicketListItem, audit, body, correlation, reload};
 use crate::routes::workspaces::parse_id;
@@ -131,6 +132,10 @@ pub struct DetailCapabilities {
     read_only: bool,
     edit_properties: bool,
     manage_related_work: bool,
+    /// Operational follow-up notes (not team chat).
+    add_note: bool,
+    /// Upload is offered; the server still refuses it when storage/scanner are unavailable.
+    upload_attachment: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,7 +248,7 @@ struct ResolutionRow {
 
 /// Builds the detail inside `conn` (a transaction for mutations, so the answer matches the
 /// committed write). 404 when the ticket is not in this workspace.
-async fn load(
+pub(crate) async fn load(
     conn: &mut PgConnection,
     access: &WorkspaceAccess,
     ticket_id: Uuid,
@@ -327,6 +332,8 @@ async fn load(
             read_only,
             edit_properties: !read_only && access.allows(Permission::TicketUpdate),
             manage_related_work: !read_only && access.allows(Permission::RelatedWorkManage),
+            add_note: !read_only && access.allows(Permission::TicketUpdate),
+            upload_attachment: !read_only && access.allows(Permission::AttachmentUpload),
         },
         related_work: related
             .into_iter()
@@ -481,6 +488,8 @@ pub(crate) fn activity_label(action: &str, c: &serde_json::Value) -> String {
             }
         }
         "related_work.complete" => "Menandai pekerjaan terkait selesai".to_owned(),
+        "ticket.note" => "Menambah catatan tindak lanjut".to_owned(),
+        "attachment.upload" => "Menambah lampiran (lolos pemindaian)".to_owned(),
         _ => "Aktivitas lain".to_owned(),
     }
 }
@@ -831,7 +840,7 @@ pub struct CompletionBody {
 }
 
 /// Locks the ticket and refuses writes on the archive (and on resolved for new work).
-async fn lock_open_ticket(
+pub(crate) async fn lock_open_ticket(
     conn: &mut PgConnection,
     ws: Uuid,
     ticket_id: Uuid,
@@ -853,16 +862,34 @@ async fn lock_open_ticket(
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelatedWorkCreated {
+    detail: TicketDetail,
+    related_work_id: Uuid,
+    /// `true` when the same Idempotency-Key and payload were already accepted; nothing new
+    /// was written and `auditEventId` is `null`.
+    replayed: bool,
+    audit_event_id: Option<Uuid>,
+}
+
+/// SHA-256 over the normalized create request (never stored as text).
+pub(crate) fn request_hash(v: &serde_json::Value) -> Result<Vec<u8>, AppError> {
+    let bytes = serde_json::to_vec(v).map_err(AppError::internal)?;
+    Ok(Sha256::digest(&bytes).to_vec())
+}
+
 pub async fn create_related_work(
     State(state): State<AppState>,
     s: Session,
     headers: HeaderMap,
     Path((raw_ws, raw_ticket)): Path<(String, String)>,
     payload: Result<Json<RelatedWorkBody>, JsonRejection>,
-) -> Result<Json<DetailMutation>, AppError> {
+) -> Result<(StatusCode, Json<RelatedWorkCreated>), AppError> {
     let access = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
     let ticket_id = parse_id(&raw_ticket)?;
     access.require(Permission::TicketRead)?;
+    let key = idempotency_key(&headers)?;
     let b = body(payload)?;
     let title = required_text(&b.title, MAX_RELATED_TITLE_CHARS, "title")?;
     let description = nullable_text(
@@ -872,13 +899,53 @@ pub async fn create_related_work(
     )?;
     access.require(Permission::RelatedWorkManage)?;
     let ws = access.workspace_id;
+    let hash = request_hash(&serde_json::json!({
+        "v": "d08b-related-work-v1",
+        "ticketId": ticket_id,
+        "title": title,
+        "safeDescription": description,
+        "blocking": b.blocking,
+    }))?;
 
     let mut tx = state.pool.begin().await?;
+    // Serializes concurrent submits of the same key; the unique index is the backstop.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("related-work-create:{ws}:{}:{key}", access.user_id))
+        .execute(&mut *tx)
+        .await?;
+    let prior: Option<(Uuid, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT id, create_request_hash FROM related_work \
+         WHERE workspace_id = $1 AND requested_by = $2 AND create_idempotency_key = $3",
+    )
+    .bind(ws)
+    .bind(access.user_id)
+    .bind(&key)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((id, stored)) = prior {
+        if stored.as_deref() != Some(hash.as_slice()) {
+            tracing::info!(workspace_id = %ws, "related work key reused with another payload");
+            return Err(AppError::IdempotencyConflict);
+        }
+        let detail = load(&mut tx, &access, ticket_id).await?;
+        tx.commit().await?;
+        tracing::info!(workspace_id = %ws, ticket_id = %ticket_id, related_work_id = %id, "related work create replayed");
+        return Ok((
+            StatusCode::OK,
+            Json(RelatedWorkCreated {
+                detail,
+                related_work_id: id,
+                replayed: true,
+                audit_event_id: None,
+            }),
+        ));
+    }
     // New work on a resolved ticket would be invisible to the resolve guard: reopen first.
     lock_open_ticket(&mut tx, ws, ticket_id, true).await?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO related_work (workspace_id, ticket_id, title, safe_description, blocking, \
-           requested_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+           requested_by, create_idempotency_key, create_request_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id",
     )
     .bind(ws)
     .bind(ticket_id)
@@ -886,6 +953,8 @@ pub async fn create_related_work(
     .bind(&description)
     .bind(b.blocking)
     .bind(access.user_id)
+    .bind(&key)
+    .bind(&hash)
     .fetch_one(&mut *tx)
     .await?;
     let audit_id = audit(
@@ -900,10 +969,15 @@ pub async fn create_related_work(
     let detail = load(&mut tx, &access, ticket_id).await?;
     tx.commit().await?;
     tracing::info!(workspace_id = %ws, ticket_id = %ticket_id, related_work_id = %id, "related work created");
-    Ok(Json(DetailMutation {
-        detail,
-        audit_event_id: Some(audit_id),
-    }))
+    Ok((
+        StatusCode::CREATED,
+        Json(RelatedWorkCreated {
+            detail,
+            related_work_id: id,
+            replayed: false,
+            audit_event_id: Some(audit_id),
+        }),
+    ))
 }
 
 pub async fn complete_related_work(

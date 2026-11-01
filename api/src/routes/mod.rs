@@ -1,6 +1,8 @@
 pub mod access;
+pub mod attachments;
 pub mod catalogs;
 pub mod dashboard;
+pub mod followup;
 pub mod health;
 pub mod intake;
 pub mod saved_views;
@@ -105,6 +107,26 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
     ),
 ];
 
@@ -219,4 +241,22 @@ pub fn api_router() -> Router<AppState> {
             "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
             get(tickets::report_run),
         )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+            get(followup::list_notes).post(followup::create_note),
+        )
+        .route("/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations", get(followup::conversations))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
+            get(attachments::download),
+        )
+}
+
+/// The upload route streams large bodies, so it is mounted outside the global 64 KiB body
+/// limit and 10 s timeout (it enforces its own size cap and gets a longer timeout).
+pub fn upload_router() -> Router<AppState> {
+    Router::new().route(
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments",
+        post(attachments::upload),
+    )
 }

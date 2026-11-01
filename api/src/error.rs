@@ -42,6 +42,21 @@ pub enum AppError {
     IdempotencyConflict,
     #[error("uat_not_available")]
     UatNotAvailable,
+    /// Upload larger than the configured cap. Nothing was kept.
+    #[error("attachment_too_large")]
+    AttachmentTooLarge,
+    /// Content (sniffed by the server, not the client's type) is not on the allow-list.
+    #[error("attachment_type_refused")]
+    AttachmentTypeRefused,
+    /// The scanner reported malware. The bytes were deleted and never bound.
+    #[error("attachment_infected")]
+    AttachmentInfected,
+    /// The scanner answered but did not complete the scan. Fail closed: nothing bound.
+    #[error("scan_failed")]
+    ScanFailed,
+    /// No scanner reachable (or not configured). Fail closed: nothing bound.
+    #[error("scanner_unavailable")]
+    ScannerUnavailable,
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -94,12 +109,37 @@ impl AppError {
             AppError::IdempotencyConflict => (
                 StatusCode::CONFLICT,
                 "idempotency_conflict",
-                "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada tiket baru yang dibuat.",
+                "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada data baru yang disimpan.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "uat_not_available",
                 "Mode uji tidak tersedia pada database ini.",
+            ),
+            AppError::AttachmentTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "attachment_too_large",
+                "Ukuran berkas melebihi batas. Berkas tidak disimpan.",
+            ),
+            AppError::AttachmentTypeRefused => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "attachment_type_refused",
+                "Jenis berkas tidak diizinkan (hanya PDF, PNG atau JPEG). Berkas tidak disimpan.",
+            ),
+            AppError::AttachmentInfected => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "attachment_infected",
+                "Pemindai menandai berkas berbahaya. Berkas dihapus dan tidak dilampirkan.",
+            ),
+            AppError::ScanFailed => (
+                StatusCode::BAD_GATEWAY,
+                "scan_failed",
+                "Pemindaian berkas gagal. Berkas tidak dilampirkan; coba lagi nanti.",
+            ),
+            AppError::ScannerUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "scanner_unavailable",
+                "Pemindai berkas tidak tersedia. Berkas tidak dilampirkan.",
             ),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,

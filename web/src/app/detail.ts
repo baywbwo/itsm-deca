@@ -22,6 +22,7 @@ export const LIMITS = {
   foreignBranchReference: 100,
   relatedTitle: 300,
   relatedText: 5000,
+  note: 5000,
 } as const;
 
 const ID_FIELDS = ['priorityId', 'categoryId', 'productId', 'receivingUnitId', 'regionId'] as const;

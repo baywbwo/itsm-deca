@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Environment {
@@ -56,6 +57,18 @@ impl fmt::Debug for DatabaseUrl {
     }
 }
 
+/// Where clamd listens. Only an operator-provided address is used; nothing is discovered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClamdAddr {
+    Tcp(String),
+    Unix(PathBuf),
+}
+
+/// Default upload cap (the baseline's proposed 10 MiB; final value is configuration).
+pub const DEFAULT_ATTACHMENT_MAX_BYTES: u64 = 10 * 1024 * 1024;
+/// Highest cap the server accepts from configuration.
+pub const ATTACHMENT_MAX_BYTES_CEILING: u64 = 25 * 1024 * 1024;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub environment: Environment,
@@ -63,6 +76,11 @@ pub struct Config {
     pub database_url: DatabaseUrl,
     pub bind: SocketAddr,
     pub cookie_secure: bool,
+    /// Root for quarantine and stored attachments. Absent = uploads/downloads refused (503).
+    pub attachment_dir: Option<PathBuf>,
+    /// clamd address. Absent = every upload ends as scanner_unavailable (503), never bound.
+    pub clamd: Option<ClamdAddr>,
+    pub attachment_max_bytes: u64,
 }
 
 impl Config {
@@ -117,14 +135,69 @@ impl Config {
             }
         };
 
+        let optional = |name: &str| {
+            vars.get(name)
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        };
+        let attachment_dir = match optional("ITSM_ATTACHMENT_DIR") {
+            None => None,
+            Some(v) => {
+                let p = PathBuf::from(v);
+                if !p.is_absolute() {
+                    return Err(ConfigError::Invalid {
+                        name: "ITSM_ATTACHMENT_DIR",
+                    });
+                }
+                Some(p)
+            }
+        };
+        let clamd = match optional("ITSM_CLAMD_ADDR") {
+            None => None,
+            Some(v) => Some(parse_clamd(&v).ok_or(ConfigError::Invalid {
+                name: "ITSM_CLAMD_ADDR",
+            })?),
+        };
+        let attachment_max_bytes = match optional("ITSM_ATTACHMENT_MAX_BYTES") {
+            None => DEFAULT_ATTACHMENT_MAX_BYTES,
+            Some(v) => v
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (1..=ATTACHMENT_MAX_BYTES_CEILING).contains(n))
+                .ok_or(ConfigError::Invalid {
+                    name: "ITSM_ATTACHMENT_MAX_BYTES",
+                })?,
+        };
+
         Ok(Config {
             environment,
             access_mode,
             database_url,
             bind,
             cookie_secure,
+            attachment_dir,
+            clamd,
+            attachment_max_bytes,
         })
     }
+}
+
+/// `tcp://host:port` or `unix:/absolute/path` (also `unix:///absolute/path`).
+fn parse_clamd(v: &str) -> Option<ClamdAddr> {
+    if let Some(rest) = v.strip_prefix("tcp://") {
+        let (host, port) = rest.rsplit_once(':')?;
+        let port_ok = port.parse::<u16>().ok().filter(|p| *p > 0).is_some();
+        let host_ok = !host.is_empty()
+            && host.bytes().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'[' | b']' | b':')
+            });
+        return (port_ok && host_ok).then(|| ClamdAddr::Tcp(rest.to_owned()));
+    }
+    let path = v
+        .strip_prefix("unix://")
+        .or_else(|| v.strip_prefix("unix:"))?;
+    let p = PathBuf::from(path);
+    p.is_absolute().then_some(ClamdAddr::Unix(p))
 }
 
 #[cfg(test)]
@@ -223,5 +296,45 @@ mod tests {
         let printed = format!("{cfg:?}");
         assert!(!printed.contains("secret"));
         assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn attachment_settings_are_optional_and_fail_closed_when_malformed() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.attachment_dir.is_none() && c.clamd.is_none()
+            && c.attachment_max_bytes == DEFAULT_ATTACHMENT_MAX_BYTES)
+        );
+
+        let mut v = base();
+        v.push(("ITSM_ATTACHMENT_DIR", "/srv/itsm/att"));
+        v.push(("ITSM_CLAMD_ADDR", "tcp://127.0.0.1:3310"));
+        v.push(("ITSM_ATTACHMENT_MAX_BYTES", "1048576"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.clamd == Some(ClamdAddr::Tcp("127.0.0.1:3310".into()))
+            && c.attachment_max_bytes == 1_048_576)
+        );
+        assert_eq!(
+            parse_clamd("unix:///run/clamd.sock"),
+            Some(ClamdAddr::Unix(PathBuf::from("/run/clamd.sock")))
+        );
+
+        for (name, bad) in [
+            ("ITSM_ATTACHMENT_DIR", "relative/dir"),
+            ("ITSM_CLAMD_ADDR", "127.0.0.1:3310"),
+            ("ITSM_CLAMD_ADDR", "tcp://host:0"),
+            ("ITSM_CLAMD_ADDR", "unix:relative.sock"),
+            ("ITSM_ATTACHMENT_MAX_BYTES", "0"),
+            ("ITSM_ATTACHMENT_MAX_BYTES", "999999999"),
+        ] {
+            let mut v = base();
+            v.push((name, bad));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={bad}"
+            );
+        }
     }
 }

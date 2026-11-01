@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.9.0-d08a",
+    "version": "0.10.0-d08b",
     "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile."
   },
   "servers": [
@@ -683,7 +683,12 @@
                   "dependency_unavailable",
                   "internal",
                   "validation_failed",
-                  "idempotency_conflict"
+                  "idempotency_conflict",
+                  "attachment_too_large",
+                  "attachment_type_refused",
+                  "attachment_infected",
+                  "scan_failed",
+                  "scanner_unavailable"
                 ]
               },
               "message": {
@@ -1189,7 +1194,8 @@
               "infected",
               "scanner_unavailable",
               "rejected"
-            ]
+            ],
+            "description": "pending | clean | infected | scan_error | scanner_unavailable | rejected"
           },
           "visibility": {
             "type": "string",
@@ -3395,7 +3401,9 @@
         "required": [
           "readOnly",
           "editProperties",
-          "manageRelatedWork"
+          "manageRelatedWork",
+          "addNote",
+          "uploadAttachment"
         ],
         "properties": {
           "readOnly": {
@@ -3407,6 +3415,14 @@
           },
           "manageRelatedWork": {
             "type": "boolean"
+          },
+          "addNote": {
+            "type": "boolean",
+            "description": "ticket.update and not closed."
+          },
+          "uploadAttachment": {
+            "type": "boolean",
+            "description": "attachment.upload and not closed."
           }
         }
       },
@@ -3663,6 +3679,239 @@
             "maxLength": 5000
           }
         }
+      },
+      "RelatedWorkCreated": {
+        "type": "object",
+        "required": [
+          "detail",
+          "relatedWorkId",
+          "replayed",
+          "auditEventId"
+        ],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "relatedWorkId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "true = same Idempotency-Key and payload already accepted; nothing new written."
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null on replay."
+          }
+        }
+      },
+      "Note": {
+        "type": "object",
+        "required": [
+          "id",
+          "body",
+          "author",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "type": "string"
+          },
+          "author": {
+            "$ref": "#/components/schemas/PersonRef"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NotePage": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Note"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NoteCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Trimmed; 1..5000 characters."
+          }
+        }
+      },
+      "NoteCreated": {
+        "type": "object",
+        "required": [
+          "note",
+          "replayed",
+          "auditEventId"
+        ],
+        "properties": {
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "ConversationMessage": {
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "body",
+          "deliveryState",
+          "occurredAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "deliveryState": {
+            "type": "string",
+            "enum": [
+              "received",
+              "queued",
+              "sent",
+              "delivered",
+              "failed",
+              "unknown"
+            ]
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "channelLabel",
+          "externalThreadId",
+          "messages"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "channelLabel": {
+            "type": "string"
+          },
+          "externalThreadId": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            }
+          }
+        }
+      },
+      "ConversationPanel": {
+        "type": "object",
+        "required": [
+          "adapterConfigured",
+          "conversations",
+          "truncated"
+        ],
+        "properties": {
+          "adapterConfigured": {
+            "type": "boolean",
+            "description": "No omnichannel adapter exists in this build: always false, nothing can be sent."
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AttachmentUploaded": {
+        "type": "object",
+        "required": [
+          "attachmentId",
+          "detail",
+          "auditEventId"
+        ],
+        "properties": {
+          "attachmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       }
     },
     "responses": {
@@ -3748,6 +3997,66 @@
       },
       "IdempotencyConflict": {
         "description": "Idempotency-Key already used by this user in this workspace for a different payload (idempotency_conflict); nothing created",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "DependencyUnavailable": {
+        "description": "A dependency (storage, upload slots) is not available (dependency_unavailable); nothing bound",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentTooLarge": {
+        "description": "File is larger than the configured cap (attachment_too_large)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentTypeRefused": {
+        "description": "Server-side sniffing found a type other than PDF/PNG/JPEG (attachment_type_refused)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentRejected": {
+        "description": "rule_violation (closed ticket) or attachment_infected (scanner verdict; file deleted, not bound)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ScanFailed": {
+        "description": "clamd reached but gave no verdict (scan_failed); file deleted, not bound",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ScannerUnavailable": {
+        "description": "scanner_unavailable (clamd not configured/unreachable, file deleted, not bound) or dependency_unavailable",
         "content": {
           "application/json": {
             "schema": {
@@ -5567,7 +5876,7 @@
       "post": {
         "operationId": "createRelatedWork",
         "summary": "Add related work (D08)",
-        "description": "related_work.manage. Refused (422) on a closed or resolved ticket (reopen first). Row and audit commit atomically.",
+        "description": "related_work.manage. Requires Idempotency-Key (scoped to user + workspace): same key + same payload replays (200, replayed=true, nothing written); same key + different payload = 409. Refused (422) on a closed or resolved ticket. Row and audit commit atomically.",
         "security": [
           {
             "sessionCookie": [],
@@ -5580,6 +5889,9 @@
           },
           {
             "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -5594,11 +5906,21 @@
         },
         "responses": {
           "200": {
-            "description": "Fresh detail",
+            "description": "Replay of an earlier create",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TicketDetailMutation"
+                  "$ref": "#/components/schemas/RelatedWorkCreated"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedWorkCreated"
                 }
               }
             }
@@ -5614,6 +5936,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
@@ -5681,6 +6006,333 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes": {
+      "get": {
+        "operationId": "listTicketNotes",
+        "summary": "Operational follow-up notes (D08b)",
+        "description": "ticket.read. Newest first; cursor `createdAt~id`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTicketNote",
+        "summary": "Add an operational note (D08b)",
+        "description": "ticket.update. A handling record, not team chat. Idempotent per user + workspace + Idempotency-Key (replay 200, different payload 409). Allowed on resolved, refused on closed (422). Audit stores the note id only.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteCreated"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations": {
+      "get": {
+        "operationId": "getTicketConversations",
+        "summary": "Customer conversation panel, read only (D08b)",
+        "description": "ticket.read. No adapter in this build (adapterConfigured=false); only labelled simulation rows can exist. No send operation.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Panel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPanel"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments": {
+      "post": {
+        "operationId": "uploadTicketAttachment",
+        "summary": "Upload an attachment: quarantine → scan → bind (D08b)",
+        "description": "attachment.upload. Raw file body (any Content-Type; the server sniffs PDF/PNG/JPEG). File name in X-File-Name, percent-encoded UTF-8. Bound to the ticket only after an explicit clean clamd verdict; infected/scan error/scanner unavailable are recorded, audited as failed, the bytes deleted, and nothing is bound. Closed ticket = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "public"
+              ],
+              "default": "internal"
+            }
+          },
+          {
+            "name": "X-File-Name",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 3060
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Clean and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploaded"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/AttachmentTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/AttachmentTypeRefused"
+          },
+          "422": {
+            "$ref": "#/components/responses/AttachmentRejected"
+          },
+          "502": {
+            "$ref": "#/components/responses/ScanFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ScannerUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content": {
+      "get": {
+        "operationId": "downloadTicketAttachment",
+        "summary": "Download a bound clean attachment (D08b)",
+        "description": "ticket.read + attachment.read, checked at request time. Only clean, bound files of this ticket; hash verified before sending. Content-Disposition attachment, CSP sandbox. Audited.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/AttachmentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }
