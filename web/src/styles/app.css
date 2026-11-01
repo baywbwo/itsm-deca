@@ -121,7 +121,8 @@ dialog.drawer .dialog-body { display: grid; gap: 24px; align-content: start; }
 
 /* O01 Dashboard (baseline design-baseline/index.html) */
 .toolbar { padding: 12px 0; margin-bottom: 16px; border-bottom: 1px solid var(--line); gap: 12px; }
-.toolbar .period { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.toolbar .period { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
+.toolbar .period select { font-size: 14px; font-weight: 400; }
 .toolbar .field-control { width: auto; }
 .between { justify-content: space-between; }
 .spaced { margin-top: 20px; }
@@ -158,10 +159,6 @@ details .plain li { padding: 4px 0; font-size: 13px; }
 .source { margin-top: 20px; }
 .props-row { display: contents; }
 
-@media (min-width: 761px) and (max-width: 1099px) {
-  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .grid2 { grid-template-columns: 1fr; }
-}
 
 @media (max-width: 760px) {
   .shell { grid-template-columns: 1fr; }
@@ -177,7 +174,5 @@ details .plain li { padding: 4px 0; font-size: 13px; }
   .kpi strong { font-size: 26px; }
   .grid2 { grid-template-columns: 1fr; }
   .barrow { grid-template-columns: 100px minmax(0, 1fr) 25px; }
-  .toolbar .period { width: 100%; }
-  .toolbar .field-control { flex: 1; }
 }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
