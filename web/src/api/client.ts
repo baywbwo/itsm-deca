@@ -4,6 +4,11 @@ import {
   isErrorBody,
   isMemberList,
   isEmpty,
+  isAssignmentHistory,
+  isIntakeDirectory,
+  isOutboxRecoveryResult,
+  isTicketCreateResult,
+  isTicketIntegrations,
   isMeta,
   isSession,
   isSavedView,
@@ -18,6 +23,14 @@ import {
 } from './guards';
 import type {
   ApiErrorCode,
+  AssignmentHistory,
+  IntakeDirectory,
+  OutboxReconcileRequest,
+  OutboxRecoveryResult,
+  OutboxRetryRequest,
+  TicketCreateRequest,
+  TicketCreateResult,
+  TicketIntegrations,
   Catalogs,
   Dashboard,
   DashboardPeriodKey,
@@ -37,7 +50,7 @@ import type {
 } from './types';
 
 export interface TransportRequest {
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   path: string;
   headers: Record<string, string>;
   signal?: AbortSignal | undefined;
@@ -55,9 +68,11 @@ export type Transport = (req: TransportRequest) => Promise<TransportResponse>;
 export class ApiError extends Error {
   constructor(
     readonly status: number,
-    readonly code: ApiErrorCode | 'network' | 'bad_response',
+    readonly code: ApiErrorCode | 'network' | 'bad_response' | 'timeout',
     message: string,
     readonly requestId: string | null = null,
+    /** validation_failed only: the request field to fix. */
+    readonly field: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -104,13 +119,16 @@ export function createApi(transport: Transport) {
   // CSRF synchronizer token: memory only (never storage), returned once at entry.
   let csrfToken: string | null = null;
 
-  async function call<T>(req: TransportRequest, guard: Guard<T>, ok = 200): Promise<T> {
+  async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
     const res = await transport(req);
-    if (res.status === ok && guard(res.body)) return res.body;
+    const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
+    if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
-      throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId);
+      const field = (res.body.error as { field?: unknown }).field;
+      throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
+        typeof field === 'string' ? field : null);
     }
-    if (res.status === ok) {
+    if (okStatus) {
       throw new ApiError(0, 'bad_response', 'Respons server tidak sesuai kontrak.', res.requestId);
     }
     throw new ApiError(res.status, 'internal', 'Terjadi kesalahan pada server.', res.requestId);
@@ -187,6 +205,42 @@ export function createApi(transport: Transport) {
         headers: csrf(),
       }, isEmpty, 204);
     },
+    /**
+     * D07 intake. `key` is the draft's idempotency key: resend the SAME key and payload after a
+     * timeout or network error; the server replays the original ticket instead of creating a
+     * second one. Times out client-side after `timeoutMs` (outcome then unknown, code timeout).
+     */
+    async createTicket(id: string, key: string, body: TicketCreateRequest, timeoutMs = 15000): Promise<TicketCreateResult> {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        return await call({
+          method: 'POST', path: `${ws(id)}/tickets`, headers: { ...csrf(), 'Idempotency-Key': key },
+          body, signal: ctrl.signal,
+        }, isTicketCreateResult, [200, 201]);
+      } catch (e) {
+        if (isAbort(e)) throw new ApiError(0, 'timeout', 'Server belum menjawab. Hasil pengiriman belum diketahui.');
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    getIntakeDirectory: (id: string, signal?: AbortSignal): Promise<IntakeDirectory> =>
+      get(`${ws(id)}/intake-directory`, isIntakeDirectory, signal),
+    getAssignmentHistory: (id: string, ticketId: string, signal?: AbortSignal): Promise<AssignmentHistory> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/assignment-history`, isAssignmentHistory, signal),
+    getTicketIntegrations: (id: string, ticketId: string, signal?: AbortSignal): Promise<TicketIntegrations> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/integrations`, isTicketIntegrations, signal),
+    retryOutbox: (id: string, outboxId: string, body: OutboxRetryRequest): Promise<OutboxRecoveryResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/retry`,
+        headers: csrf(), body,
+      }, isOutboxRecoveryResult),
+    reconcileOutbox: (id: string, outboxId: string, body: OutboxReconcileRequest): Promise<OutboxRecoveryResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/reconcile`,
+        headers: csrf(), body,
+      }, isOutboxRecoveryResult),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

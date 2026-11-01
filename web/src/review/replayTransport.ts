@@ -1,4 +1,4 @@
-import type { Transport } from '../api/client';
+import { ApiError, type Transport } from '../api/client';
 
 export interface Recorded { status: number; body: unknown; requestId: string | null }
 export interface Fixtures { recordedAt: string; origin: string; backendSha: string | null; responses: Record<string, Recorded> }
@@ -17,9 +17,15 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * Saved views (C32) are always synthetic in the review package: an in-memory store per page
  * load (lost on reload, never in browser storage) that mimics the server rules (unique name,
  * version 409, 404). It does not prove the live API; that is covered by the cargo/UAT tests.
+ * D07 intake replays real recorded answers: the first key gets the recorded 201, the same key with
+ * the same payload the recorded replay (200), the same key with another payload the recorded 409.
+ * - intake-unknown: the first send fails as a network error (synthetic), the resend replays.
+ * - intake-degraded: the create answer recorded while the simulation was Jira unknown / Lark failed.
+ * - conflict: also the PIC change replays the server's real 409 (stale version).
+ * Retry/reconcile and other combinations are not recorded; the replay says so.
  */
-export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict';
-export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict'];
+export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict' | 'intake-unknown' | 'intake-degraded';
+export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict', 'intake-unknown', 'intake-degraded'];
 
 const DASHBOARD = /^\/api\/v1\/workspaces\/([^/]+)\/dashboard\?/;
 const TICKETS = /^\/api\/v1\/workspaces\/[^/]+\/tickets(\/board)?(\?|$)/;
@@ -65,6 +71,14 @@ function wait(ms: number, signal: AbortSignal | undefined, honourAbort: boolean)
  * Review-only transport: replays responses recorded from the real UAT backend so the shell can
  * be reviewed from a file:// page. Session state is simulated (anonymous until UAT entry).
  */
+const CREATE = /^\/api\/v1\/workspaces\/[^/]+\/tickets$/;
+const ASSIGN = /^\/api\/v1\/workspaces\/[^/]+\/tickets\/[^/]+\/assignment$/;
+const notRecorded = (what: string) => ({
+  status: 503,
+  body: { error: { code: 'dependency_unavailable', message: `Paket review: ${what} tidak direkam.` } },
+  requestId: 'review-tidak-direkam',
+});
+
 const SAVED = /^\/api\/v1\/workspaces\/([^/]+)\/saved-views(?:\/([^/]+))?$/;
 
 interface SyntheticView { id: string; name: string; view: string; query: Record<string, string>; version: number; createdAt: string; updatedAt: string }
@@ -108,7 +122,52 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
   let firstDashboardWs: string | null = null;
   let mutated = false;
   const saved = new Map<string, SyntheticView[]>();
-  return async ({ method, path, signal, body: payload }) => {
+  const keys = new Map<string, string>(); // idempotency key -> payload JSON
+  let networkFailed = false;
+  const after = new Set<string>(); // GET keys that now answer with their '#after' recording
+  return async ({ method, path, signal, headers, body: payload }) => {
+    if (method === 'POST' && CREATE.test(path)) {
+      await wait(latencyMs, signal, true);
+      const key = headers['Idempotency-Key'] ?? '';
+      const json = JSON.stringify(payload);
+      const seen = keys.get(key);
+      let variant: string;
+      if (seen === undefined) {
+        if (keys.size > 0) return notRecorded('tiket kedua dengan kunci baru');
+        if (scenario === 'intake-unknown' && !networkFailed) {
+          networkFailed = true;
+          keys.set(key, json);
+          throw new ApiError(0, 'network', 'Simulasi review: koneksi terputus sebelum jawaban server diterima.');
+        }
+        keys.set(key, json);
+        variant = scenario === 'intake-degraded' ? 'degraded' : 'created';
+      } else if (seen !== json) {
+        variant = 'conflict';
+      } else {
+        // Same key + same payload (also the resend after a lost answer): the server replays.
+        variant = 'replayed';
+        if (scenario === 'intake-degraded') return notRecorded('pengiriman ulang pada skenario ini');
+      }
+      const hit = f.responses[`POST ${path}#${variant}`];
+      if (!hit) return notRecorded('pembuatan tiket di workspace ini');
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    if (method === 'POST' && ASSIGN.test(path)) {
+      await wait(latencyMs, signal, true);
+      const hit = f.responses[`POST ${path}#${scenario === 'conflict' ? 'stale' : 'ok'}`];
+      if (!hit) return notRecorded('perubahan PIC untuk tiket ini');
+      if (hit.status === 200) after.add(`GET ${path}-history`);
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    if (method === 'POST' && /\/integration-outbox\/[^/]+\/(retry|reconcile)$/.test(path)) {
+      await wait(latencyMs, signal, true);
+      return notRecorded('pemulihan integrasi (coba ulang/rekonsiliasi)');
+    }
+    if (method === 'GET' && after.has(`GET ${path}`) && f.responses[`GET ${path}#after`]) {
+      await wait(latencyMs, signal, true);
+      const hit = f.responses[`GET ${path}#after`]!;
+      return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
     const sv = SAVED.exec(path);
     if (sv) {
       await wait(latencyMs, signal, true);

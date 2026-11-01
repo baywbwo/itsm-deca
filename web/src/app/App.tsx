@@ -11,6 +11,7 @@ import { ComponentsPage } from '../pages/ComponentsPage';
 import { DashboardPage } from '../pages/DashboardPage';
 import { PlannedPage } from '../pages/PlannedPage';
 import { TicketsPage } from '../pages/TicketsPage';
+import { drafts } from './drafts';
 import { navigate, useBoot, useHashRoute, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
 import { allowedPages, pageDef, toHash, type PageDef, type PageId } from './routes';
@@ -56,6 +57,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
   const scope = useScope(api, route.workspaceId, attempt);
   const [drawer, setDrawer] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<Workspace | null>(null);
   const first = workspaces[0];
 
   // No workspace in the URL: open the first one the server lists.
@@ -85,11 +87,32 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
   const current = pageDef(route.page);
   const listed = workspaces.find((w) => w.id === route.workspaceId) ?? null;
 
+  // In-memory intake drafts must not vanish silently: warn before a reload drops them.
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!drafts.anyDirty()) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
+
   function switchWorkspace(id: string) {
     const next = workspaces.find((w) => w.id === id);
     if (!next || id === route.workspaceId) return;
+    // A dirty intake draft in the current workspace: keep it, discard it or stay (C13/O05).
+    if (route.workspaceId && drafts.dirty(session.user.id, route.workspaceId)) {
+      setDrawer(false);
+      setPendingSwitch(next);
+      return;
+    }
+    go(next);
+  }
+  function go(next: Workspace) {
     setDrawer(false);
-    navigate(toHash({ workspaceId: id, page: route.page }));
+    setPendingSwitch(null);
+    navigate(toHash({ workspaceId: next.id, page: route.page }));
     setToast(`Workspace aktif: ${next.code} · ${next.name}`);
   }
 
@@ -145,16 +168,34 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
               bukti izin CS/Lead CS.
             </div>
           )}
-          <Content key={route.workspaceId ?? ''} api={api} scope={scope} page={current} pages={pages}
+          <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D06 (List/Board tiket) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D07 (intake &amp; PIC tiket) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
         {switcher}
         {nav(() => setDrawer(false))}
         <Profile session={session} />
+      </Dialog>
+      <Dialog open={!!pendingSwitch} onClose={() => setPendingSwitch(null)} title="Draf tiket belum terkirim"
+        initialFocus=".switch-cancel"
+        footer={pendingSwitch && (
+          <>
+            <Button className="switch-cancel" onClick={() => setPendingSwitch(null)}>Batal</Button>
+            <Button onClick={() => {
+              if (route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
+              go(pendingSwitch);
+            }}>Buang draf &amp; pindah</Button>
+            <Button variant="primary" onClick={() => go(pendingSwitch)}>Simpan draf &amp; pindah</Button>
+          </>
+        )}>
+        <p>Ada draf tiket di workspace <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
+          terkirim.</p>
+        <p className="tiny muted">Simpan: draf tetap di memori tab ini untuk akun Anda dan workspace tersebut, dan muncul
+          lagi saat Anda kembali. Draf tidak pernah dipindah ke workspace {pendingSwitch?.code ?? 'lain'} dan hilang saat
+          halaman dimuat ulang.</p>
       </Dialog>
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
@@ -173,8 +214,9 @@ function Profile({ session }: { session: Session }) {
   );
 }
 
-function Content({ api, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter }: {
+function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter }: {
   api: Api;
+  userId: string;
   scope: ReturnType<typeof useScope>;
   page: PageDef;
   pages: PageDef[];
@@ -212,16 +254,16 @@ function Content({ api, scope, page, pages, query, uat, firstWorkspace, onRetry,
     );
   }
   if (!pages.some((p) => p.id === page.id)) return <ForbiddenState />;
-  return <Page id={page.id} api={api} data={scope.data} query={query} uat={uat} />;
+  return <Page id={page.id} api={api} userId={userId} data={scope.data} query={query} uat={uat} />;
 }
 
-function Page({ id, api, data, query, uat }: { id: PageId; api: Api; data: ScopeData; query: string; uat: boolean }) {
+function Page({ id, api, userId, data, query, uat }: { id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean }) {
   switch (id) {
     case 'dashboard':
       return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
     case 'tickets':
-      return <TicketsPage api={api} workspace={data.workspace} permissions={data.permissions} query={query} />;
+      return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:

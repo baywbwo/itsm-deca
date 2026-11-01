@@ -69,6 +69,7 @@ for (const w of list.body.items) {
   const base = `/api/v1/workspaces/${w.id}`;
   responses[`GET ${base}/members`] = await rec('GET', `${base}/members`);
   responses[`GET ${base}/catalogs`] = await rec('GET', `${base}/catalogs`);
+  responses[`GET ${base}/intake-directory`] = await rec('GET', `${base}/intake-directory`);
   const today = responses[`GET ${base}/dashboard?period=today`].body;
   const order = ['status', 'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore'];
   const toQuery = (f) => {
@@ -116,6 +117,66 @@ if (candidate) {
   responses[`POST ${path}#open`] = await rec('POST', path, { 'X-CSRF-Token': csrf }, { to: 'open', version: candidate.version });
   for (const p of [`${fb}/tickets`, `${fb}/tickets/board`, `${fb}/tickets?status=new`, `${fb}/tickets/board?status=new`]) {
     responses[`GET ${p}#after`] = await rec('GET', p);
+  }
+}
+// D07 intake (first workspace, dummy DB): a real create with simulated Jira create + Lark, its
+// same-key replay, a same-key different-payload 409, then a create while the simulation is set
+// to Jira unknown / Lark failed. Keys are fixed per recording; the replay picks by call order.
+{
+  const dir = responses[`GET ${fb}/intake-directory`].body;
+  const cat = responses[`GET ${fb}/catalogs`].body;
+  const members = responses[`GET ${fb}/members`].body.items.filter((m) => m.active);
+  const stamp = Date.now();
+  const at = new Date(stamp - 15 * 60000);
+  const local = new Date(at.getTime() + 7 * 3600000).toISOString().slice(0, 16);
+  const body = {
+    subject: 'Saldo terpotong dua kali (contoh dummy)',
+    chronology: 'Contoh kronologi dummy untuk paket review D07; bukan data nasabah.',
+    receivedAt: `${local}:00+07:00`,
+    intakeChannelId: cat.intakeChannels.find((c) => c.active).id,
+    priorityId: cat.priorities.find((c) => c.active).id,
+    ownerUserId: members[0].userId,
+    merchantId: dir.merchants[0].id,
+    jira: { mode: 'create', title: 'Investigasi potongan ganda (dummy)', assigneeId: dir.jira.options[0].id },
+    larkDestinationId: dir.lark.options[0].id,
+  };
+  const h = (key) => ({ 'X-CSRF-Token': csrf, 'Idempotency-Key': key });
+  const sim = async (conn, outcome) => {
+    const now = (await rec('GET', `${fb}/intake-directory`)).body;
+    const c = now[conn];
+    await rec('PUT', `${fb}/integrations/${c.connectionId}/simulation`, { 'X-CSRF-Token': csrf }, { outcome, version: c.version });
+  };
+  await sim('jira', 'success');
+  await sim('lark', 'success');
+  const k1 = `review-${stamp}-1`;
+  responses[`POST ${fb}/tickets#created`] = await rec('POST', `${fb}/tickets`, h(k1), body);
+  responses[`POST ${fb}/tickets#replayed`] = await rec('POST', `${fb}/tickets`, h(k1), body);
+  responses[`POST ${fb}/tickets#conflict`] = await rec('POST', `${fb}/tickets`, h(k1), { ...body, subject: `${body.subject} (diubah)` });
+  const t1 = responses[`POST ${fb}/tickets#created`].body.ticket;
+  responses[`GET ${fb}/tickets/${t1.id}/integrations`] = await rec('GET', `${fb}/tickets/${t1.id}/integrations`);
+  responses[`GET ${fb}/tickets/${t1.id}/assignment-history`] = await rec('GET', `${fb}/tickets/${t1.id}/assignment-history`);
+  const q1 = `${fb}/tickets?${new URLSearchParams({ q: t1.displayNumber })}`;
+  responses[`GET ${q1}`] = await rec('GET', q1);
+  await sim('jira', 'unknown');
+  await sim('lark', 'failed');
+  const k2 = `review-${stamp}-2`;
+  responses[`POST ${fb}/tickets#degraded`] = await rec('POST', `${fb}/tickets`, h(k2), { ...body, subject: 'Notifikasi gagal terkirim (contoh dummy)' });
+  const t2 = responses[`POST ${fb}/tickets#degraded`].body.ticket;
+  responses[`GET ${fb}/tickets/${t2.id}/integrations`] = await rec('GET', `${fb}/tickets/${t2.id}/integrations`);
+  const q2 = `${fb}/tickets?${new URLSearchParams({ q: t2.displayNumber })}`;
+  responses[`GET ${q2}`] = await rec('GET', q2);
+  await sim('jira', 'success');
+  await sim('lark', 'success');
+  // Assignment on an existing ticket: history, a stale version (real 409), then a real reassign.
+  const owned = (responses[`GET ${fb}/tickets#after`] ?? responses[`GET ${fb}/tickets`]).body.items.find((t) => t.owner && t.status.code !== 'closed');
+  if (owned) {
+    const ap = `${fb}/tickets/${owned.id}/assignment`;
+    responses[`GET ${ap}-history`] = await rec('GET', `${ap}-history`);
+    const to = members.find((m) => m.userId !== owned.owner.id);
+    const req = { ownerUserId: to.userId, version: owned.version, reason: 'Contoh pengalihan untuk paket review (dummy).' };
+    responses[`POST ${ap}#stale`] = await rec('POST', ap, { 'X-CSRF-Token': csrf }, { ...req, version: owned.version - 1 });
+    responses[`POST ${ap}#ok`] = await rec('POST', ap, { 'X-CSRF-Token': csrf }, req);
+    responses[`GET ${ap}-history#after`] = await rec('GET', `${ap}-history`);
   }
 }
 // Any other workspace path replays the server's real 404 (unknown/foreign/malformed look alike).

@@ -2,6 +2,12 @@
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
   ApiErrorBody,
+  AssignmentHistory,
+  IntakeDirectory,
+  IntegrationSync,
+  OutboxRecoveryResult,
+  TicketCreateResult,
+  TicketIntegrations,
   Catalogs,
   Dashboard,
   Member,
@@ -196,3 +202,33 @@ export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
   isObj(v) && isArr(v.items, isSavedView);
 /** 204 No Content. */
 export const isEmpty = (v: unknown): v is null => v === null;
+
+const SYNC_STATES = ['pending', 'success', 'failed', 'unknown'];
+export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
+  isObj(v) && isStr(v.id) && (v.provider === 'jira' || v.provider === 'lark') && isStr(v.operation) &&
+  SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
+  isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
+  isStr(v.updatedAt) && v.mode === 'simulation';
+
+export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
+  isObj(v) && isTicketListItem(v.ticket) && typeof v.replayed === 'boolean' && isArr(v.integrations, isIntegrationSync);
+
+export const isTicketIntegrations = (v: unknown): v is TicketIntegrations =>
+  isObj(v) && isStr(v.ticketId) && isArr(v.items, isIntegrationSync) && typeof v.canRecover === 'boolean';
+
+export const isOutboxRecoveryResult = (v: unknown): v is OutboxRecoveryResult =>
+  isObj(v) && isIntegrationSync(v.item) && isStr(v.auditEventId);
+
+const isEntry = (e: unknown) => isObj(e) && isStr(e.id) && isStr(e.displayName) && e.source === 'dummy';
+const isProvider = (p: unknown) =>
+  p === null || (isObj(p) && isStr(p.connectionId) && isStr(p.displayName) && p.mode === 'simulation' &&
+    isStr(p.state) && SYNC_STATES.includes(p.simulatedOutcome as string) && isNum(p.version) && isArr(p.options, isEntry));
+export const isIntakeDirectory = (v: unknown): v is IntakeDirectory =>
+  isObj(v) && isStr(v.workspaceId) && isProvider(v.jira) && isProvider(v.lark) && isArr(v.merchants, isEntry);
+
+const isPersonOrNull = (p: unknown) => p === undefined || p === null || (isObj(p) && isStr(p.id) && isStr(p.label));
+export const isAssignmentHistory = (v: unknown): v is AssignmentHistory =>
+  isObj(v) && isStr(v.ticketId) &&
+  isArr(v.items, (e) => isObj(e) && isStr(e.id) && isStr(e.at) &&
+    ['initial', 'take_for_self', 'reassign'].includes(e.kind as string) &&
+    isPersonOrNull(e.actor) && isPersonOrNull(e.from) && isPersonOrNull(e.to) && isStrOrNull(e.reason ?? null));

@@ -1,10 +1,11 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 /**
  * Non-modal popover (C05 filter / C32 saved view). The trigger carries `aria-expanded` and
  * `aria-controls`; opening moves focus to the first control inside; Escape or "close" returns
  * focus to the trigger; a click outside closes without stealing focus. Below 640 px the panel
- * is shown as a bottom sheet (CSS). Content stays mounted only while open.
+ * is a modal bottom sheet: a backdrop (tap closes and returns focus), Tab stays inside the sheet,
+ * Escape closes. Content stays mounted only while open.
  */
 export function Popover({ label, trigger, title, children, className, open: controlled, onOpenChange }: {
   /** Accessible name of the panel. */
@@ -34,6 +35,31 @@ export function Popover({ label, trigger, title, children, className, open: cont
   };
   const closeRef = useRef(close);
   closeRef.current = close;
+  const [sheet, setSheet] = useState(false);
+
+  // Decide per opening whether this is the narrow-screen modal sheet.
+  useLayoutEffect(() => {
+    if (open) setSheet(!!window.matchMedia?.('(max-width: 640px)').matches);
+  }, [open]);
+
+  /** Sheet mode: keep Tab focus inside the panel (modal semantics). */
+  function trap(e: KeyboardEvent<HTMLDivElement>) {
+    if (!sheet || e.key !== 'Tab' || !panel.current) return;
+    const items = [...panel.current.querySelectorAll<HTMLElement>(
+      'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )].filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (items.length === 0) return;
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    const at = document.activeElement;
+    if (e.shiftKey && (at === first || at === panel.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && at === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   // Keep the anchored panel inside the viewport (the bottom sheet below 640 px needs no shift).
   useLayoutEffect(() => {
@@ -73,8 +99,10 @@ export function Popover({ label, trigger, title, children, className, open: cont
         aria-expanded={open} aria-controls={id} aria-haspopup="dialog" onClick={() => (open ? close() : setOpen(true))}>
         {trigger}
       </button>
+      {open && sheet && <div className="popover-backdrop" aria-hidden="true" onClick={() => close()} />}
       {open && (
-        <div id={id} ref={panel} className="popover-panel" role="dialog" aria-label={label} tabIndex={-1}>
+        <div id={id} ref={panel} className="popover-panel" role="dialog" aria-label={label} tabIndex={-1}
+          aria-modal={sheet || undefined} onKeyDown={trap}>
           {title && (
             <div className="popover-head row between">
               <strong>{title}</strong>

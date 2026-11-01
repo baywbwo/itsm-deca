@@ -56,7 +56,11 @@ export interface paths {
         /** Ticket List (O02): server filter/search/sort with keyset cursor and whole-scope counts */
         get: operations["listTickets"];
         put?: never;
-        post?: never;
+        /**
+         * Create one ticket (O05 intake), idempotently
+         * @description Ticket, related work, outbox intents and the ticket.create audit are written in one transaction. Simulated Jira/Lark delivery runs after commit (≤2 s) and never undoes the ticket; intents report pending/success/failed/unknown honestly.
+         */
+        post: operations["createTicket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -399,6 +403,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** PIC history (intake PIC, take-for-self, reassign) from the audit trail */
+        get: operations["getAssignmentHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jira/Lark delivery intents of a ticket (SIMULATION) */
+        get: operations["getTicketIntegrations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/intake-directory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Simulated Jira/Lark connections, dummy assignees/destinations and dummy merchants for intake */
+        get: operations["getIntakeDirectory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/simulation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * UAT only: choose the outcome the simulated provider reports (integration.manage)
+         * @description 404 outside UAT. Audited as integration.simulation.
+         */
+        put: operations["setSimulationOutcome"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry a FAILED delivery (integration.recovery)
+         * @description Only from failed. unknown = 422 (reconcile instead); success is final (422). Stale attempt = 409.
+         */
+        post: operations["retryOutbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Settle an UNKNOWN delivery with evidence (integration.recovery) */
+        post: operations["reconcileOutbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -541,8 +653,10 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict";
                 message: string;
+                /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
+                field?: string;
             };
         };
         Meta: {
@@ -1034,6 +1148,183 @@ export interface components {
             /** @description The version the client saw; stale = 409. */
             version: number;
         };
+        /** @description Jira SIMULATION: no real provider. create = new related work + simulated issue; link = existing issue key of this workspace's simulated provider. */
+        TicketJiraRequest: {
+            /** @enum {string} */
+            mode: "none" | "create" | "link";
+            /** @description Required for create; optional related-work title for link. */
+            title?: string;
+            /** @description link only. */
+            issueKey?: string;
+            /**
+             * Format: uuid
+             * @description Dummy Jira assignee of this workspace's connection.
+             */
+            assigneeId?: string;
+        };
+        /** @description Company = the workspace in the path (never sent). Optional catalog ids must be active and in this workspace. No regulator-mandatory field is assumed (D01 freeze). */
+        TicketCreateRequest: {
+            subject: string;
+            /** @description Free text; may hold personal data, so it is never copied into audit or logs. Request body limit 64 KB applies. */
+            chronology: string;
+            /**
+             * Format: date-time
+             * @description RFC 3339 with offset (UI sends Asia/Jakarta wall time +07:00). Not more than 5 minutes in the future.
+             */
+            receivedAt: string;
+            /** Format: uuid */
+            intakeChannelId: string;
+            /** Format: uuid */
+            priorityId?: string | null;
+            /** Format: uuid */
+            categoryId?: string | null;
+            /** Format: uuid */
+            productId?: string | null;
+            /** Format: uuid */
+            receivingUnitId?: string | null;
+            /** Format: uuid */
+            regionId?: string | null;
+            /**
+             * Format: uuid
+             * @description Dummy merchant of this workspace (no CIF lookup).
+             */
+            merchantId?: string | null;
+            /**
+             * Format: uuid
+             * @description PIC: null, yourself (ticket.assign_self) or any active member (ticket.assign_any; otherwise 403).
+             */
+            ownerUserId?: string | null;
+            jira?: components["schemas"]["TicketJiraRequest"] | null;
+            /**
+             * Format: uuid
+             * @description Dummy Lark destination (SIMULATION) for the ticket-created notification.
+             */
+            larkDestinationId?: string | null;
+        };
+        IntegrationSync: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            provider: "jira" | "lark";
+            /** @enum {string} */
+            operation: "jira_create_issue" | "jira_link_issue" | "lark_ticket_created";
+            /**
+             * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry).
+             * @enum {string}
+             */
+            state: "pending" | "success" | "failed" | "unknown";
+            attempt: number;
+            targetLabel?: string | null;
+            issueKey?: string | null;
+            safeError?: string | null;
+            reconciled: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @enum {string} */
+            mode: "simulation";
+        };
+        TicketCreateResult: {
+            ticket: components["schemas"]["TicketListItem"];
+            replayed: boolean;
+            integrations: components["schemas"]["IntegrationSync"][];
+        };
+        TicketIntegrations: {
+            /** Format: uuid */
+            ticketId: string;
+            items: components["schemas"]["IntegrationSync"][];
+            /** @description Caller holds integration.recovery. */
+            canRecover: boolean;
+        };
+        DirectoryEntry: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+            /** @enum {string} */
+            source: "dummy";
+        };
+        IntegrationProvider: {
+            /** Format: uuid */
+            connectionId: string;
+            displayName: string;
+            /** @enum {string} */
+            mode: "simulation";
+            /** @enum {string} */
+            state: "draft" | "tested" | "active" | "disabled";
+            /** @enum {string} */
+            simulatedOutcome: "success" | "failed" | "unknown";
+            version: number;
+            /** @description Jira: dummy assignees. Lark: dummy destinations. Empty when disabled. */
+            options: components["schemas"]["DirectoryEntry"][];
+        };
+        MerchantOption: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+            reference?: string | null;
+            /** @enum {string} */
+            source: "dummy";
+        };
+        IntakeDirectory: {
+            /** Format: uuid */
+            workspaceId: string;
+            /** @description null = not configured for this workspace. */
+            jira: components["schemas"]["IntegrationProvider"] | null;
+            lark: components["schemas"]["IntegrationProvider"] | null;
+            merchants: components["schemas"]["MerchantOption"][];
+        };
+        PersonRef: {
+            /** Format: uuid */
+            id: string;
+            label: string;
+        };
+        AssignmentEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            at: string;
+            /** @enum {string} */
+            kind: "initial" | "take_for_self" | "reassign";
+            actor?: components["schemas"]["PersonRef"] | null;
+            from?: components["schemas"]["PersonRef"] | null;
+            to?: components["schemas"]["PersonRef"] | null;
+            reason?: string | null;
+        };
+        AssignmentHistory: {
+            /** Format: uuid */
+            ticketId: string;
+            items: components["schemas"]["AssignmentEvent"][];
+        };
+        OutboxRetryRequest: {
+            /** @description Attempt the caller saw; stale = 409. */
+            attempt: number;
+        };
+        OutboxReconcileRequest: {
+            attempt: number;
+            /** @enum {string} */
+            outcome: "success" | "failed";
+            /** @description What was checked at the provider (no secrets). Stored on the intent; audit records only that it was given. */
+            evidence: string;
+            /** @description Required for a successful jira_create_issue; refused otherwise. */
+            issueKey?: string;
+        };
+        OutboxRecoveryResult: {
+            item: components["schemas"]["IntegrationSync"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        SimulationRequest: {
+            /** @enum {string} */
+            outcome: "success" | "failed" | "unknown";
+            version: number;
+        };
+        SimulationResult: {
+            /** Format: uuid */
+            connectionId: string;
+            simulatedOutcome: string;
+            version: number;
+            /** Format: uuid */
+            auditEventId: string;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -1099,6 +1390,24 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description A field is missing, out of range, inactive or outside this workspace (validation_failed + field) */
+        ValidationFailed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Idempotency-Key already used by this user in this workspace for a different payload (idempotency_conflict); nothing created */
+        IdempotencyConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description Unknown, malformed or foreign IDs all return 404. */
@@ -1111,6 +1420,11 @@ export interface components {
         ReportRunId: string;
         /** @description Own view in workspace_id only; another user's view or another workspace returns 404. */
         SavedViewId: string;
+        /** @description Integration outbox intent in workspace_id only; another workspace = 404. */
+        OutboxId: string;
+        ConnectionId: string;
+        /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+        IdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;
@@ -1291,6 +1605,51 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    createTicket: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay of an earlier create with the same key and payload (replayed=true) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketCreateResult"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketCreateResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            422: components["responses"]["ValidationFailed"];
         };
     };
     getTicketBoard: {
@@ -1881,6 +2240,191 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getAssignmentHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first, max 100 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssignmentHistory"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getTicketIntegrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Intents */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketIntegrations"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getIntakeDirectory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Directory */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntakeDirectory"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setSimulationOutcome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SimulationRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SimulationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+        };
+    };
+    retryOutbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Integration outbox intent in workspace_id only; another workspace = 404. */
+                outbox_id: components["parameters"]["OutboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutboxRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Retried; item shows the new state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboxRecoveryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+        };
+    };
+    reconcileOutbox: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Integration outbox intent in workspace_id only; another workspace = 404. */
+                outbox_id: components["parameters"]["OutboxId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OutboxReconcileRequest"];
+            };
+        };
+        responses: {
+            /** @description Reconciled */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OutboxRecoveryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
         };
     };
 }

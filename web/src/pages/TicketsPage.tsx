@@ -33,6 +33,8 @@ import { PageHeader } from '../components/PageHeader';
 import { Popover } from '../components/Popover';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
 import { statusTone } from './DashboardPage';
+import { AssignDialog } from './AssignDialog';
+import { IntakeDialog } from './IntakeDialog';
 import { SavedViews } from './SavedViews';
 
 /** Lifecycle order of the D01 freeze; labels come from the server when it has sent them. */
@@ -77,9 +79,10 @@ function dimOptions(o: TicketOptions | null, k: DimKey): { id: string; label: st
  * Dashboard drilldown opens the same scope) and survive a view switch, reload and back. Counts
  * are the server's whole-scope numbers, never the loaded rows.
  */
-export function TicketsPage({ api, workspace, permissions, query = '' }: {
+export function TicketsPage({ api, workspace, userId, permissions, query = '' }: {
   api: Api;
   workspace: Workspace;
+  userId: string;
   permissions: WorkspacePermissions;
   query?: string;
 }) {
@@ -92,6 +95,7 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
   const [transition, setTransition] = useState<{ ticket: TicketListItem; to: TicketStatusCode | null } | null>(null);
   const [detail, setDetail] = useState<TicketListItem | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [assign, setAssign] = useState<TicketListItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   // After a save the list remounts and the trigger is gone: land on the result instead.
@@ -100,6 +104,7 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
   const tz = workspace.timezone;
   const data = state.status === 'success' ? state.data : null;
   const canCreate = permissions.permissions.includes('ticket.create');
+  const canAssign = permissions.permissions.includes('ticket.assign_any') || permissions.permissions.includes('ticket.assign_self');
 
   // Server labels seen so far (status select keeps working while the next answer loads).
   useEffect(() => {
@@ -128,6 +133,7 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
 
   function onDone(t: TicketListItem, message: string) {
     setTransition(null);
+    setAssign(null);
     setDetail((d) => (d && d.id === t.id ? t : d));
     setNotice(message);
     reload();
@@ -179,13 +185,20 @@ export function TicketsPage({ api, workspace, permissions, query = '' }: {
           onClose={() => setTransition(null)} onDone={onDone} onReloadList={reload} />
       )}
       <DetailDialog ticket={detail} tz={tz} onClose={() => setDetail(null)}
+        canAssign={canAssign} onAssign={(t) => { setDetail(null); setAssign(t); }}
         onTransition={(t) => setTransition({ ticket: t, to: null })} />
-      <Dialog open={createOpen} onClose={() => setCreateOpen(false)} title="Buat tiket"
-        footer={<Button onClick={() => setCreateOpen(false)}>Tutup</Button>}>
-        <p>Form intake tiket dibangun pada tahap D07 dan belum tersedia di kandidat ini.</p>
-        <p className="muted tiny">Tidak ada tiket yang dibuat. Daftar dan Board di halaman ini memakai data dummy UAT yang
-          sudah ada.</p>
-      </Dialog>
+      {assign && (
+        <AssignDialog api={api} workspace={workspace} userId={userId} permissions={permissions} ticket={assign}
+          onClose={() => setAssign(null)} onDone={onDone} onReloadList={reload} />
+      )}
+      {createOpen && (
+        <IntakeDialog api={api} workspace={workspace} userId={userId} permissions={permissions}
+          onClose={() => setCreateOpen(false)}
+          onCreated={(r) => {
+            setNotice(`${r.ticket.displayNumber} ${r.replayed ? 'sudah tersimpan sebelumnya (kiriman ulang dikenali)' : 'tersimpan'}. Daftar dimuat ulang dari server.`);
+            reload();
+          }} />
+      )}
     </>
   );
 }
@@ -365,7 +378,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
             </>
           )}
         </Popover>
-        <label className="toolbar-select">
+        <label className="toolbar-select toolbar-sort">
           <span className="sr-only">Urutkan</span>
           <select className="field-control" value={`${params.sort}:${params.order}`}
             onChange={(e) => {
@@ -872,9 +885,11 @@ function transitionError(e: unknown): { title: string; body: string; conflict: b
 }
 
 /** Honest placeholder for D08: the safe list projection only, plus the same status action. */
-function DetailDialog({ ticket: t, tz, onClose, onTransition }: {
+function DetailDialog({ ticket: t, tz, canAssign, onAssign, onClose, onTransition }: {
   ticket: TicketListItem | null;
   tz: string;
+  canAssign: boolean;
+  onAssign: (t: TicketListItem) => void;
   onClose: () => void;
   onTransition: (t: TicketListItem) => void;
 }) {
@@ -882,7 +897,9 @@ function DetailDialog({ ticket: t, tz, onClose, onTransition }: {
     ['Status', <Badge key="s" tone={statusTone(t.status)}>{t.status.label}</Badge>],
     ['Siklus', `ke-${t.cycleNo}`],
     ['Prioritas', t.priority?.label ?? '—'],
-    ['PIC', t.owner?.label ?? 'Belum ditugaskan'],
+    ['PIC', <span key="p">{t.owner?.label ?? 'Belum ditugaskan'}{canAssign && !t.status.archived && (
+      <> <Button variant="ghost" className="btn-small" onClick={() => onAssign(t)}>Ubah PIC</Button></>
+    )}</span>],
     ['Kanal', t.channel?.label ?? '—'],
     ['Kategori', t.category?.label ?? '—'],
     ['Diterima', instantLabel(t.receivedAt, tz)],
@@ -907,7 +924,7 @@ function DetailDialog({ ticket: t, tz, onClose, onTransition }: {
             ))}
           </dl>
           <p className="tiny muted spaced">
-            Detail lengkap (percakapan, lampiran, riwayat, PIC dan pekerjaan terkait) dibangun pada D08. Ini ringkasan dari daftar.
+            Detail lengkap (percakapan, lampiran, riwayat aktivitas dan pekerjaan terkait) dibangun pada D08. Ini ringkasan dari daftar.
             {t.status.archived && ' Tiket ditutup adalah arsip historis read-only.'}
           </p>
         </>
