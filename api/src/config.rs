@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +88,38 @@ pub struct Config {
     /// Most rows one operational report export may hold (`ITSM_REPORT_MAX_ROWS`, 1–200000,
     /// default 50000). A larger result is recorded as a failed run, never truncated.
     pub report_max_rows: i64,
+    /// Per-process request rate limits (see `rate_limit`).
+    pub rate_limit: RateLimitConfig,
+}
+
+/// Token-bucket limits per minute. Each bucket holds up to one minute of requests and refills
+/// continuously. Authenticated requests are keyed by user; requests without a session by the
+/// trusted peer address. In-memory, per process: N replicas allow up to N times these limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimitConfig {
+    /// `ITSM_RATE_LIMIT_READ_PER_MIN`: GET/HEAD per user (1–100000, default 1200).
+    pub read_per_min: u32,
+    /// `ITSM_RATE_LIMIT_WRITE_PER_MIN`: unsafe methods per user (1–100000, default 120).
+    pub write_per_min: u32,
+    /// `ITSM_RATE_LIMIT_ANON_PER_MIN`: requests without a session per peer (1–100000, default 30).
+    pub anon_per_min: u32,
+    /// `ITSM_RATE_LIMIT_MAX_KEYS`: most buckets kept in memory (100–1000000, default 10000).
+    pub max_keys: usize,
+    /// `ITSM_TRUSTED_PROXIES`: comma-separated exact IPs whose `X-Forwarded-For` is honoured
+    /// (at most 16). Empty (default) = `X-Forwarded-For` is ignored.
+    pub trusted_proxies: Vec<IpAddr>,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        RateLimitConfig {
+            read_per_min: 1200,
+            write_per_min: 120,
+            anon_per_min: 30,
+            max_keys: 10_000,
+            trusted_proxies: Vec::new(),
+        }
+    }
 }
 
 impl Config {
@@ -207,6 +239,37 @@ impl Config {
                 })?,
         };
 
+        let defaults = RateLimitConfig::default();
+        let per_min = |name: &'static str, default: u32| match optional(name) {
+            None => Ok(default),
+            Some(v) => v
+                .parse::<u32>()
+                .ok()
+                .filter(|n| (1..=100_000).contains(n))
+                .ok_or(ConfigError::Invalid { name }),
+        };
+        let rate_limit = RateLimitConfig {
+            read_per_min: per_min("ITSM_RATE_LIMIT_READ_PER_MIN", defaults.read_per_min)?,
+            write_per_min: per_min("ITSM_RATE_LIMIT_WRITE_PER_MIN", defaults.write_per_min)?,
+            anon_per_min: per_min("ITSM_RATE_LIMIT_ANON_PER_MIN", defaults.anon_per_min)?,
+            max_keys: match optional("ITSM_RATE_LIMIT_MAX_KEYS") {
+                None => defaults.max_keys,
+                Some(v) => v
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| (100..=1_000_000).contains(n))
+                    .ok_or(ConfigError::Invalid {
+                        name: "ITSM_RATE_LIMIT_MAX_KEYS",
+                    })?,
+            },
+            trusted_proxies: match optional("ITSM_TRUSTED_PROXIES") {
+                None => Vec::new(),
+                Some(v) => parse_proxies(&v).ok_or(ConfigError::Invalid {
+                    name: "ITSM_TRUSTED_PROXIES",
+                })?,
+            },
+        };
+
         Ok(Config {
             environment,
             access_mode,
@@ -219,8 +282,18 @@ impl Config {
             outbox_worker,
             outbox_poll_ms,
             report_max_rows,
+            rate_limit,
         })
     }
+}
+
+/// Comma-separated exact IP addresses (no ranges), 1–16 entries, no blanks.
+fn parse_proxies(v: &str) -> Option<Vec<IpAddr>> {
+    let ips = v
+        .split(',')
+        .map(|s| s.trim().parse::<IpAddr>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    (1..=16).contains(&ips.len()).then_some(ips)
 }
 
 /// `tcp://host:port` or `unix:/absolute/path` (also `unix:///absolute/path`).
@@ -370,6 +443,45 @@ mod tests {
             ("ITSM_OUTBOX_WORKER", "yes"),
             ("ITSM_OUTBOX_POLL_MS", "10"),
             ("ITSM_ATTACHMENT_MAX_BYTES", "999999999"),
+        ] {
+            let mut v = base();
+            v.push((name, bad));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn rate_limits_default_and_reject_out_of_range_values() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.rate_limit == RateLimitConfig::default()));
+
+        let mut v = base();
+        v.push(("ITSM_RATE_LIMIT_READ_PER_MIN", "600"));
+        v.push(("ITSM_RATE_LIMIT_WRITE_PER_MIN", "60"));
+        v.push(("ITSM_RATE_LIMIT_ANON_PER_MIN", "5"));
+        v.push(("ITSM_RATE_LIMIT_MAX_KEYS", "500"));
+        v.push(("ITSM_TRUSTED_PROXIES", "127.0.0.1, ::1"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.rate_limit.read_per_min == 600
+            && c.rate_limit.write_per_min == 60
+            && c.rate_limit.anon_per_min == 5
+            && c.rate_limit.max_keys == 500
+            && c.rate_limit.trusted_proxies.len() == 2));
+
+        for (name, bad) in [
+            ("ITSM_RATE_LIMIT_READ_PER_MIN", "0"),
+            ("ITSM_RATE_LIMIT_READ_PER_MIN", "100001"),
+            ("ITSM_RATE_LIMIT_WRITE_PER_MIN", "-1"),
+            ("ITSM_RATE_LIMIT_ANON_PER_MIN", "ten"),
+            ("ITSM_RATE_LIMIT_MAX_KEYS", "99"),
+            ("ITSM_RATE_LIMIT_MAX_KEYS", "1000001"),
+            ("ITSM_TRUSTED_PROXIES", "10.0.0.0/8"),
+            ("ITSM_TRUSTED_PROXIES", "127.0.0.1,,::1"),
+            ("ITSM_TRUSTED_PROXIES", "proxy.local"),
         ] {
             let mut v = base();
             v.push((name, bad));

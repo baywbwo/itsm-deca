@@ -64,6 +64,10 @@ pub enum AppError {
     /// No scanner reachable (or not configured). Fail closed: nothing bound.
     #[error("scanner_unavailable")]
     ScannerUnavailable,
+    /// Too many requests for this user (or peer, without a session) in the current window.
+    /// Nothing was processed; `Retry-After` says when the next request is accepted.
+    #[error("rate_limited")]
+    RateLimited { retry_after_secs: u64 },
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -158,6 +162,11 @@ impl AppError {
                 "scanner_unavailable",
                 "Pemindai berkas tidak tersedia. Berkas tidak dilampirkan.",
             ),
+            AppError::RateLimited { .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi; permintaan ini tidak diproses.",
+            ),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dependency_unavailable",
@@ -224,9 +233,18 @@ impl IntoResponse for AppError {
             AppError::Validation(field) => {
                 json!({ "error": { "code": code, "message": message, "field": field } })
             }
+            AppError::RateLimited { retry_after_secs } => json!({
+                "error": { "code": code, "message": message, "retryAfterSeconds": retry_after_secs }
+            }),
             _ => json!({ "error": { "code": code, "message": message } }),
         };
         let mut response = (status, Json(body)).into_response();
+        if let AppError::RateLimited { retry_after_secs } = &self {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(*retry_after_secs),
+            );
+        }
         if matches!(self, AppError::Forbidden) {
             response
                 .extensions_mut()

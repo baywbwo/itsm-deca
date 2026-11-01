@@ -77,12 +77,16 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
         .config
         .outbox_worker
         .then(|| outbox::spawn(state.clone(), stopped));
-    let served = axum::serve(listener, app(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .map_err(|e| format!("server error: {e}"));
+    // Peer address feeds the rate limiter for requests without a session.
+    let served = axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .map_err(|e| format!("server error: {e}"));
     // Let an in-progress tick finish; an unsettled claim is swept to unknown on next start.
     let _ = stop.send(true);
     if let Some(worker) = worker {

@@ -168,3 +168,25 @@ async fn every_documented_operation_is_routed(pool: PgPool) {
         }
     }
 }
+
+#[test]
+fn every_api_operation_documents_the_rate_limit_response() {
+    let doc = spec();
+    for (method, path) in documented_operations(&doc) {
+        if !path.starts_with("/api/v1") {
+            continue;
+        }
+        assert_eq!(
+            doc["paths"][&path][&method]["responses"]["429"]["$ref"],
+            "#/components/responses/RateLimited",
+            "{method} {path}"
+        );
+    }
+    let codes =
+        &doc["components"]["schemas"]["Error"]["properties"]["error"]["properties"]["code"]["enum"];
+    assert!(
+        codes
+            .as_array()
+            .is_some_and(|c| c.iter().any(|v| v == "rate_limited"))
+    );
+}

@@ -8,6 +8,7 @@ pub mod denied_audit;
 pub mod domain;
 pub mod error;
 pub mod outbox;
+pub mod rate_limit;
 pub mod routes;
 pub mod seed;
 pub mod session;
@@ -42,8 +43,14 @@ pub fn app(state: AppState) -> Router {
     let request_id = HeaderName::from_static("x-request-id");
     let session = axum::middleware::from_fn_with_state(state.clone(), session::session_layer);
     let denied = axum::middleware::from_fn_with_state(state.clone(), denied_audit::layer);
+    // One limiter per router: clones of the returned router share it.
+    let limiter = Arc::new(rate_limit::RateLimiter::new(
+        state.config.rate_limit.clone(),
+    ));
+    let limited = axum::middleware::from_fn_with_state(limiter, rate_limit::layer);
     let api = routes::api_router()
         .route_layer(denied.clone())
+        .layer(limited.clone())
         .layer(session.clone());
     let bounded = Router::new()
         .merge(routes::health::router())
@@ -55,6 +62,7 @@ pub fn app(state: AppState) -> Router {
         ));
     let upload = routes::upload_router()
         .route_layer(denied)
+        .layer(limited)
         .layer(session)
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
