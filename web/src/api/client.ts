@@ -11,6 +11,15 @@ import {
   isDashboard,
   isErrorBody,
   isMemberList,
+  isMemberResult,
+  isSettingsBody,
+  isSettingsResult,
+  isCompanyList,
+  isCompanyResult,
+  isCatalogEditor,
+  isCatalogEntryResult,
+  isIntegrationList,
+  isIntegrationResult,
   isEmpty,
   isAssignmentHistory,
   isIntakeDirectory,
@@ -55,6 +64,28 @@ import type {
   Dashboard,
   DashboardPeriodKey,
   Member,
+  MemberList,
+  MemberCreateRequest,
+  MemberPatchRequest,
+  GrantChangeRequest,
+  MemberResult,
+  SettingsBody,
+  SettingsPatchRequest,
+  SettingsResult,
+  CompanyList,
+  CompanyCreateRequest,
+  CompanyActivationRequest,
+  CompanyResult,
+  CatalogKind,
+  CatalogEditor,
+  CatalogCreateRequest,
+  CatalogPatchRequest,
+  CatalogEntryResult,
+  IntegrationList,
+  IntegrationCreateRequest,
+  IntegrationPatchRequest,
+  IntegrationResult,
+  VersionRequest,
   Meta,
   SavedView,
   SavedViewCreateRequest,
@@ -310,6 +341,56 @@ export function createApi(transport: Transport) {
         path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work/${encodeURIComponent(workId)}/completion`,
         headers: csrf(), body,
       }, isTicketDetailMutation),
+    /** D09: workspace profile; `canEdit` mirrors admin.settings (the server re-checks every write). */
+    getSettings: (id: string, signal?: AbortSignal): Promise<SettingsBody> =>
+      get(`${ws(id)}/settings`, isSettingsBody, signal),
+    updateSettings: (id: string, body: SettingsPatchRequest): Promise<SettingsResult> =>
+      call({ method: 'PATCH', path: `${ws(id)}/settings`, headers: csrf(), body }, isSettingsResult),
+    /** UAT Superadmin only (403 otherwise): one company = one workspace, created without members. */
+    listCompanies: (signal?: AbortSignal): Promise<CompanyList> => get('/api/v1/companies', isCompanyList, signal),
+    createCompany: (body: CompanyCreateRequest): Promise<CompanyResult> =>
+      call({ method: 'POST', path: '/api/v1/companies', headers: csrf(), body }, isCompanyResult, 201),
+    setCompanyActive: (companyId: string, body: CompanyActivationRequest): Promise<CompanyResult> =>
+      call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}`, headers: csrf(), body }, isCompanyResult),
+    listCatalogEntries: (id: string, kind: CatalogKind, signal?: AbortSignal): Promise<CatalogEditor> =>
+      get(`${ws(id)}/catalogs/${kind}`, isCatalogEditor, signal),
+    createCatalogEntry: (id: string, kind: CatalogKind, body: CatalogCreateRequest): Promise<CatalogEntryResult> =>
+      call({ method: 'POST', path: `${ws(id)}/catalogs/${kind}`, headers: csrf(), body }, isCatalogEntryResult, 201),
+    updateCatalogEntry: (id: string, kind: CatalogKind, itemId: string, body: CatalogPatchRequest): Promise<CatalogEntryResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/catalogs/${kind}/${encodeURIComponent(itemId)}`, headers: csrf(), body,
+      }, isCatalogEntryResult),
+    /** Members with `canManage` and the grants the caller may hand out (only ones it holds). */
+    getMemberList: (id: string, signal?: AbortSignal): Promise<MemberList> =>
+      get(`${ws(id)}/members`, isMemberList, signal),
+    addMember: (id: string, body: MemberCreateRequest): Promise<MemberResult> =>
+      call({ method: 'POST', path: `${ws(id)}/members`, headers: csrf(), body }, isMemberResult, 201),
+    updateMember: (id: string, membershipId: string, body: MemberPatchRequest): Promise<MemberResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}`, headers: csrf(), body,
+      }, isMemberResult),
+    addMemberGrant: (id: string, membershipId: string, body: GrantChangeRequest): Promise<MemberResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants`, headers: csrf(), body,
+      }, isMemberResult, 201),
+    revokeMemberGrant: (id: string, membershipId: string, body: GrantChangeRequest): Promise<MemberResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants/revoke`, headers: csrf(), body,
+      }, isMemberResult),
+    /** Simulated connections only: no provider is contacted and no credential exists. */
+    listIntegrations: (id: string, signal?: AbortSignal): Promise<IntegrationList> =>
+      get(`${ws(id)}/integrations`, isIntegrationList, signal),
+    createIntegration: (id: string, body: IntegrationCreateRequest): Promise<IntegrationResult> =>
+      call({ method: 'POST', path: `${ws(id)}/integrations`, headers: csrf(), body }, isIntegrationResult, 201),
+    updateIntegration: (id: string, connectionId: string, body: IntegrationPatchRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Save → test → activate; disable from any state. */
+    stepIntegration: (id: string, connectionId: string, step: 'test' | 'activate' | 'disable', body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
+      }, isIntegrationResult),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

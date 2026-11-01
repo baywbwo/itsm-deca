@@ -19,6 +19,19 @@ import type {
   Catalogs,
   Dashboard,
   Member,
+  MemberList,
+  MemberResult,
+  WorkspaceSettings,
+  SettingsBody,
+  SettingsResult,
+  CompanyList,
+  CompanyResult,
+  CatalogEditor,
+  CatalogEntry,
+  CatalogEntryResult,
+  IntegrationConnection,
+  IntegrationList,
+  IntegrationResult,
   Meta,
   PermissionCode,
   SavedView,
@@ -190,8 +203,14 @@ export function isTicketBoard(v: unknown): v is TicketBoard {
 export const isTicketMutationResult = (v: unknown): v is TicketMutationResult =>
   isObj(v) && isTicketListItem(v.ticket) && isStr(v.auditEventId);
 
-export const isMemberList = (v: unknown): v is { items: Member[] } =>
-  isObj(v) && isArr(v.items, (m) => isObj(m) && isStr(m.userId) && isStr(m.displayName) && typeof m.active === 'boolean');
+const GRANTS = ['admin.members', 'admin.settings', 'integration.manage', 'integration.credentials', 'integration.recovery'];
+const isGrant = (v: unknown) => isStr(v) && GRANTS.includes(v);
+export const isMember = (m: unknown): m is Member =>
+  isObj(m) && isStr(m.membershipId) && isStr(m.userId) && isStr(m.displayName) &&
+  (m.role === 'cs' || m.role === 'lead_cs') && typeof m.active === 'boolean' && isNum(m.version) && isArr(m.grants, isGrant);
+export const isMemberList = (v: unknown): v is MemberList =>
+  isObj(v) && isArr(v.items, isMember) && isStrOrNull(v.myMembershipId) && typeof v.canManage === 'boolean' &&
+  isArr(v.grantable, isGrant);
 
 const isCatalogItem = (c: unknown) =>
   isObj(c) && isStr(c.id) && isStr(c.code) && isStr(c.label) && typeof c.active === 'boolean' && isNum(c.sortOrder);
@@ -295,3 +314,40 @@ export const isRelatedWorkCreated = (v: unknown): v is RelatedWorkCreated =>
   isObj(v) && isTicketDetail(v.detail) && isStr(v.relatedWorkId) && typeof v.replayed === 'boolean' && isStrOrNull(v.auditEventId);
 export const isAttachmentUploaded = (v: unknown): v is AttachmentUploaded =>
   isObj(v) && isStr(v.attachmentId) && isTicketDetail(v.detail) && isStr(v.auditEventId);
+
+// D09 settings, members, catalogs and simulated integration connections.
+const TIMEZONES = ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'];
+const isWorkspaceSettings = (v: unknown): v is WorkspaceSettings =>
+  isObj(v) && isStr(v.workspaceId) && isStr(v.workspaceCode) && isStr(v.workspaceName) && isStr(v.timezone) &&
+  isStr(v.companyId) && isStr(v.companyCode) && isStr(v.companyName) && isStrOrNull(v.reporterCode) &&
+  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount);
+export const isSettingsBody = (v: unknown): v is SettingsBody =>
+  isObj(v) && isWorkspaceSettings(v.settings) && typeof v.canEdit === 'boolean' &&
+  isArr(v.timezones, (t) => isStr(t) && TIMEZONES.includes(t));
+export const isSettingsResult = (v: unknown): v is SettingsResult =>
+  isObj(v) && isWorkspaceSettings(v.settings) && isStrOrNull(v.auditEventId);
+export const isCompanyList = (v: unknown): v is CompanyList => isObj(v) && isArr(v.items, isWorkspaceSettings);
+export const isCompanyResult = (v: unknown): v is CompanyResult =>
+  isObj(v) && isWorkspaceSettings(v.item) && isStr(v.auditEventId);
+const CATALOG_KINDS = ['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'];
+const isCatalogEntry = (v: unknown): v is CatalogEntry =>
+  isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.label) && typeof v.active === 'boolean' &&
+  isNum(v.sortOrder) && isNum(v.version);
+export const isCatalogEditor = (v: unknown): v is CatalogEditor =>
+  isObj(v) && isStr(v.kind) && CATALOG_KINDS.includes(v.kind) && isArr(v.items, isCatalogEntry) && typeof v.canEdit === 'boolean';
+export const isCatalogEntryResult = (v: unknown): v is CatalogEntryResult =>
+  isObj(v) && isStr(v.kind) && CATALOG_KINDS.includes(v.kind) && isCatalogEntry(v.item) && isStrOrNull(v.auditEventId);
+export const isMemberResult = (v: unknown): v is MemberResult => isObj(v) && isMember(v.item) && isStr(v.auditEventId);
+const isProviderCode = (v: unknown) => v === 'jira' || v === 'lark';
+const CONNECTION_STATES = ['draft', 'tested', 'active', 'disabled'];
+const isConnection = (v: unknown): v is IntegrationConnection =>
+  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && v.mode === 'simulation' &&
+  isStr(v.state) && CONNECTION_STATES.includes(v.state) && isStrOrNull(v.testedAt) && isStrOrNull(v.lastTestNote) &&
+  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) &&
+  v.credential === 'not_available' && v.mapping === 'not_available' &&
+  isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
+export const isIntegrationList = (v: unknown): v is IntegrationList =>
+  isObj(v) && isStr(v.workspaceId) && isArr(v.items, isConnection) && isArr(v.creatable, isProviderCode) &&
+  typeof v.canManageCredentials === 'boolean';
+export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId);

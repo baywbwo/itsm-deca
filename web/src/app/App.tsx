@@ -9,7 +9,9 @@ import { Icon } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { ComponentsPage } from '../pages/ComponentsPage';
 import { DashboardPage } from '../pages/DashboardPage';
+import { IntegrationsPage } from '../pages/IntegrationsPage';
 import { PlannedPage } from '../pages/PlannedPage';
+import { SettingsPage } from '../pages/SettingsPage';
 import { TicketsPage } from '../pages/TicketsPage';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
@@ -190,8 +192,8 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           )}
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
-            onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D08b (tindak lanjut dan lampiran) · data dummy UAT</div>
+            onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
+          <div className="footer">ITSM Qash · kandidat D09 (pengaturan, anggota, integrasi simulasi) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -254,7 +256,7 @@ function Profile({ session }: { session: Session }) {
   );
 }
 
-function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter }: {
+function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter, onNotice }: {
   api: Api;
   userId: string;
   scope: ReturnType<typeof useScope>;
@@ -265,6 +267,7 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
   firstWorkspace: Workspace | null;
   onRetry: () => void;
   onReenter: () => void;
+  onNotice: (text: string) => void;
 }) {
   if (scope.status === 'idle') {
     return <NotFoundState />;
@@ -294,16 +297,22 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
     );
   }
   if (!pages.some((p) => p.id === page.id)) return <ForbiddenState />;
-  return <Page id={page.id} api={api} userId={userId} data={scope.data} query={query} uat={uat} />;
+  return <Page id={page.id} api={api} userId={userId} data={scope.data} query={query} uat={uat} onNotice={onNotice} />;
 }
 
-function Page({ id, api, userId, data, query, uat }: { id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean }) {
+function Page({ id, api, userId, data, query, uat, onNotice }: {
+  id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
+}) {
   switch (id) {
     case 'dashboard':
       return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
     case 'tickets':
       return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
+    case 'settings':
+      return <SettingsPage api={api} workspace={data.workspace} uat={uat} permissions={data.permissions.permissions} onNotice={onNotice} />;
+    case 'integrations':
+      return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:

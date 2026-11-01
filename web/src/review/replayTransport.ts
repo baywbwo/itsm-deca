@@ -31,6 +31,8 @@ export interface Fixtures { recordedAt: string; origin: string; backendSha: stri
  * PDF/PNG/JPEG gets the recorded fail-closed 503 and any other file the recorded 415. No clean upload
  * or download exists in the package; those are proven by the cargo tests only.
  * Retry/reconcile and other combinations are not recorded; the replay says so.
+ * D09 settings, members, catalogs, companies and integrations replay the real GET answers only;
+ * every change there answers "tidak direkam" (the live API proves writes, not this package).
  */
 export type Scenario = 'none' | 'slow' | 'empty' | 'error' | 'forbidden' | 'race' | 'conflict' | 'intake-unknown' | 'intake-degraded';
 export const SCENARIOS: readonly Scenario[] = ['none', 'slow', 'empty', 'error', 'forbidden', 'race', 'conflict', 'intake-unknown', 'intake-degraded'];
@@ -91,6 +93,7 @@ const notRecorded = (what: string) => ({
   requestId: 'review-tidak-direkam',
 });
 
+const D09_WRITE = /^\/api\/v1\/(companies|workspaces\/[^/]+\/(settings|members|catalogs\/|integrations))/;
 const SAVED = /^\/api\/v1\/workspaces\/([^/]+)\/saved-views(?:\/([^/]+))?$/;
 
 interface SyntheticView { id: string; name: string; view: string; query: Record<string, string>; version: number; createdAt: string; updatedAt: string }
@@ -237,6 +240,10 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
       await wait(latencyMs, signal, true);
       const hit = f.responses[`GET ${path}#after`]!;
       return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
+    }
+    if (method !== 'GET' && D09_WRITE.test(path)) {
+      await wait(latencyMs, signal, true);
+      return notRecorded('perubahan pengaturan/integrasi');
     }
     const sv = SAVED.exec(path);
     if (sv) {

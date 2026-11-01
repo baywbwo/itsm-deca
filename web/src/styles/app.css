@@ -309,3 +309,15 @@ dialog.peek .dialog-body { display: grid; gap: 16px; align-content: start; }
 }
 .column-checks { display: grid; gap: 8px; border: 0; padding: 0; margin: 0 0 12px; }
 .column-checks legend { margin-bottom: 8px; }
+
+/* D09 Pengaturan & Integrasi (prototype v3.2 §settings/integrations). */
+.integration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.integration-grid > .card, .integration-grid > .card + .card { margin-top: 0; }
+.integration { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; }
+.integration h2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.steps { gap: 16px; margin-bottom: 12px; }
+.steps li[aria-current='step'] { color: var(--muted); }
+@media (max-width: 760px) {
+  .integration-grid { grid-template-columns: minmax(0, 1fr); }
+  .integration { grid-template-columns: minmax(0, 1fr); }
+}

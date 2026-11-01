@@ -70,6 +70,10 @@ for (const w of list.body.items) {
   responses[`GET ${base}/members`] = await rec('GET', `${base}/members`);
   responses[`GET ${base}/catalogs`] = await rec('GET', `${base}/catalogs`);
   responses[`GET ${base}/intake-directory`] = await rec('GET', `${base}/intake-directory`);
+  // D09 read-only screens: settings, every catalog kind and the simulated connections.
+  for (const p of ['settings', 'integrations', ...['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'].map((k) => `catalogs/${k}`)]) {
+    responses[`GET ${base}/${p}`] = await rec('GET', `${base}/${p}`);
+  }
   const today = responses[`GET ${base}/dashboard?period=today`].body;
   const order = ['status', 'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore'];
   const toQuery = (f) => {
@@ -258,6 +262,7 @@ for (const w of list.body.items) {
   }
 }
 // Any other workspace path replays the server's real 404 (unknown/foreign/malformed look alike).
+responses['GET /api/v1/companies'] = await rec('GET', '/api/v1/companies');
 responses['GET #not_found'] = await rec('GET', '/api/v1/workspaces/00000000-0000-4000-8000-000000000000');
 
 const fixtures = { recordedAt: new Date().toISOString(), origin: BASE, backendSha: process.env.BACKEND_SHA ?? null, responses };
