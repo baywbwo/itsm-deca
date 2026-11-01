@@ -1,0 +1,129 @@
+# ITSM UAT (dummy data only). Not for production: ITSM_ENV=uat + uat_superadmin, and the API
+# refuses to serve a database that is not marked as the UAT dummy DB.
+#
+# Fails to start on purpose until the operator configures the ingress restriction:
+#   - ITSM_UAT_SITE_ADDRESS, ITSM_UAT_TLS, ITSM_UAT_ALLOWED_CIDRS, ITSM_UAT_BASIC_AUTH_USER in .env
+#   - secrets/ingress_basic_auth_hash (bcrypt) and secrets/pg_password
+# See README.md. Only the ingress publishes ports; API, Postgres and clamd stay private.
+name: itsm-uat
+
+x-ingress-required: &ingress-required
+  ITSM_UAT_SITE_ADDRESS: ${ITSM_UAT_SITE_ADDRESS:?ITSM_UAT_SITE_ADDRESS wajib (hostname UAT)}
+  ITSM_UAT_TLS: ${ITSM_UAT_TLS:?ITSM_UAT_TLS wajib (internal atau e-mail ACME)}
+  ITSM_UAT_ALLOWED_CIDRS: ${ITSM_UAT_ALLOWED_CIDRS:?ITSM_UAT_ALLOWED_CIDRS wajib; akses terbuka ditolak}
+  ITSM_UAT_BASIC_AUTH_USER: ${ITSM_UAT_BASIC_AUTH_USER:?ITSM_UAT_BASIC_AUTH_USER wajib}
+
+services:
+  postgres:
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
+    environment:
+      POSTGRES_DB: itsm_uat_dummy
+      POSTGRES_USER: itsm
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets: [pg_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "itsm", "-d", "itsm_uat_dummy"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    shm_size: 256m
+
+  clamav:
+    # Official ClamAV image; clamd on 3310, signatures persisted. Needs egress for freshclam
+    # (clamav-updates network) and ~3 GB RAM. First start can take several minutes.
+    image: clamav/clamav:1.5.4@sha256:bda39705e291105049c3936e2803ac90b955172af8030f94f05dce1252df6c6d
+    volumes:
+      - clamav-db:/var/lib/clamav
+    networks: [backend, clamav-updates]
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 15m
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/uat/Dockerfile
+      target: api
+    image: itsm-uat-api:${ITSM_UAT_IMAGE_TAG:?ITSM_UAT_IMAGE_TAG wajib (git SHA kandidat)}
+    environment:
+      ITSM_ENV: uat
+      ITSM_ACCESS_MODE: uat_superadmin
+      ITSM_COOKIE_SECURE: "true"
+      ITSM_DB_HOST: postgres
+      ITSM_DB_NAME: itsm_uat_dummy
+      ITSM_DB_USER: itsm
+      ITSM_CLAMD_ADDR: tcp://clamav:3310
+      ITSM_TRUSTED_PROXIES: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
+      ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-on}
+      RUST_LOG: ${RUST_LOG:-info}
+    secrets: [pg_password]
+    volumes:
+      - attachments:/var/lib/itsm/attachments
+    networks: [backend]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  ingress:
+    build:
+      context: ../..
+      dockerfile: deploy/uat/Dockerfile
+      target: ingress
+    image: itsm-uat-ingress:${ITSM_UAT_IMAGE_TAG:?ITSM_UAT_IMAGE_TAG wajib (git SHA kandidat)}
+    environment:
+      <<: *ingress-required
+      ITSM_UAT_API_UPSTREAM: api:8080
+    secrets: [ingress_basic_auth_hash]
+    ports:
+      - "${ITSM_UAT_HTTPS_BIND:-0.0.0.0:443}:443"
+      - "${ITSM_UAT_HTTP_BIND:-0.0.0.0:80}:80"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      edge: {}
+      backend:
+        ipv4_address: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
+    depends_on:
+      api:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ITSM_UAT_BACKEND_SUBNET:-172.30.57.0/24}
+  edge: {}
+  clamav-updates: {}
+
+volumes:
+  pgdata:
+  attachments:
+  clamav-db:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password
+  ingress_basic_auth_hash:
+    file: ./secrets/ingress_basic_auth_hash
