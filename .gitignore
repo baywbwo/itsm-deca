@@ -1,11 +1,4 @@
-*.db
-__pycache__/
-.auth
+/target
+*.log
 .env
-
-# DOB ITSM local persistent data and backups
-app/data/
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
-*.sqlite.backup
+.env.*

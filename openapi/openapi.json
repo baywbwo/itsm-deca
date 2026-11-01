@@ -1,0 +1,4766 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "ITSM API",
+    "version": "0.8.0-d07",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-itsm_session",
+        "description": "Server-side session. Plain-HTTP local UAT uses the cookie name `itsm_session`."
+      },
+      "csrfHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-CSRF-Token",
+        "description": "Required on every unsafe method under /api/v1 except UAT entry."
+      }
+    },
+    "parameters": {
+      "WorkspaceId": {
+        "name": "workspace_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Unknown, malformed or foreign IDs all return 404."
+      },
+      "TicketId": {
+        "name": "ticket_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Scoped to workspace_id; a ticket of another workspace returns 404."
+      },
+      "AttachmentId": {
+        "name": "attachment_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Scoped to workspace_id and ticket_id; otherwise 404."
+      },
+      "ReportRunId": {
+        "name": "report_run_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Scoped to workspace_id; otherwise 404."
+      },
+      "SavedViewId": {
+        "name": "saved_view_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Own view in workspace_id only; another user's view or another workspace returns 404."
+      },
+      "OutboxId": {
+        "name": "outbox_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "description": "Integration outbox intent in workspace_id only; another workspace = 404."
+      },
+      "ConnectionId": {
+        "name": "connection_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_:.-]{8,128}$"
+        },
+        "description": "One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout."
+      }
+    },
+    "schemas": {
+      "TicketSortKey": {
+        "type": "string",
+        "enum": [
+          "updated_at",
+          "received_at",
+          "number"
+        ]
+      },
+      "SortOrder": {
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "TicketRef": {
+        "type": "object",
+        "description": "Workspace-scoped reference with its display label (people have no code).",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "TicketAllowedAction": {
+        "type": "object",
+        "description": "A status change the caller may request now (D01 lifecycle + caller permissions). The server re-checks everything on submit.",
+        "required": [
+          "to",
+          "kind",
+          "requires",
+          "blockedBy"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "move",
+              "resolve",
+              "reopen"
+            ]
+          },
+          "requires": {
+            "type": "string",
+            "enum": [
+              "none",
+              "summary",
+              "reason"
+            ],
+            "description": "`summary` = resolution summary (resolve), `reason` = reopen reason."
+          },
+          "blockedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "blocking_related_work",
+              null
+            ],
+            "description": "Why the action is refused right now; the UI shows it disabled with this explanation."
+          }
+        }
+      },
+      "TicketListItem": {
+        "type": "object",
+        "description": "Safe ticket projection shared by List and Board. No identity numbers or contact data.",
+        "required": [
+          "id",
+          "number",
+          "displayNumber",
+          "subject",
+          "status",
+          "cycleNo",
+          "version",
+          "priority",
+          "owner",
+          "channel",
+          "category",
+          "receivedAt",
+          "updatedAt",
+          "ageSeconds",
+          "relatedWork",
+          "allowedActions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "displayNumber": {
+            "type": "string",
+            "examples": [
+              "DUMA-12"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "cycleNo": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "description": "Seconds since receivedAt; no SLA meaning."
+          },
+          "relatedWork": {
+            "type": "object",
+            "required": [
+              "open",
+              "blockingOpen"
+            ],
+            "properties": {
+              "open": {
+                "type": "integer"
+              },
+              "blockingOpen": {
+                "type": "integer"
+              }
+            }
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketAllowedAction"
+            }
+          }
+        }
+      },
+      "TicketAppliedFilters": {
+        "type": "object",
+        "description": "Echo of the applied filters (`null` = no restriction).",
+        "required": [
+          "q",
+          "status",
+          "owner",
+          "channel",
+          "category",
+          "priority",
+          "receivedFrom",
+          "receivedBefore",
+          "resolvedFrom",
+          "resolvedBefore",
+          "sort",
+          "order"
+        ],
+        "properties": {
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "receivedFrom": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receivedBefore": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedFrom": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedBefore": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sort": {
+            "$ref": "#/components/schemas/TicketSortKey"
+          },
+          "order": {
+            "$ref": "#/components/schemas/SortOrder"
+          }
+        }
+      },
+      "TicketStatusCountView": {
+        "type": "object",
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "TicketListBasis": {
+        "type": "object",
+        "description": "How numbers are counted. Dimension filters use the ticket's CURRENT PIC/kanal/kategori/prioritas (operational scope, not a historical report). With a resolution range a ticket with several resolve events in the range is listed and counted once; `resolutionEvents` counts the events.",
+        "required": [
+          "unit",
+          "dimensions",
+          "resolved"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "enum": [
+              "ticket"
+            ]
+          },
+          "dimensions": {
+            "type": "string",
+            "enum": [
+              "current_ticket_attributes"
+            ]
+          },
+          "resolved": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "resolve_event_in_range",
+              null
+            ]
+          }
+        }
+      },
+      "TicketList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "countsByStatus",
+          "resolutionEvents",
+          "nextCursor",
+          "filters",
+          "basis",
+          "asOf"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketListItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Tickets in the whole filtered scope (all pages)."
+          },
+          "countsByStatus": {
+            "type": "array",
+            "description": "Same scope without the status filter; `closed` only when present.",
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCountView"
+            }
+          },
+          "resolutionEvents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Resolve events in the range for tickets in scope; only with a resolution range."
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque; bound to workspace, filters and sort."
+          },
+          "filters": {
+            "$ref": "#/components/schemas/TicketAppliedFilters"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TicketListBasis"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketBoardColumn": {
+        "type": "object",
+        "required": [
+          "status",
+          "total",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Server count of the whole column before paging."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketListItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Continue with GET /tickets?status=<code>&<same filters>&cursor=."
+          }
+        }
+      },
+      "TicketBoard": {
+        "type": "object",
+        "required": [
+          "columns",
+          "total",
+          "resolutionEvents",
+          "filters",
+          "basis",
+          "asOf"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketBoardColumn"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "resolutionEvents": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "filters": {
+            "$ref": "#/components/schemas/TicketAppliedFilters"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TicketListBasis"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketTransitionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "to",
+          "version"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/TicketStatusCode"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Version the client saw; stale = 409."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Required to resolve, refused otherwise."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Required to reopen, refused otherwise."
+          }
+        }
+      },
+      "TicketAssignmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ownerUserId",
+          "version"
+        ],
+        "properties": {
+          "ownerUserId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Required to replace/remove another PIC (ticket.assign_any); refused when taking an unassigned ticket for oneself."
+          }
+        }
+      },
+      "TicketMutationResult": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "auditEventId"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/TicketListItem"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "unauthenticated",
+                  "forbidden",
+                  "csrf_failed",
+                  "not_found",
+                  "version_conflict",
+                  "rule_violation",
+                  "invalid_request",
+                  "uat_not_available",
+                  "dependency_unavailable",
+                  "internal",
+                  "validation_failed",
+                  "idempotency_conflict"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string",
+                "description": "validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields)."
+              }
+            }
+          }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "required": [
+          "environment",
+          "accessMode",
+          "banner"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "enum": [
+              "uat",
+              "production"
+            ]
+          },
+          "accessMode": {
+            "type": "string",
+            "enum": [
+              "uat_superadmin",
+              "sso"
+            ]
+          },
+          "banner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "examples": [
+              "Mode uji — Superadmin"
+            ]
+          },
+          "uat": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UatNotice"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present only in UAT Superadmin mode; null/absent otherwise."
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "required": [
+          "user",
+          "banner",
+          "uatSuperadmin"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "banner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "uatSuperadmin": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SessionIssued": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Session"
+          },
+          {
+            "type": "object",
+            "required": [
+              "csrfToken"
+            ],
+            "properties": {
+              "csrfToken": {
+                "type": "string",
+                "description": "Returned once; keep in memory only."
+              }
+            }
+          }
+        ]
+      },
+      "Workspace": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "timezone",
+          "companyId",
+          "version",
+          "myRole"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{2,10}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "myRole": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "cs",
+              "lead_cs",
+              null
+            ]
+          }
+        }
+      },
+      "Member": {
+        "type": "object",
+        "required": [
+          "userId",
+          "displayName",
+          "role",
+          "active"
+        ],
+        "properties": {
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TicketStatus": {
+        "type": "object",
+        "description": "Internal code + UI label. `closed` is a read-only historical archive state: never selectable, never mapped to resolved. Close final is not available.",
+        "required": [
+          "code",
+          "label",
+          "selectable",
+          "archived"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering",
+              "resolved",
+              "closed"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "examples": [
+              "Menunggu pekerjaan eksternal"
+            ]
+          },
+          "selectable": {
+            "type": "boolean"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CatalogItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "label",
+          "active",
+          "sortOrder"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string",
+            "description": "Unique per workspace. Priority codes are the existing low/normal/high/urgent."
+          },
+          "label": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer"
+          }
+        }
+      },
+      "Catalogs": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "priorities",
+          "categories",
+          "products",
+          "receivingUnits",
+          "regions",
+          "intakeChannels"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          },
+          "receivingUnits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          },
+          "intakeChannels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            }
+          }
+        }
+      },
+      "Ticket": {
+        "type": "object",
+        "required": [
+          "id",
+          "workspaceId",
+          "number",
+          "displayNumber",
+          "subject",
+          "chronology",
+          "receivedAt",
+          "status",
+          "cycleNo",
+          "intakeChannelId",
+          "priorityId",
+          "categoryId",
+          "productId",
+          "receivingUnitId",
+          "regionId",
+          "merchantId",
+          "ownerUserId",
+          "transactionActivity",
+          "cause",
+          "foreignBranchReference",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Relation/API identifier."
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Atomic per-workspace counter; unique within the workspace."
+          },
+          "displayNumber": {
+            "type": "string",
+            "examples": [
+              "DUMA-1"
+            ],
+            "description": "KODEWORKSPACE-number for display only. Not a BI regulator code."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "chronology": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "cycleNo": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "intakeChannelId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "priorityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "categoryId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "productId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receivingUnitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "regionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "merchantId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "ownerUserId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "PIC CS; active member of this workspace, null = unassigned."
+          },
+          "transactionActivity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foreignBranchReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optimistic lock; a stale version on mutation answers 409 version_conflict."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "description": "Metadata only. No object key or download URL; download with ACL re-check is a later task.",
+        "required": [
+          "id",
+          "ticketId",
+          "fileName",
+          "inspectedMime",
+          "sizeBytes",
+          "scanStatus",
+          "visibility",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ticketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "inspectedMime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scanStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "clean",
+              "infected",
+              "scanner_unavailable",
+              "rejected"
+            ]
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReportRun": {
+        "type": "object",
+        "description": "Operational report run metadata. Official BI export is held. The artifact reference is not exposed.",
+        "required": [
+          "id",
+          "reportType",
+          "periodStart",
+          "periodEnd",
+          "state",
+          "generatedAt",
+          "hasArtifact",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "operational"
+            ]
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "generatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "hasArtifact": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "UatNotice": {
+        "type": "object",
+        "required": [
+          "banner",
+          "persistent",
+          "dataScope",
+          "superadminProvesRbac"
+        ],
+        "properties": {
+          "banner": {
+            "type": "string",
+            "examples": [
+              "Mode uji — Superadmin"
+            ]
+          },
+          "persistent": {
+            "type": "boolean",
+            "const": true,
+            "description": "The banner must stay visible on every screen and cannot be dismissed."
+          },
+          "dataScope": {
+            "type": "string",
+            "enum": [
+              "dummy"
+            ]
+          },
+          "superadminProvesRbac": {
+            "type": "boolean",
+            "const": false,
+            "description": "Superadmin sees everything; its access is not evidence for CS/Lead CS permissions."
+          }
+        }
+      },
+      "PermissionCode": {
+        "type": "string",
+        "enum": [
+          "member.read",
+          "catalog.read",
+          "ticket.read",
+          "ticket.create",
+          "ticket.update",
+          "ticket.transition",
+          "ticket.resolve",
+          "ticket.assign_self",
+          "ticket.assign_any",
+          "related_work.manage",
+          "attachment.read",
+          "attachment.upload",
+          "report.view",
+          "admin.members",
+          "admin.settings",
+          "integration.manage",
+          "integration.credentials",
+          "integration.recovery"
+        ]
+      },
+      "GrantCode": {
+        "type": "string",
+        "enum": [
+          "admin.members",
+          "admin.settings",
+          "integration.manage",
+          "integration.credentials",
+          "integration.recovery"
+        ]
+      },
+      "PermissionCatalog": {
+        "type": "object",
+        "required": [
+          "permissions",
+          "roles"
+        ],
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "code",
+                "label",
+                "source"
+              ],
+              "properties": {
+                "code": {
+                  "$ref": "#/components/schemas/PermissionCode"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "role",
+                    "grant"
+                  ],
+                  "description": "grant = only via an explicit workspace grant, never from a role"
+                }
+              }
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "code",
+                "label",
+                "permissions"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "cs",
+                    "lead_cs"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "permissions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PermissionCode"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "WorkspacePermissions": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "role",
+          "uatSuperadmin",
+          "permissions",
+          "grants"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "cs",
+              "lead_cs",
+              null
+            ],
+            "description": "null for UAT Superadmin without membership"
+          },
+          "uatSuperadmin": {
+            "type": "boolean"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionCode"
+            },
+            "description": "Effective for this request; UI hint only, the server re-checks every call."
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantCode"
+            }
+          }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "displayName",
+          "membershipRole",
+          "membershipActive",
+          "grantCode",
+          "grantedBy",
+          "grantedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "membershipRole": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          },
+          "membershipActive": {
+            "type": "boolean"
+          },
+          "grantCode": {
+            "$ref": "#/components/schemas/GrantCode"
+          },
+          "grantedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grantedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DashboardPeriodKey": {
+        "type": "string",
+        "enum": [
+          "today",
+          "last_7_days",
+          "this_month"
+        ],
+        "description": "Calendar periods in the workspace time zone. last_7_days = today minus 6 days through today; this_month = the whole calendar month."
+      },
+      "TicketFilter": {
+        "type": "object",
+        "description": "Drilldown parameters for the ticket list (D06: GET /tickets and /tickets/board accept these keys as query parameters; lists are comma-separated). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before).",
+        "properties": {
+          "status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": "string",
+            "description": "Member user UUID, or the literal `unassigned`.",
+            "examples": [
+              "unassigned"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "description": "Intake channel UUID, or the literal `none`.",
+            "examples": [
+              "none"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "description": "Category UUID, or the literal `none`.",
+            "examples": [
+              "none"
+            ]
+          },
+          "priority": {
+            "type": "array",
+            "description": "Priority UUIDs (any of), or [`none`].",
+            "items": {
+              "type": "string"
+            }
+          },
+          "receivedFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receivedBefore": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedBefore": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketStatusCode": {
+        "type": "string",
+        "enum": [
+          "new",
+          "open",
+          "pending_customer",
+          "pending_engineering",
+          "resolved",
+          "closed"
+        ]
+      },
+      "DashboardPeriod": {
+        "type": "object",
+        "description": "Period bounds. Which date each number uses is given per metric in Dashboard.metricBasis.",
+        "required": [
+          "key",
+          "timezone",
+          "startDate",
+          "endDate",
+          "startAt",
+          "endAt"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/DashboardPeriodKey"
+          },
+          "timezone": {
+            "type": "string",
+            "examples": [
+              "Asia/Jakarta"
+            ]
+          },
+          "startDate": {
+            "type": "string",
+            "format": "date",
+            "description": "First local day (inclusive)."
+          },
+          "endDate": {
+            "type": "string",
+            "format": "date",
+            "description": "Last local day (inclusive)."
+          },
+          "startAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive start instant (UTC)."
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive end instant (UTC)."
+          }
+        }
+      },
+      "DashboardAppliedFilters": {
+        "type": "object",
+        "description": "Echo of the shared filters applied to every number; null = no restriction.",
+        "required": [
+          "owner",
+          "channel",
+          "category",
+          "priority"
+        ],
+        "properties": {
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Member user UUID or `unassigned`."
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Intake channel UUID or `none`."
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Category UUID or `none`."
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Priority UUID or `none`."
+          }
+        }
+      },
+      "DashboardFilterOption": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "label",
+          "active"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null for people."
+          },
+          "label": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "description": "False for an inactive membership/catalog row (still filterable for history)."
+          }
+        }
+      },
+      "DashboardFilterOptions": {
+        "type": "object",
+        "description": "Filter values scoped to this workspace: members (active, or holding tickets) and catalog rows.",
+        "required": [
+          "owners",
+          "channels",
+          "categories",
+          "priorities"
+        ],
+        "properties": {
+          "owners": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardFilterOption"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardFilterOption"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardFilterOption"
+            }
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardFilterOption"
+            }
+          }
+        }
+      },
+      "DashboardBasis": {
+        "type": "string",
+        "enum": [
+          "current_status",
+          "received_at",
+          "resolution_event",
+          "resolution_event_distinct_ticket"
+        ],
+        "description": "current_status = snapshot at asOf, not period-bound; received_at = received in the period; resolution_event = resolve events in the period (one per cycle, kept after reopen); resolution_event_distinct_ticket = distinct tickets with such an event."
+      },
+      "DashboardMetricBasis": {
+        "type": "object",
+        "required": [
+          "active",
+          "unassigned",
+          "pendingCustomer",
+          "receivedInPeriod",
+          "resolvedInPeriod",
+          "resolvedTicketsInPeriod",
+          "statusDistribution",
+          "picLoad",
+          "age",
+          "channels",
+          "categories",
+          "trendReceived",
+          "trendResolved",
+          "attention"
+        ],
+        "properties": {
+          "active": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "unassigned": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "pendingCustomer": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "receivedInPeriod": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "resolvedInPeriod": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "resolvedTicketsInPeriod": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "statusDistribution": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "picLoad": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "age": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "channels": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "categories": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "trendReceived": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "trendResolved": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          },
+          "attention": {
+            "$ref": "#/components/schemas/DashboardBasis"
+          }
+        }
+      },
+      "DashboardTotals": {
+        "type": "object",
+        "description": "Aggregated server-side over the whole workspace scope after the shared filters, never over a page.",
+        "required": [
+          "tickets",
+          "active",
+          "unassigned",
+          "pendingCustomer",
+          "receivedInPeriod",
+          "resolvedInPeriod",
+          "resolvedTicketsInPeriod"
+        ],
+        "properties": {
+          "tickets": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "All tickets in scope, any status (snapshot)."
+          },
+          "active": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "new + open + pending_customer + pending_engineering now (snapshot, not period-bound)."
+          },
+          "unassigned": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Active tickets without a PIC now."
+          },
+          "pendingCustomer": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Tickets in pending_customer now."
+          },
+          "receivedInPeriod": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Tickets with received_at in [startAt, endAt)."
+          },
+          "resolvedInPeriod": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Resolve events (cycles) with occurred_at in the period, whatever the ticket's received_at; a later reopen does not remove them."
+          },
+          "resolvedTicketsInPeriod": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Distinct tickets behind resolvedInPeriod."
+          }
+        }
+      },
+      "DashboardDrilldowns": {
+        "type": "object",
+        "required": [
+          "active",
+          "unassigned",
+          "pendingCustomer",
+          "receivedInPeriod",
+          "resolvedInPeriod",
+          "attention"
+        ],
+        "properties": {
+          "active": {
+            "$ref": "#/components/schemas/TicketFilter"
+          },
+          "unassigned": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketFilter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the PIC filter is a person (the number is 0 by definition)."
+          },
+          "pendingCustomer": {
+            "$ref": "#/components/schemas/TicketFilter"
+          },
+          "receivedInPeriod": {
+            "$ref": "#/components/schemas/TicketFilter"
+          },
+          "resolvedInPeriod": {
+            "$ref": "#/components/schemas/TicketFilter"
+          },
+          "attention": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketFilter"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the priority filter excludes every urgent/high priority."
+          }
+        }
+      },
+      "DashboardStatusCount": {
+        "type": "object",
+        "required": [
+          "status",
+          "active",
+          "count",
+          "filter"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filter": {
+            "$ref": "#/components/schemas/TicketFilter"
+          }
+        }
+      },
+      "DashboardPicLoad": {
+        "type": "object",
+        "description": "Every active ticket in scope per PIC, whatever its received_at. One row per active member (0 included), per inactive member still holding active tickets, plus a final unassigned row (userId null) unless the PIC filter is a person. With a PIC filter only that row is listed.",
+        "required": [
+          "userId",
+          "displayName",
+          "memberActive",
+          "activeTickets",
+          "filter"
+        ],
+        "properties": {
+          "userId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "memberActive": {
+            "type": "boolean"
+          },
+          "activeTickets": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filter": {
+            "$ref": "#/components/schemas/TicketFilter"
+          }
+        }
+      },
+      "DashboardDimensionCount": {
+        "type": "object",
+        "description": "Tickets received in the period per catalog value (intake channel or category); null id = not recorded. With a filter on that dimension only the selected value is listed.",
+        "required": [
+          "id",
+          "code",
+          "label",
+          "count",
+          "filter"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filter": {
+            "$ref": "#/components/schemas/TicketFilter"
+          }
+        }
+      },
+      "DashboardAgeBucket": {
+        "type": "object",
+        "description": "Active tickets by age since received_at. Not an SLA breach.",
+        "required": [
+          "key",
+          "label",
+          "count"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "lt_1d",
+              "d1_2",
+              "gt_2d"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DashboardTrendPoint": {
+        "type": "object",
+        "description": "received = tickets by received_at; resolved = resolve events (cycles). Never summed.",
+        "required": [
+          "date",
+          "received",
+          "resolved"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "received": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DashboardNamed": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "DashboardAttentionTicket": {
+        "type": "object",
+        "required": [
+          "id",
+          "number",
+          "displayNumber",
+          "subject",
+          "status",
+          "priority",
+          "owner",
+          "channel",
+          "category",
+          "receivedAt",
+          "ageSeconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "displayNumber": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardNamed"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardNamed"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardNamed"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DashboardNamed"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DashboardAttention": {
+        "type": "object",
+        "description": "Operational rule, not an SLA: active urgent/high tickets in scope, urgent first then oldest received; at most `limit` items, `total` over the scope.",
+        "required": [
+          "rule",
+          "total",
+          "limit",
+          "items"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "enum": [
+              "operational_rule"
+            ]
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardAttentionTicket"
+            }
+          }
+        }
+      },
+      "Dashboard": {
+        "type": "object",
+        "description": "Read-only snapshot from one REPEATABLE READ transaction. The shared filters narrow every number, chart, table and drilldown using the ticket's current owner/channel/category/priority. Synthetic dummy data in UAT.",
+        "required": [
+          "workspaceId",
+          "workspaceCode",
+          "asOf",
+          "period",
+          "filters",
+          "filterOptions",
+          "metricBasis",
+          "slaConfigured",
+          "totals",
+          "drilldown",
+          "statusDistribution",
+          "picLoad",
+          "channels",
+          "categories",
+          "age",
+          "trend",
+          "attention"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceCode": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "period": {
+            "$ref": "#/components/schemas/DashboardPeriod"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/DashboardAppliedFilters"
+          },
+          "filterOptions": {
+            "$ref": "#/components/schemas/DashboardFilterOptions"
+          },
+          "metricBasis": {
+            "$ref": "#/components/schemas/DashboardMetricBasis"
+          },
+          "slaConfigured": {
+            "type": "boolean"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/DashboardTotals"
+          },
+          "drilldown": {
+            "$ref": "#/components/schemas/DashboardDrilldowns"
+          },
+          "statusDistribution": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardStatusCount"
+            }
+          },
+          "picLoad": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardPicLoad"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardDimensionCount"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardDimensionCount"
+            }
+          },
+          "age": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardAgeBucket"
+            }
+          },
+          "trend": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DashboardTrendPoint"
+            }
+          },
+          "attention": {
+            "$ref": "#/components/schemas/DashboardAttention"
+          }
+        }
+      },
+      "SavedViewQuery": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "List/Board filters and sort in the List query-string format (same rules as the List parameters). Search text (`q`), `limit` and `cursor` are not allowed. Stored in canonical form; `sort`/`order` are always present in responses.",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "receivedFrom": {
+            "type": "string"
+          },
+          "receivedBefore": {
+            "type": "string"
+          },
+          "resolvedFrom": {
+            "type": "string"
+          },
+          "resolvedBefore": {
+            "type": "string"
+          },
+          "sort": {
+            "type": "string"
+          },
+          "order": {
+            "type": "string"
+          }
+        }
+      },
+      "SavedView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "view",
+          "query",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "list",
+              "board"
+            ]
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SavedViewList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/SavedView"
+            }
+          }
+        }
+      },
+      "SavedViewCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "view"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60,
+            "description": "Trimmed; unique per user+workspace (case-insensitive, 422). Label only; do not put personal data in it."
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "list",
+              "board"
+            ]
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          }
+        }
+      },
+      "SavedViewRenameRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The version the client saw; stale = 409."
+          }
+        }
+      },
+      "TicketJiraRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "description": "Jira SIMULATION: no real provider. create = new related work + simulated issue; link = existing issue key of this workspace's simulated provider.",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "create",
+              "link"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "Required for create; optional related-work title for link."
+          },
+          "issueKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "link only."
+          },
+          "assigneeId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Dummy Jira assignee of this workspace's connection."
+          }
+        }
+      },
+      "TicketCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "chronology",
+          "receivedAt",
+          "intakeChannelId"
+        ],
+        "description": "Company = the workspace in the path (never sent). Optional catalog ids must be active and in this workspace. No regulator-mandatory field is assumed (D01 freeze).",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "chronology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000,
+            "description": "Free text; may hold personal data, so it is never copied into audit or logs. Request body limit 64 KB applies."
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "RFC 3339 with offset (UI sends Asia/Jakarta wall time +07:00). Not more than 5 minutes in the future."
+          },
+          "intakeChannelId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "priorityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "categoryId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "productId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receivingUnitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "regionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "merchantId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Dummy merchant of this workspace (no CIF lookup)."
+          },
+          "ownerUserId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "PIC: null, yourself (ticket.assign_self) or any active member (ticket.assign_any; otherwise 403)."
+          },
+          "jira": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketJiraRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "larkDestinationId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Dummy Lark destination (SIMULATION) for the ticket-created notification."
+          }
+        }
+      },
+      "IntegrationSync": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "provider",
+          "operation",
+          "state",
+          "attempt",
+          "reconciled",
+          "updatedAt",
+          "mode"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "jira",
+              "lark"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "jira_create_issue",
+              "jira_link_issue",
+              "lark_ticket_created"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "success",
+              "failed",
+              "unknown"
+            ],
+            "description": "pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry)."
+          },
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "targetLabel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issueKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "safeError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reconciled": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          }
+        }
+      },
+      "TicketCreateResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticket",
+          "replayed",
+          "integrations"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/TicketListItem"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationSync"
+            }
+          }
+        }
+      },
+      "TicketIntegrations": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticketId",
+          "items",
+          "canRecover"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationSync"
+            }
+          },
+          "canRecover": {
+            "type": "boolean",
+            "description": "Caller holds integration.recovery."
+          }
+        }
+      },
+      "DirectoryEntry": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "displayName",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "dummy"
+            ]
+          }
+        }
+      },
+      "IntegrationProvider": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "connectionId",
+          "displayName",
+          "mode",
+          "state",
+          "simulatedOutcome",
+          "version",
+          "options"
+        ],
+        "properties": {
+          "connectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "tested",
+              "active",
+              "disabled"
+            ]
+          },
+          "simulatedOutcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "unknown"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            },
+            "description": "Jira: dummy assignees. Lark: dummy destinations. Empty when disabled."
+          }
+        }
+      },
+      "MerchantOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "displayName",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "dummy"
+            ]
+          }
+        }
+      },
+      "IntakeDirectory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "workspaceId",
+          "jira",
+          "lark",
+          "merchants"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "jira": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IntegrationProvider"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null = not configured for this workspace."
+          },
+          "lark": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IntegrationProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merchants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MerchantOption"
+            }
+          }
+        }
+      },
+      "PersonRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "AssignmentEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "at",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "take_for_self",
+              "reassign"
+            ]
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "from": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AssignmentHistory": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticketId",
+          "items"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/AssignmentEvent"
+            }
+          }
+        }
+      },
+      "OutboxRetryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Attempt the caller saw; stale = 409."
+          }
+        }
+      },
+      "OutboxReconcileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "attempt",
+          "outcome",
+          "evidence"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "What was checked at the provider (no secrets). Stored on the intent; audit records only that it was given."
+          },
+          "issueKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "Required for a successful jira_create_issue; refused otherwise."
+          }
+        }
+      },
+      "OutboxRecoveryResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationSync"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SimulationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "outcome",
+          "version"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failed",
+              "unknown"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SimulationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "connectionId",
+          "simulatedOutcome",
+          "version",
+          "auditEventId"
+        ],
+        "properties": {
+          "connectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "simulatedOutcome": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    },
+    "responses": {
+      "VersionConflict": {
+        "description": "Optimistic version is stale (version_conflict)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthenticated": {
+        "description": "No valid session",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "CsrfFailed": {
+        "description": "CSRF check failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Not found or not accessible",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Workspace is visible but the caller lacks the permission (default deny)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RuleViolation": {
+        "description": "Refused by a domain rule; generic message, no SQL or scoped data",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "InvalidRequest": {
+        "description": "A query parameter is not valid (invalid_request)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ValidationFailed": {
+        "description": "A field is missing, out of range, inactive or outside this workspace (validation_failed + field)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "IdempotencyConflict": {
+        "description": "Idempotency-Key already used by this user in this workspace for a different payload (idempotency_conflict); nothing created",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/v1/workspaces/{workspace_id}/saved-views": {
+      "get": {
+        "operationId": "listSavedViews",
+        "summary": "Caller's own saved views in this workspace (C32)",
+        "description": "Private to the session user and workspace; no public/shared views. A view grants nothing: List/Board re-check permission and filters when it is applied.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own views, by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedView",
+        "summary": "Save the current List/Board filters and sort as a private view",
+        "description": "Filters are parsed and validated against the workspace (foreign/unknown IDs = 400). Duplicate name or more than 50 views = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/saved-views/{saved_view_id}": {
+      "patch": {
+        "operationId": "renameSavedView",
+        "summary": "Rename an own saved view",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/SavedViewId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewRenameRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteSavedView",
+        "summary": "Delete an own saved view",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/SavedViewId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets": {
+      "get": {
+        "operationId": "listTickets",
+        "summary": "Ticket List (O02): server filter/search/sort with keyset cursor and whole-scope counts",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated status codes; absent = every status (closed archive included).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "PIC: member user UUID of this workspace, or `unassigned`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Intake channel UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated priority UUIDs of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Server sort; the ticket ID is always the tie-break.",
+            "schema": {
+              "$ref": "#/components/schemas/TicketSortKey",
+              "default": "updated_at"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder",
+              "default": "desc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size 1–100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque `nextCursor` of the previous page. A cursor from another workspace, filter or sort is 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page plus whole-scope counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTicket",
+        "summary": "Create one ticket (O05 intake), idempotently",
+        "description": "Ticket, related work, outbox intents and the ticket.create audit are written in one transaction. Simulated Jira/Lark delivery runs after commit (≤2 s) and never undoes the ticket; intents report pending/success/failed/unknown honestly.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay of an earlier create with the same key and payload (replayed=true)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketCreateResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketCreateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/board": {
+      "get": {
+        "operationId": "getTicketBoard",
+        "summary": "Ticket Board (O03): per-status columns with server counts and the first page of each",
+        "description": "Same filters, search and sort as the List. Columns = the requested statuses, or every status present in scope order (closed only when present). Each column continues through listTickets with `status=<code>` and its `nextCursor`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated status codes; absent = every status (closed archive included).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "PIC: member user UUID of this workspace, or `unassigned`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Intake channel UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated priority UUIDs of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Server sort; the ticket ID is always the tie-break.",
+            "schema": {
+              "$ref": "#/components/schemas/TicketSortKey",
+              "default": "updated_at"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder",
+              "default": "desc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items per column 1–50.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketBoard"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions": {
+      "post": {
+        "operationId": "transitionTicket",
+        "summary": "Change a ticket's status (D01 lifecycle)",
+        "description": "move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated ticket and the audit entry written in the same transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketMutationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment": {
+      "post": {
+        "operationId": "assignTicket",
+        "summary": "Change a ticket's PIC (D01 assignment policy)",
+        "description": "CS/Lead CS may take an unassigned ticket for themselves (no reason). Replacing or removing another PIC needs ticket.assign_any and a `reason` (audited). The new PIC must be an active member of this workspace (422 otherwise). Stale `version` = 409.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated ticket and the audit entry written in the same transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketMutationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "healthLive",
+        "responses": {
+          "200": {
+            "description": "Process is up"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "responses": {
+          "200": {
+            "description": "Database reachable and runtime guard holds"
+          },
+          "503": {
+            "description": "Not ready"
+          }
+        }
+      }
+    },
+    "/api/v1/meta": {
+      "get": {
+        "operationId": "getMeta",
+        "responses": {
+          "200": {
+            "description": "Environment and banner",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Meta"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/uat/session": {
+      "post": {
+        "operationId": "enterUatSuperadmin",
+        "description": "Direct UAT Superadmin entry. Only in UAT mode on a database marked as dummy test. Requires header `X-ITSM-UAT-Entry: 1`.",
+        "parameters": [
+          {
+            "name": "X-ITSM-UAT-Entry",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Session issued; Set-Cookie HttpOnly SameSite=Strict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionIssued"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "description": "Body too large"
+          },
+          "503": {
+            "description": "uat_not_available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "getSession",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "logout",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoked; cookie cleared"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active workspaces the caller can access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Workspace"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}": {
+      "get": {
+        "operationId": "getWorkspace",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/members": {
+      "get": {
+        "operationId": "listWorkspaceMembers",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Members of an accessible workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Member"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/ticket-statuses": {
+      "get": {
+        "operationId": "listTicketStatuses",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket status codes with UI labels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/TicketStatus"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          }
+        }
+      }
+    },
+    "/api/v1/permissions": {
+      "get": {
+        "operationId": "getPermissionCatalog",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "Static permission catalog and role defaults for the UI.",
+        "responses": {
+          "200": {
+            "description": "Catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionCatalog"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/permissions": {
+      "get": {
+        "operationId": "getMyWorkspacePermissions",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Caller's effective permissions in this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspacePermissions"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/grants": {
+      "get": {
+        "operationId": "listWorkspaceGrants",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "description": "Live grants. Requires admin.members; Lead CS without that grant gets 403.",
+        "responses": {
+          "200": {
+            "description": "Live grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Grant"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/catalogs": {
+      "get": {
+        "operationId": "getWorkspaceCatalogs",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Catalogs of an accessible workspace (active and inactive)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Catalogs"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}": {
+      "get": {
+        "operationId": "getTicket",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "getTicketAttachment",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/AttachmentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attachment metadata bound to this ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}": {
+      "get": {
+        "operationId": "getReportRun",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ReportRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operational report run metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportRun"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/dashboard": {
+      "get": {
+        "operationId": "getDashboard",
+        "summary": "Dashboard aggregates for one workspace (whole scope, not paginated)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/DashboardPeriodKey",
+              "default": "today"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "PIC: a member user UUID of this workspace, or `unassigned`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Intake channel UUID of this workspace, or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category UUID of this workspace, or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "Priority UUID of this workspace, or `none`. Values outside the workspace, non-canonical UUIDs and empty values are 400 invalid_request.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dashboard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Dashboard"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment-history": {
+      "get": {
+        "operationId": "getAssignmentHistory",
+        "summary": "PIC history (intake PIC, take-for-self, reassign) from the audit trail",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest first, max 100",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentHistory"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/integrations": {
+      "get": {
+        "operationId": "getTicketIntegrations",
+        "summary": "Jira/Lark delivery intents of a ticket (SIMULATION)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Intents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketIntegrations"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/intake-directory": {
+      "get": {
+        "operationId": "getIntakeDirectory",
+        "summary": "Simulated Jira/Lark connections, dummy assignees/destinations and dummy merchants for intake",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Directory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeDirectory"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/simulation": {
+      "put": {
+        "operationId": "setSimulationOutcome",
+        "summary": "UAT only: choose the outcome the simulated provider reports (integration.manage)",
+        "description": "404 outside UAT. Audited as integration.simulation.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/retry": {
+      "post": {
+        "operationId": "retryOutbox",
+        "summary": "Retry a FAILED delivery (integration.recovery)",
+        "description": "Only from failed. unknown = 422 (reconcile instead); success is final (422). Stale attempt = 409.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/OutboxId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutboxRetryRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retried; item shows the new state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutboxRecoveryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integration-outbox/{outbox_id}/reconcile": {
+      "post": {
+        "operationId": "reconcileOutbox",
+        "summary": "Settle an UNKNOWN delivery with evidence (integration.recovery)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/OutboxId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutboxReconcileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reconciled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutboxRecoveryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          }
+        }
+      }
+    }
+  }
+}

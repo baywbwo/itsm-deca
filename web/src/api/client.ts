@@ -1,0 +1,257 @@
+import {
+  isCatalogs,
+  isDashboard,
+  isErrorBody,
+  isMemberList,
+  isEmpty,
+  isAssignmentHistory,
+  isIntakeDirectory,
+  isOutboxRecoveryResult,
+  isTicketCreateResult,
+  isTicketIntegrations,
+  isMeta,
+  isSession,
+  isSavedView,
+  isSavedViewList,
+  isSessionIssued,
+  isTicketBoard,
+  isTicketList,
+  isTicketMutationResult,
+  isWorkspace,
+  isWorkspaceList,
+  isWorkspacePermissions,
+} from './guards';
+import type {
+  ApiErrorCode,
+  AssignmentHistory,
+  IntakeDirectory,
+  OutboxReconcileRequest,
+  OutboxRecoveryResult,
+  OutboxRetryRequest,
+  TicketCreateRequest,
+  TicketCreateResult,
+  TicketIntegrations,
+  Catalogs,
+  Dashboard,
+  DashboardPeriodKey,
+  Member,
+  Meta,
+  SavedView,
+  SavedViewCreateRequest,
+  SavedViewRenameRequest,
+  Session,
+  TicketAssignmentRequest,
+  TicketBoard,
+  TicketList,
+  TicketMutationResult,
+  TicketTransitionRequest,
+  Workspace,
+  WorkspacePermissions,
+} from './types';
+
+export interface TransportRequest {
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+  path: string;
+  headers: Record<string, string>;
+  signal?: AbortSignal | undefined;
+  /** JSON request body (sent as application/json). */
+  body?: unknown;
+}
+export interface TransportResponse {
+  status: number;
+  body: unknown;
+  requestId: string | null;
+}
+export type Transport = (req: TransportRequest) => Promise<TransportResponse>;
+
+/** Failure with a stable code; `status` 0 means the network or the payload shape failed. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: ApiErrorCode | 'network' | 'bad_response' | 'timeout',
+    message: string,
+    readonly requestId: string | null = null,
+    /** validation_failed only: the request field to fix. */
+    readonly field: string | null = null,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
+export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
+
+/** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */
+export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload }) => {
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...headers,
+      },
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: signal ?? null,
+    });
+  } catch (e) {
+    if (isAbort(e)) throw e;
+    throw new ApiError(0, 'network', 'Server tidak dapat dihubungi.');
+  }
+  const text = await res.text();
+  let body: unknown = null;
+  if (text) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+  }
+  return { status: res.status, body, requestId: res.headers.get('x-request-id') };
+};
+
+type Guard<T> = (v: unknown) => v is T;
+
+export function createApi(transport: Transport) {
+  // CSRF synchronizer token: memory only (never storage), returned once at entry.
+  let csrfToken: string | null = null;
+
+  async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
+    const res = await transport(req);
+    const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
+    if (okStatus && guard(res.body)) return res.body;
+    if (isErrorBody(res.body)) {
+      const field = (res.body.error as { field?: unknown }).field;
+      throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
+        typeof field === 'string' ? field : null);
+    }
+    if (okStatus) {
+      throw new ApiError(0, 'bad_response', 'Respons server tidak sesuai kontrak.', res.requestId);
+    }
+    throw new ApiError(res.status, 'internal', 'Terjadi kesalahan pada server.', res.requestId);
+  }
+
+  const get = <T>(path: string, guard: Guard<T>, signal?: AbortSignal) =>
+    call({ method: 'GET', path, headers: {}, signal }, guard);
+  const ws = (id: string) => `/api/v1/workspaces/${encodeURIComponent(id)}`;
+  const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
+
+  return {
+    hasCsrf: () => csrfToken !== null,
+    getMeta: (signal?: AbortSignal): Promise<Meta> => get('/api/v1/meta', isMeta, signal),
+    getSession: (signal?: AbortSignal): Promise<Session> => get('/api/v1/session', isSession, signal),
+    /** Direct UAT Superadmin entry; the server refuses it outside UAT on a marked dummy DB. */
+    async enterUat(signal?: AbortSignal): Promise<Session> {
+      const issued = await call(
+        { method: 'POST', path: '/api/v1/uat/session', headers: { 'X-ITSM-UAT-Entry': '1' }, signal },
+        isSessionIssued,
+        201,
+      );
+      csrfToken = issued.csrfToken;
+      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+    },
+    listWorkspaces: async (signal?: AbortSignal): Promise<Workspace[]> =>
+      (await get('/api/v1/workspaces', isWorkspaceList, signal)).items,
+    getWorkspace: (id: string, signal?: AbortSignal): Promise<Workspace> =>
+      get(ws(id), isWorkspace, signal),
+    getMyPermissions: (id: string, signal?: AbortSignal): Promise<WorkspacePermissions> =>
+      get(`${ws(id)}/permissions`, isWorkspacePermissions, signal),
+    /**
+     * Whole-scope aggregates for one workspace, period and shared filters (server-side, not a
+     * page). `query` is the canonical dashboard query (`dashboardQuery`) or a bare period key.
+     */
+    getDashboard: (id: string, query: DashboardPeriodKey | string, signal?: AbortSignal): Promise<Dashboard> =>
+      get(`${ws(id)}/dashboard?${query.includes('=') ? query : `period=${encodeURIComponent(query)}`}`, isDashboard, signal),
+    /**
+     * One page of the ticket List. `query` is the canonical list query (`ticketQuery`); `cursor`
+     * continues the same scope/filter/sort (the server refuses a cursor from another one).
+     */
+    listTickets: (id: string, query: string, cursor: string | null, signal?: AbortSignal): Promise<TicketList> =>
+      get(`${ws(id)}/tickets${withParam(query, 'cursor', cursor)}`, isTicketList, signal),
+    /** Board columns (one per status in scope) with server totals and a first page each. */
+    getBoard: (id: string, query: string, signal?: AbortSignal): Promise<TicketBoard> =>
+      get(`${ws(id)}/tickets/board${query ? `?${query}` : ''}`, isTicketBoard, signal),
+    /** Lifecycle move/resolve/reopen; the server re-checks permission, guard and version. */
+    transitionTicket: (id: string, ticketId: string, body: TicketTransitionRequest): Promise<TicketMutationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/transitions`,
+        headers: csrf(), body,
+      }, isTicketMutationResult),
+    assignTicket: (id: string, ticketId: string, body: TicketAssignmentRequest): Promise<TicketMutationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/assignment`,
+        headers: csrf(), body,
+      }, isTicketMutationResult),
+    listMembers: async (id: string, signal?: AbortSignal): Promise<Member[]> =>
+      (await get(`${ws(id)}/members`, isMemberList, signal)).items,
+    getCatalogs: (id: string, signal?: AbortSignal): Promise<Catalogs> =>
+      get(`${ws(id)}/catalogs`, isCatalogs, signal),
+    /** C32: the caller's own saved views in this workspace (private, no PII, grants nothing). */
+    listSavedViews: async (id: string, signal?: AbortSignal): Promise<SavedView[]> =>
+      (await get(`${ws(id)}/saved-views`, isSavedViewList, signal)).items,
+    createSavedView: (id: string, body: SavedViewCreateRequest): Promise<SavedView> =>
+      call({ method: 'POST', path: `${ws(id)}/saved-views`, headers: csrf(), body }, isSavedView, 201),
+    renameSavedView: (id: string, viewId: string, body: SavedViewRenameRequest): Promise<SavedView> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/saved-views/${encodeURIComponent(viewId)}`,
+        headers: csrf(), body,
+      }, isSavedView),
+    deleteSavedView: async (id: string, viewId: string): Promise<void> => {
+      await call({
+        method: 'DELETE', path: `${ws(id)}/saved-views/${encodeURIComponent(viewId)}`,
+        headers: csrf(),
+      }, isEmpty, 204);
+    },
+    /**
+     * D07 intake. `key` is the draft's idempotency key: resend the SAME key and payload after a
+     * timeout or network error; the server replays the original ticket instead of creating a
+     * second one. Times out client-side after `timeoutMs` (outcome then unknown, code timeout).
+     */
+    async createTicket(id: string, key: string, body: TicketCreateRequest, timeoutMs = 15000): Promise<TicketCreateResult> {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        return await call({
+          method: 'POST', path: `${ws(id)}/tickets`, headers: { ...csrf(), 'Idempotency-Key': key },
+          body, signal: ctrl.signal,
+        }, isTicketCreateResult, [200, 201]);
+      } catch (e) {
+        if (isAbort(e)) throw new ApiError(0, 'timeout', 'Server belum menjawab. Hasil pengiriman belum diketahui.');
+        throw e;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    getIntakeDirectory: (id: string, signal?: AbortSignal): Promise<IntakeDirectory> =>
+      get(`${ws(id)}/intake-directory`, isIntakeDirectory, signal),
+    getAssignmentHistory: (id: string, ticketId: string, signal?: AbortSignal): Promise<AssignmentHistory> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/assignment-history`, isAssignmentHistory, signal),
+    getTicketIntegrations: (id: string, ticketId: string, signal?: AbortSignal): Promise<TicketIntegrations> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/integrations`, isTicketIntegrations, signal),
+    retryOutbox: (id: string, outboxId: string, body: OutboxRetryRequest): Promise<OutboxRecoveryResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/retry`,
+        headers: csrf(), body,
+      }, isOutboxRecoveryResult),
+    reconcileOutbox: (id: string, outboxId: string, body: OutboxReconcileRequest): Promise<OutboxRecoveryResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/reconcile`,
+        headers: csrf(), body,
+      }, isOutboxRecoveryResult),
+    /** Headers for unsafe methods (D06+ mutations). */
+    csrfHeaders: csrf,
+  };
+}
+
+export type Api = ReturnType<typeof createApi>;
+
+/** `query` plus one more parameter (skipped when `value` is null). */
+function withParam(query: string, key: string, value: string | null): string {
+  const q = new URLSearchParams(query);
+  if (value !== null) q.set(key, value);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
