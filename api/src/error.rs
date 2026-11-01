@@ -6,6 +6,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+/// SQLSTATE raised by `itsm_require_version_bump()`.
+pub const VERSION_CONFLICT_SQLSTATE: &str = "IT409";
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("unauthenticated")]
@@ -14,6 +17,8 @@ pub enum AppError {
     CsrfFailed,
     #[error("not_found")]
     NotFound,
+    #[error("version_conflict")]
+    VersionConflict,
     #[error("uat_not_available")]
     UatNotAvailable,
     #[error("dependency_unavailable")]
@@ -40,6 +45,11 @@ impl AppError {
                 "Permintaan ditolak oleh perlindungan CSRF.",
             ),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Data tidak ditemukan."),
+            AppError::VersionConflict => (
+                StatusCode::CONFLICT,
+                "version_conflict",
+                "Data sudah diubah pihak lain. Muat ulang lalu coba lagi.",
+            ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "uat_not_available",
@@ -65,6 +75,12 @@ impl From<sqlx::Error> for AppError {
             sqlx::Error::PoolTimedOut | sqlx::Error::Io(_) | sqlx::Error::PoolClosed => {
                 tracing::warn!(error.kind = "db_unavailable", "database unavailable");
                 AppError::Unavailable
+            }
+            // Raised by the version-bump guard in migration 0002.
+            sqlx::Error::Database(db)
+                if db.code().as_deref() == Some(VERSION_CONFLICT_SQLSTATE) =>
+            {
+                AppError::VersionConflict
             }
             other => AppError::internal(other),
         }

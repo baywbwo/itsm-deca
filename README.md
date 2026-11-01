@@ -1,4 +1,4 @@
-# ITSM API — fondasi Rust (D02a)
+# ITSM API — fondasi Rust (D02a + D02)
 
 Fondasi backend terisolasi: Axum 0.8 + SQLx 0.8 + PostgreSQL. **Hanya UAT dengan data dummy.**
 Tidak ada akses production, tidak ada SSO, tidak terhubung ke Zammad.
@@ -9,6 +9,8 @@ Tidak ada akses production, tidak ada SSO, tidak terhubung ke Zammad.
 - Guard runtime: `serve` menolak start dan `/health/ready` = 503 bila DB tidak ditandai `test_dummy` untuk nama DB yang sama. Entry UAT juga memeriksa ulang penanda di setiap request.
 - Sesi server-side: token 32 byte CSPRNG, DB hanya menyimpan SHA-256; cookie HttpOnly, SameSite=Strict, `__Host-` saat Secure; CSRF synchronizer token (`X-CSRF-Token`, constant-time) untuk semua metode unsafe.
 - Workspace: akses = membership aktif di workspace aktif, atau grant UAT Superadmin. ID asing/tidak dikenal/malformed = 404.
+- `api/migrations/0002_d02_domain.{up,down}.sql` (D02): katalog per workspace, tiket dengan nomor per workspace (`KODE-n`, kode workspace dibekukan setelah nomor pertama), guard lifecycle (resolve wajib ringkasan + tanpa related work blocking terbuka; reopen ke `open` cycle berikutnya dengan alasan; `closed` hanya arsip baca), related work, relasi Jira/Lark (hanya `simulation`), outbox per provider, attachment (bind hanya saat `clean`), report run operasional, audit append-only. Semua relasi anak memakai FK komposit `(workspace_id, id)`; `workspace_id` tidak bisa diubah. Rollback: `MIGRATOR.undo` ke versi 1 (lihat tes `migration_0002_rolls_back_and_reapplies_on_dummy_data`).
+- Baca terbatas D02: status tiket, katalog workspace, detail tiket, metadata attachment, metadata report run. Mutasi, list dan unduhan menyusul D03+.
 - Kontrak: `openapi/openapi.json` (OpenAPI 3.1), dicocokkan dengan router oleh `api/tests/contract.rs`.
 
 ## Menjalankan
@@ -25,4 +27,4 @@ Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATA
 `PG_BIN=/path/pg/bin scripts/ci.sh` menjalankan fmt, clippy `-D warnings`, dan test terhadap cluster PostgreSQL sekali pakai. Workflow GitHub di `.github/workflows/ci.yml` (belum pernah dijalankan; repo belum punya remote).
 
 ## Belum termasuk
-Tiket, SLA, admin grants, audit trail, FE, SSO kantor, deploy.
+Endpoint mutasi tiket/intake, SLA, admin grants, penulisan audit, worker outbox, scan clamd, FE, SSO kantor, deploy.

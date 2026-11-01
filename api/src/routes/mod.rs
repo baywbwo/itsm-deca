@@ -1,5 +1,7 @@
+pub mod catalogs;
 pub mod health;
 pub mod session;
+pub mod tickets;
 pub mod workspaces;
 
 use axum::Router;
@@ -14,9 +16,23 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
+    ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/workspaces"),
     ("get", "/api/v1/workspaces/{workspace_id}"),
     ("get", "/api/v1/workspaces/{workspace_id}/members"),
+    ("get", "/api/v1/workspaces/{workspace_id}/catalogs"),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
+    ),
 ];
 
 pub fn api_router() -> Router<AppState> {
@@ -27,6 +43,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/v1/session",
             get(session::current).merge(delete(session::logout)),
         )
+        .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/workspaces", get(workspaces::list))
         .route(
             "/api/v1/workspaces/{workspace_id}",
@@ -35,5 +52,21 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/members",
             get(workspaces::members),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/catalogs",
+            get(catalogs::list),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+            get(tickets::get_one),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",
+            get(tickets::attachment),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
+            get(tickets::report_run),
         )
 }

@@ -91,6 +91,22 @@ fn every_local_ref_resolves() {
     walk(&doc, &doc);
 }
 
+/// Replaces every `{param}` with a well-formed UUID that matches no row.
+fn fill_path_params(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let Some(len) = rest[start..].find('}') else {
+            panic!("unbalanced path template {path}");
+        };
+        out.push_str("00000000-0000-4000-8000-000000000000");
+        rest = &rest[start + len + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn uat_state(pool: &PgPool) -> AppState {
     let vars: HashMap<String, String> = [
         ("ITSM_ENV", "uat"),
@@ -117,7 +133,7 @@ fn uat_state(pool: &PgPool) -> AppState {
 async fn every_documented_operation_is_routed(pool: PgPool) {
     let state = uat_state(&pool);
     for (method, path) in documented_operations(&spec()) {
-        let uri = path.replace("{workspace_id}", "00000000-0000-4000-8000-000000000000");
+        let uri = fill_path_params(&path);
         let method = match Method::from_bytes(method.to_uppercase().as_bytes()) {
             Ok(m) => m,
             Err(e) => panic!("bad method {method}: {e}"),

@@ -13,8 +13,8 @@ use crate::session::Session;
 #[derive(Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
-    id: Uuid,
-    code: String,
+    pub(crate) id: Uuid,
+    pub(crate) code: String,
     name: String,
     timezone: String,
     company_id: Uuid,
@@ -34,7 +34,7 @@ pub struct MemberView {
 
 #[derive(Serialize)]
 pub struct ListBody<T> {
-    items: Vec<T>,
+    pub(crate) items: Vec<T>,
 }
 
 const WORKSPACE_SELECT: &str = "SELECT w.id, w.code, w.name, w.timezone, w.company_id, w.version, \
@@ -44,7 +44,7 @@ const WORKSPACE_SELECT: &str = "SELECT w.id, w.code, w.name, w.timezone, w.compa
             ON m.workspace_id = w.id AND m.user_id = $1 AND m.active \
      WHERE w.active AND (m.id IS NOT NULL OR $2)";
 
-fn parse_id(raw: &str) -> Result<Uuid, AppError> {
+pub(crate) fn parse_id(raw: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(raw).map_err(|_| AppError::NotFound)
 }
 
@@ -60,7 +60,7 @@ pub async fn list(
     Ok(Json(ListBody { items }))
 }
 
-async fn find_accessible(
+pub(crate) async fn find_accessible(
     state: &AppState,
     s: &Session,
     workspace_id: Uuid,

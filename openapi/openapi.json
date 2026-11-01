@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.1.0-d02a",
-    "description": "D02a foundation contract. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+    "version": "0.2.0-d02",
+    "description": "D02a foundation + D02 domain read contract. Mutations arrive in later tasks; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
   "components": {
@@ -28,7 +28,10 @@
         "required": true,
         "schema": { "type": "string", "format": "uuid" },
         "description": "Unknown, malformed or foreign IDs all return 404."
-      }
+      },
+      "TicketId": { "name": "ticket_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; a ticket of another workspace returns 404." },
+      "AttachmentId": { "name": "attachment_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id and ticket_id; otherwise 404." },
+      "ReportRunId": { "name": "report_run_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; otherwise 404." }
     },
     "schemas": {
       "Error": {
@@ -41,7 +44,7 @@
             "properties": {
               "code": {
                 "type": "string",
-                "enum": ["unauthenticated", "csrf_failed", "not_found", "uat_not_available", "dependency_unavailable", "internal"]
+                "enum": ["unauthenticated", "csrf_failed", "not_found", "version_conflict", "uat_not_available", "dependency_unavailable", "internal"]
               },
               "message": { "type": "string" }
             }
@@ -106,9 +109,104 @@
           "role": { "type": "string", "enum": ["cs", "lead_cs"] },
           "active": { "type": "boolean" }
         }
+      },
+      "TicketStatus": {
+        "type": "object",
+        "description": "Internal code + UI label. `closed` is a read-only historical archive state: never selectable, never mapped to resolved. Close final is not available.",
+        "required": ["code", "label", "selectable", "archived"],
+        "properties": {
+          "code": { "type": "string", "enum": ["new", "open", "pending_customer", "pending_engineering", "resolved", "closed"] },
+          "label": { "type": "string", "examples": ["Menunggu pekerjaan eksternal"] },
+          "selectable": { "type": "boolean" },
+          "archived": { "type": "boolean" }
+        }
+      },
+      "CatalogItem": {
+        "type": "object",
+        "required": ["id", "code", "label", "active", "sortOrder"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "code": { "type": "string", "description": "Unique per workspace. Priority codes are the existing low/normal/high/urgent." },
+          "label": { "type": "string" },
+          "active": { "type": "boolean" },
+          "sortOrder": { "type": "integer" }
+        }
+      },
+      "Catalogs": {
+        "type": "object",
+        "required": ["workspaceId", "priorities", "categories", "products", "receivingUnits", "regions", "intakeChannels"],
+        "properties": {
+          "workspaceId": { "type": "string", "format": "uuid" },
+          "priorities": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } },
+          "categories": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } },
+          "products": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } },
+          "receivingUnits": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } },
+          "regions": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } },
+          "intakeChannels": { "type": "array", "items": { "$ref": "#/components/schemas/CatalogItem" } }
+        }
+      },
+      "Ticket": {
+        "type": "object",
+        "required": ["id", "workspaceId", "number", "displayNumber", "subject", "chronology", "receivedAt", "status", "cycleNo", "intakeChannelId", "priorityId", "categoryId", "productId", "receivingUnitId", "regionId", "merchantId", "ownerUserId", "transactionActivity", "cause", "foreignBranchReference", "version", "createdAt", "updatedAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid", "description": "Relation/API identifier." },
+          "workspaceId": { "type": "string", "format": "uuid" },
+          "number": { "type": "integer", "minimum": 1, "description": "Atomic per-workspace counter; unique within the workspace." },
+          "displayNumber": { "type": "string", "examples": ["DUMA-1"], "description": "KODEWORKSPACE-number for display only. Not a BI regulator code." },
+          "subject": { "type": "string" },
+          "chronology": { "type": "string" },
+          "receivedAt": { "type": "string", "format": "date-time" },
+          "status": { "$ref": "#/components/schemas/TicketStatus" },
+          "cycleNo": { "type": "integer", "minimum": 1 },
+          "intakeChannelId": { "type": ["string", "null"], "format": "uuid" },
+          "priorityId": { "type": ["string", "null"], "format": "uuid" },
+          "categoryId": { "type": ["string", "null"], "format": "uuid" },
+          "productId": { "type": ["string", "null"], "format": "uuid" },
+          "receivingUnitId": { "type": ["string", "null"], "format": "uuid" },
+          "regionId": { "type": ["string", "null"], "format": "uuid" },
+          "merchantId": { "type": ["string", "null"], "format": "uuid" },
+          "ownerUserId": { "type": ["string", "null"], "format": "uuid", "description": "PIC CS; active member of this workspace, null = unassigned." },
+          "transactionActivity": { "type": ["string", "null"] },
+          "cause": { "type": ["string", "null"] },
+          "foreignBranchReference": { "type": ["string", "null"] },
+          "version": { "type": "integer", "minimum": 1, "description": "Optimistic lock; a stale version on mutation answers 409 version_conflict." },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "description": "Metadata only. No object key or download URL; download with ACL re-check is a later task.",
+        "required": ["id", "ticketId", "fileName", "inspectedMime", "sizeBytes", "scanStatus", "visibility", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "ticketId": { "type": "string", "format": "uuid" },
+          "fileName": { "type": "string" },
+          "inspectedMime": { "type": ["string", "null"] },
+          "sizeBytes": { "type": "integer", "minimum": 1 },
+          "scanStatus": { "type": "string", "enum": ["pending", "clean", "infected", "scanner_unavailable", "rejected"] },
+          "visibility": { "type": "string", "enum": ["public", "internal"] },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ReportRun": {
+        "type": "object",
+        "description": "Operational report run metadata. Official BI export is held. The artifact reference is not exposed.",
+        "required": ["id", "reportType", "periodStart", "periodEnd", "state", "generatedAt", "hasArtifact", "createdAt"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "reportType": { "type": "string", "enum": ["operational"] },
+          "periodStart": { "type": "string", "format": "date" },
+          "periodEnd": { "type": "string", "format": "date" },
+          "state": { "type": "string", "enum": ["queued", "running", "succeeded", "failed"] },
+          "generatedAt": { "type": ["string", "null"], "format": "date-time" },
+          "hasArtifact": { "type": "boolean" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
       }
     },
     "responses": {
+      "VersionConflict": { "description": "Optimistic version is stale (version_conflict)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "Unauthenticated": { "description": "No valid session", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "CsrfFailed": { "description": "CSRF check failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "NotFound": { "description": "Not found or not accessible", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
@@ -201,6 +299,67 @@
             "description": "Members of an accessible workspace",
             "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Member" } } } } } }
           },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/ticket-statuses": {
+      "get": {
+        "operationId": "listTicketStatuses",
+        "security": [{ "sessionCookie": [] }],
+        "responses": {
+          "200": {
+            "description": "Ticket status codes with UI labels",
+            "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/TicketStatus" } } } } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthenticated" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/catalogs": {
+      "get": {
+        "operationId": "getWorkspaceCatalogs",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }],
+        "responses": {
+          "200": { "description": "Catalogs of an accessible workspace (active and inactive)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Catalogs" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}": {
+      "get": {
+        "operationId": "getTicket",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }, { "$ref": "#/components/parameters/TicketId" }],
+        "responses": {
+          "200": { "description": "Ticket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Ticket" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "getTicketAttachment",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }, { "$ref": "#/components/parameters/TicketId" }, { "$ref": "#/components/parameters/AttachmentId" }],
+        "responses": {
+          "200": { "description": "Attachment metadata bound to this ticket", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Attachment" } } } },
+          "401": { "$ref": "#/components/responses/Unauthenticated" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}": {
+      "get": {
+        "operationId": "getReportRun",
+        "security": [{ "sessionCookie": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/WorkspaceId" }, { "$ref": "#/components/parameters/ReportRunId" }],
+        "responses": {
+          "200": { "description": "Operational report run metadata", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReportRun" } } } },
           "401": { "$ref": "#/components/responses/Unauthenticated" },
           "404": { "$ref": "#/components/responses/NotFound" }
         }

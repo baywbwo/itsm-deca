@@ -1,7 +1,8 @@
-//! ITSM API (D02a foundation).
+//! ITSM API (D02a foundation + D02 domain schema).
 
 pub mod config;
 pub mod db;
+pub mod domain;
 pub mod error;
 pub mod routes;
 pub mod seed;
