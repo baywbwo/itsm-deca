@@ -133,7 +133,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
         <main className="main" id="main" tabIndex={-1}>
           <div className="top">
             <div className="top-left">
-              <Button className="mobile-only" variant="ghost" iconOnly aria-label="Buka navigasi"
+              <Button className="mobile-only" iconOnly aria-label="Buka navigasi"
                 aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></Button>
               <span className="breadcrumb">{listed ? `${listed.code} / ${current.label}` : current.label}</span>
             </div>
