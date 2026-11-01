@@ -48,12 +48,11 @@ for (const w of list.body.items) {
       responses[`GET ${path}`] = await rec('GET', path);
     }
   }
-  // A few combined filters for the visual review (today only).
-  const urgent = options.priorities.find((p) => p.code === 'urgent');
+  // Combined filters for the visual review (today only): every PIC x priority and channel x category.
   const pairs = [
-    options.owners[0] && urgent && { owner: options.owners[0].id, priority: urgent.id },
-    options.channels[0] && options.categories[0] && { channel: options.channels[0].id, category: options.categories[0].id },
-  ].filter(Boolean);
+    ...options.owners.flatMap((o) => options.priorities.map((p) => ({ owner: o.id, priority: p.id }))),
+    ...options.channels.flatMap((c) => options.categories.map((k) => ({ channel: c.id, category: k.id }))),
+  ];
   for (const p of pairs) {
     const q = new URLSearchParams({ period: 'today' });
     for (const k of ['owner', 'channel', 'category', 'priority']) if (p[k]) q.set(k, p[k]);

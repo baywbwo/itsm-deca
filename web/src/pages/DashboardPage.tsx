@@ -322,7 +322,9 @@ function DashboardBody({ d, uat, filtered }: { d: Dashboard; uat: boolean; filte
             </p>
             <DataTable caption="Tiket perlu perhatian" columns={ATTENTION_COLUMNS} rows={d.attention.items}
               rowKey={(r) => r.id}
-              empty={{ title: 'Tidak ada tiket mendesak', body: 'Tidak ada tiket aktif berprioritas Mendesak atau Tinggi.' }} />
+              empty={d.drilldown.attention
+                ? { title: 'Tidak ada tiket mendesak', body: 'Tidak ada tiket aktif berprioritas Mendesak atau Tinggi.' }
+                : { title: 'Di luar filter prioritas', body: 'Filter prioritas aktif tidak mencakup Mendesak atau Tinggi.' }} />
           </section>
         </>
       )}
