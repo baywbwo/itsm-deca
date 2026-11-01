@@ -3,6 +3,7 @@ pub mod catalogs;
 pub mod dashboard;
 pub mod health;
 pub mod session;
+pub mod ticket_list;
 pub mod tickets;
 pub mod workspaces;
 
@@ -27,9 +28,19 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/permissions"),
     ("get", "/api/v1/workspaces/{workspace_id}/grants"),
     ("get", "/api/v1/workspaces/{workspace_id}/dashboard"),
+    ("get", "/api/v1/workspaces/{workspace_id}/tickets"),
+    ("get", "/api/v1/workspaces/{workspace_id}/tickets/board"),
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment",
     ),
     (
         "get",
@@ -77,8 +88,24 @@ pub fn api_router() -> Router<AppState> {
             get(dashboard::get),
         )
         .route(
+            "/api/v1/workspaces/{workspace_id}/tickets",
+            get(ticket_list::list),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/board",
+            get(ticket_list::board),
+        )
+        .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
             get(tickets::get_one),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions",
+            post(ticket_list::transition),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment",
+            post(ticket_list::assign),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",

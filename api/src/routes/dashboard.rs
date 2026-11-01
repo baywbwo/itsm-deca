@@ -108,18 +108,18 @@ impl Dim {
         }
     }
 
-    fn id(self) -> Option<Uuid> {
+    pub fn id(self) -> Option<Uuid> {
         match self {
             Dim::Id(id) => Some(id),
             _ => None,
         }
     }
 
-    fn unset(self) -> bool {
+    pub fn unset(self) -> bool {
         self == Dim::Unset
     }
 
-    fn wire(self, unset_word: &str) -> Option<String> {
+    pub fn wire(self, unset_word: &str) -> Option<String> {
         match self {
             Dim::Any => None,
             Dim::Unset => Some(unset_word.to_owned()),
@@ -128,8 +128,8 @@ impl Dim {
     }
 }
 
-const UNASSIGNED: &str = "unassigned";
-const NONE: &str = "none";
+pub const UNASSIGNED: &str = "unassigned";
+pub const NONE: &str = "none";
 
 /// Shared dashboard filters (PRD §4 "Filter bersama" minus the period).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

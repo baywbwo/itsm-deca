@@ -10,6 +10,8 @@ use serde_json::json;
 pub const VERSION_CONFLICT_SQLSTATE: &str = "IT409";
 /// SQLSTATE raised by the domain guards (lifecycle, outbox, grants, immutable columns).
 pub const RULE_VIOLATION_SQLSTATE: &str = "IT422";
+/// PostgreSQL `foreign_key_violation`.
+pub const FOREIGN_KEY_VIOLATION_SQLSTATE: &str = "23503";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
@@ -115,6 +117,19 @@ impl From<sqlx::Error> for AppError {
                     db.table = db.table().unwrap_or(""),
                     db.constraint = db.constraint().unwrap_or(""),
                     "domain rule violated"
+                );
+                AppError::RuleViolation
+            }
+            // A reference to a row outside the workspace or that does not exist (D03
+            // disposition): the same generic rule error, never the constraint text.
+            sqlx::Error::Database(db)
+                if db.code().as_deref() == Some(FOREIGN_KEY_VIOLATION_SQLSTATE) =>
+            {
+                tracing::info!(
+                    error.kind = "foreign_key_violation",
+                    db.table = db.table().unwrap_or(""),
+                    db.constraint = db.constraint().unwrap_or(""),
+                    "reference refused"
                 );
                 AppError::RuleViolation
             }

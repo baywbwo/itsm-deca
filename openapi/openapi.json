@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.5.0-d05",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
+    "version": "0.6.0-d06",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available."
   },
   "servers": [{ "url": "/" }],
   "components": {
@@ -34,6 +34,544 @@
       "ReportRunId": { "name": "report_run_id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" }, "description": "Scoped to workspace_id; otherwise 404." }
     },
     "schemas": {
+      "TicketSortKey": {
+        "type": "string",
+        "enum": [
+          "updated_at",
+          "received_at",
+          "number"
+        ]
+      },
+      "SortOrder": {
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
+        ]
+      },
+      "TicketRef": {
+        "type": "object",
+        "description": "Workspace-scoped reference with its display label (people have no code).",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "TicketAllowedAction": {
+        "type": "object",
+        "description": "A status change the caller may request now (D01 lifecycle + caller permissions). The server re-checks everything on submit.",
+        "required": [
+          "to",
+          "kind",
+          "requires",
+          "blockedBy"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "move",
+              "resolve",
+              "reopen"
+            ]
+          },
+          "requires": {
+            "type": "string",
+            "enum": [
+              "none",
+              "summary",
+              "reason"
+            ],
+            "description": "`summary` = resolution summary (resolve), `reason` = reopen reason."
+          },
+          "blockedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "blocking_related_work",
+              null
+            ],
+            "description": "Why the action is refused right now; the UI shows it disabled with this explanation."
+          }
+        }
+      },
+      "TicketListItem": {
+        "type": "object",
+        "description": "Safe ticket projection shared by List and Board. No identity numbers or contact data.",
+        "required": [
+          "id",
+          "number",
+          "displayNumber",
+          "subject",
+          "status",
+          "cycleNo",
+          "version",
+          "priority",
+          "owner",
+          "channel",
+          "category",
+          "receivedAt",
+          "updatedAt",
+          "ageSeconds",
+          "relatedWork",
+          "allowedActions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": "integer"
+          },
+          "displayNumber": {
+            "type": "string",
+            "examples": [
+              "DUMA-12"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "cycleNo": {
+            "type": "integer"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "owner": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "channel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TicketRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "description": "Seconds since receivedAt; no SLA meaning."
+          },
+          "relatedWork": {
+            "type": "object",
+            "required": [
+              "open",
+              "blockingOpen"
+            ],
+            "properties": {
+              "open": {
+                "type": "integer"
+              },
+              "blockingOpen": {
+                "type": "integer"
+              }
+            }
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketAllowedAction"
+            }
+          }
+        }
+      },
+      "TicketAppliedFilters": {
+        "type": "object",
+        "description": "Echo of the applied filters (`null` = no restriction).",
+        "required": [
+          "q",
+          "status",
+          "owner",
+          "channel",
+          "category",
+          "priority",
+          "receivedFrom",
+          "receivedBefore",
+          "resolvedFrom",
+          "resolvedBefore",
+          "sort",
+          "order"
+        ],
+        "properties": {
+          "q": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "receivedFrom": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "receivedBefore": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedFrom": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolvedBefore": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sort": {
+            "$ref": "#/components/schemas/TicketSortKey"
+          },
+          "order": {
+            "$ref": "#/components/schemas/SortOrder"
+          }
+        }
+      },
+      "TicketStatusCountView": {
+        "type": "object",
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "TicketListBasis": {
+        "type": "object",
+        "description": "How numbers are counted. Dimension filters use the ticket's CURRENT PIC/kanal/kategori/prioritas (operational scope, not a historical report). With a resolution range a ticket with several resolve events in the range is listed and counted once; `resolutionEvents` counts the events.",
+        "required": [
+          "unit",
+          "dimensions",
+          "resolved"
+        ],
+        "properties": {
+          "unit": {
+            "type": "string",
+            "enum": [
+              "ticket"
+            ]
+          },
+          "dimensions": {
+            "type": "string",
+            "enum": [
+              "current_ticket_attributes"
+            ]
+          },
+          "resolved": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "resolve_event_in_range",
+              null
+            ]
+          }
+        }
+      },
+      "TicketList": {
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "countsByStatus",
+          "resolutionEvents",
+          "nextCursor",
+          "filters",
+          "basis",
+          "asOf"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketListItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Tickets in the whole filtered scope (all pages)."
+          },
+          "countsByStatus": {
+            "type": "array",
+            "description": "Same scope without the status filter; `closed` only when present.",
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCountView"
+            }
+          },
+          "resolutionEvents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Resolve events in the range for tickets in scope; only with a resolution range."
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque; bound to workspace, filters and sort."
+          },
+          "filters": {
+            "$ref": "#/components/schemas/TicketAppliedFilters"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TicketListBasis"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketBoardColumn": {
+        "type": "object",
+        "required": [
+          "status",
+          "total",
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "total": {
+            "type": "integer",
+            "description": "Server count of the whole column before paging."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketListItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Continue with GET /tickets?status=<code>&<same filters>&cursor=."
+          }
+        }
+      },
+      "TicketBoard": {
+        "type": "object",
+        "required": [
+          "columns",
+          "total",
+          "resolutionEvents",
+          "filters",
+          "basis",
+          "asOf"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketBoardColumn"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "resolutionEvents": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "filters": {
+            "$ref": "#/components/schemas/TicketAppliedFilters"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/TicketListBasis"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "TicketTransitionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "to",
+          "version"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/TicketStatusCode"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Version the client saw; stale = 409."
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Required to resolve, refused otherwise."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Required to reopen, refused otherwise."
+          }
+        }
+      },
+      "TicketAssignmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ownerUserId",
+          "version"
+        ],
+        "properties": {
+          "ownerUserId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Required to replace/remove another PIC (ticket.assign_any); refused when taking an unassigned ticket for oneself."
+          }
+        }
+      },
+      "TicketMutationResult": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "auditEventId"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/TicketListItem"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "required": ["error"],
@@ -301,7 +839,7 @@
       },
       "TicketFilter": {
         "type": "object",
-        "description": "Drilldown parameters for the ticket list (D06, not built yet). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before).",
+        "description": "Drilldown parameters for the ticket list (D06: GET /tickets and /tickets/board accept these keys as query parameters; lists are comma-separated). Already scoped to the workspace in the path; absent keys mean no filter. The dashboard's shared filters (owner/channel/category/priority) are always included. Time bounds are half-open [from, before).",
         "properties": {
           "status": { "type": "array", "items": { "$ref": "#/components/schemas/TicketStatusCode" } },
           "owner": { "type": "string", "description": "Member user UUID, or the literal `unassigned`.", "examples": ["unassigned"] },
@@ -544,6 +1082,462 @@
     }
   },
   "paths": {
+    "/api/v1/workspaces/{workspace_id}/tickets": {
+      "get": {
+        "operationId": "listTickets",
+        "summary": "Ticket List (O02): server filter/search/sort with keyset cursor and whole-scope counts",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated status codes; absent = every status (closed archive included).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "PIC: member user UUID of this workspace, or `unassigned`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Intake channel UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated priority UUIDs of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Server sort; the ticket ID is always the tie-break.",
+            "schema": {
+              "$ref": "#/components/schemas/TicketSortKey",
+              "default": "updated_at"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder",
+              "default": "desc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Page size 1–100.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque `nextCursor` of the previous page. A cursor from another workspace, filter or sort is 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page plus whole-scope counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/board": {
+      "get": {
+        "operationId": "getTicketBoard",
+        "summary": "Ticket Board (O03): per-status columns with server counts and the first page of each",
+        "description": "Same filters, search and sort as the List. Columns = the requested statuses, or every status present in scope order (closed only when present). Each column continues through listTickets with `status=<code>` and its `nextCursor`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Search: subject contains (case-insensitive) or ticket number (`12`, `#12`, `DUMA-12`). Max 100 characters.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated status codes; absent = every status (closed archive included).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "PIC: member user UUID of this workspace, or `unassigned`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "Intake channel UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category UUID of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated priority UUIDs of this workspace, or `none`. Current attribute.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "receivedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedFrom",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resolvedBefore",
+            "in": "query",
+            "required": false,
+            "description": "RFC 3339, exclusive.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Server sort; the ticket ID is always the tie-break.",
+            "schema": {
+              "$ref": "#/components/schemas/TicketSortKey",
+              "default": "updated_at"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort order.",
+            "schema": {
+              "$ref": "#/components/schemas/SortOrder",
+              "default": "desc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items per column 1–50.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Board",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketBoard"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions": {
+      "post": {
+        "operationId": "transitionTicket",
+        "summary": "Change a ticket's status (D01 lifecycle)",
+        "description": "move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketTransitionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated ticket and the audit entry written in the same transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketMutationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/assignment": {
+      "post": {
+        "operationId": "assignTicket",
+        "summary": "Change a ticket's PIC (D01 assignment policy)",
+        "description": "CS/Lead CS may take an unassigned ticket for themselves (no reason). Replacing or removing another PIC needs ticket.assign_any and a `reason` (audited). The new PIC must be an active member of this workspace (422 otherwise). Stale `version` = 409.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated ticket and the audit entry written in the same transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketMutationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          }
+        }
+      }
+    },
     "/health/live": {
       "get": { "operationId": "healthLive", "responses": { "200": { "description": "Process is up" } } }
     },
