@@ -254,6 +254,7 @@ function exportErrorText(e: unknown): { title: string; body: string; requestId: 
     if (e.status === 403) return { title: 'Akses ditolak', body: 'Anda tidak memiliki izin ekspor di workspace ini.', requestId };
     if (e.status === 422) return { title: 'Parameter tidak valid', body: e.message, requestId };
     if (e.code === 'network') return { title: 'Server tidak dapat dihubungi', body: 'Hasil ekspor belum diketahui. Coba lagi; permintaan yang sama tidak membuat file ganda.', requestId };
+    if (e.code === 'dependency_unavailable') return { title: 'Ekspor gagal', body: `${e.message} Hasil ekspor belum diketahui; coba lagi tanpa membuat file ganda.`, requestId };
   }
   return { title: 'Ekspor gagal', body: 'Hasil ekspor belum diketahui. Coba lagi; permintaan yang sama tidak membuat file ganda.', requestId };
 }
@@ -267,7 +268,9 @@ function PreviewError({ error, onRetry, onReset }: { error: unknown; onRetry: ()
   }
   const body = error instanceof ApiError && error.code === 'network'
     ? 'Server tidak dapat dihubungi. Periksa koneksi lalu coba lagi.'
-    : 'Pratinjau tidak ditampilkan karena permintaan gagal. Tidak ada angka lama yang dipakai.';
+    : error instanceof ApiError && error.code === 'dependency_unavailable'
+      ? `${error.message} Tidak ada angka yang ditampilkan.`
+      : 'Pratinjau tidak ditampilkan karena permintaan gagal. Tidak ada angka lama yang dipakai.';
   return <ErrorState title="Pratinjau laporan belum dapat dimuat" body={body}
     requestId={error instanceof ApiError ? error.requestId : null} onRetry={onRetry} />;
 }
