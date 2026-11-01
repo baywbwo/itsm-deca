@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type {
   Dashboard,
@@ -28,6 +28,7 @@ export function DashboardPage({ api, workspace, canReports, uat }: {
 }) {
   const [period, setPeriod] = useState<DashboardPeriodKey>('today');
   const [attempt, setAttempt] = useState(0);
+  const periodRef = useRef<HTMLSelectElement>(null);
   const state = useDashboard(api, workspace.id, period, attempt);
   const d = state.status === 'success' ? state.data : null;
   const tz = d?.period.timezone ?? workspace.timezone;
@@ -42,7 +43,7 @@ export function DashboardPage({ api, workspace, canReports, uat }: {
       <div className="toolbar row">
         <label className="period">
           Periode
-          <select className="field-control" value={period}
+          <select ref={periodRef} className="field-control" value={period}
             onChange={(e) => setPeriod(e.target.value as DashboardPeriodKey)}>
             {PERIODS.map((k) => (
               <option key={k} value={k}>
@@ -57,7 +58,11 @@ export function DashboardPage({ api, workspace, canReports, uat }: {
       <p className="sr-only" role="status">{d ? `Dashboard ${PERIOD_LABELS[d.period.key]} dimuat.` : ''}</p>
       {state.status === 'loading' && <DashboardSkeleton />}
       {state.status === 'error' && (
-        <DashboardError error={state.error} onRetry={() => setAttempt((n) => n + 1)} />
+        <DashboardError error={state.error} onRetry={() => {
+          // The retry button unmounts while loading; keep keyboard focus on a stable control.
+          periodRef.current?.focus();
+          setAttempt((n) => n + 1);
+        }} />
       )}
       {d && <DashboardBody d={d} uat={uat} />}
     </>
