@@ -207,3 +207,10 @@ export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
   const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null } });
   return strip(a) === strip(b);
 }
+
+/**
+ * True when going from `from` to `to` takes the user out of the page or workspace they are in.
+ * Query-only changes (filters, sort, view) stay put and never trigger the draft guard.
+ */
+export const leavesScope = (from: Route, to: Route) =>
+  from.workspaceId !== to.workspaceId || from.page !== to.page;

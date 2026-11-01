@@ -131,23 +131,92 @@ export function useDashboard(
 /** Key of one dashboard request: workspace + canonical query (or a bare period key). */
 export const dashboardKey = (workspaceId: string, query: string) => `${workspaceId}|${query}`;
 
-const subscribeHash = (fn: () => void) => {
-  window.addEventListener('hashchange', fn);
-  return () => window.removeEventListener('hashchange', fn);
+/**
+ * Hash routing with a leave guard. The app renders the *committed* hash; a change that the guard
+ * refuses (a dirty intake draft would leave view) is held as `pending` and the URL is put back,
+ * so neither a nav link nor Back/Forward drops the draft silently. Query-only changes never ask.
+ */
+export type NavGuard = (from: Route, to: Route) => boolean;
+
+const router = {
+  committed: null as string | null,
+  guard: null as NavGuard | null,
+  pending: null as string | null,
+  listeners: new Set<() => void>(),
+  installed: false,
+};
+
+export const currentHash = () => router.committed ?? (router.committed = window.location.hash);
+const emit = () => router.listeners.forEach((fn) => fn());
+const blocks = (from: string, to: string) => !!router.guard && router.guard(parseHash(from), parseHash(to));
+
+function onHashChange() {
+  const to = window.location.hash;
+  const from = currentHash();
+  if (to === from) return;
+  if (blocks(from, to)) {
+    // Back/Forward or a typed URL: restore the committed entry and ask first.
+    window.history.pushState(null, '', `${window.location.pathname}${window.location.search}${from || '#'}`);
+    router.pending = to;
+  } else {
+    router.committed = to;
+  }
+  emit();
+}
+
+export const subscribeRoute = (fn: () => void) => {
+  if (!router.installed) {
+    router.installed = true;
+    currentHash();
+    window.addEventListener('hashchange', onHashChange);
+  }
+  router.listeners.add(fn);
+  return () => { router.listeners.delete(fn); };
 };
 
 export function useHashRoute(): Route {
-  const hash = useSyncExternalStore(subscribeHash, () => window.location.hash);
+  const hash = useSyncExternalStore(subscribeRoute, currentHash);
   // parseHash returns a fresh object; memoise on the string.
   const memo = useRef<{ hash: string; route: Route } | null>(null);
   if (!memo.current || memo.current.hash !== hash) memo.current = { hash, route: parseHash(hash) };
   return memo.current.route;
 }
 
-export function navigate(hash: string, replace = false) {
+/** Install the leave guard (one at a time); returns the uninstaller. */
+export function setNavGuard(guard: NavGuard): () => void {
+  router.guard = guard;
+  return () => { if (router.guard === guard) router.guard = null; };
+}
+
+/** Target held back by the guard, or null. */
+export function usePendingNav(): string | null {
+  return useSyncExternalStore(subscribeRoute, () => router.pending);
+}
+
+/** Answer the guard: go on to the held target, or stay (the draft is untouched either way). */
+export function resolvePendingNav(proceed: boolean) {
+  const to = router.pending;
+  router.pending = null;
+  if (proceed && to !== null) navigate(to, false, true);
+  else emit();
+}
+
+/**
+ * Go to `hash`. Returns false when the guard held it back for a decision (`force` skips the
+ * guard: the user already decided).
+ */
+export function navigate(hash: string, replace = false, force = false): boolean {
+  const from = currentHash();
+  if (!force && hash !== from && blocks(from, hash)) {
+    router.pending = hash;
+    emit();
+    return false;
+  }
+  router.committed = hash;
   if (replace) window.history.replaceState(null, '', hash);
-  else window.location.hash = hash;
-  if (replace) window.dispatchEvent(new HashChangeEvent('hashchange'));
+  else if (window.location.hash !== hash) window.location.hash = hash;
+  emit();
+  return true;
 }
 
 export type TicketData = { view: 'list'; list: TicketList } | { view: 'board'; board: TicketBoard };

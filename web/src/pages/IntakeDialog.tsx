@@ -239,7 +239,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
           </div>
         )}
         {banner && (
-          <div className={banner.tone === 'unknown' ? 'notice spaced-bottom' : 'state-error spaced-bottom'} role="alert">
+          <div className={banner.tone === 'unknown' ? 'state-warn spaced-bottom' : 'state-error spaced-bottom'} role="alert">
             <h3>{banner.title}</h3>
             <p>{banner.body}</p>
             {banner.newKey && (
@@ -250,7 +250,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
           </div>
         )}
         {draft.inFlight && !banner && (
-          <div className="notice spaced-bottom" role="status">
+          <div className="state-warn spaced-bottom" role="status">
             <h3>Pengiriman sebelumnya belum pasti</h3>
             <p>Isian dikunci. Kirim ulang memakai kunci dan isian yang sama sehingga server tidak membuat tiket kedua.</p>
           </div>

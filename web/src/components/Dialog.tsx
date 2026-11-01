@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { Button } from './Button';
 import { Icon } from './Icon';
 
@@ -7,7 +7,7 @@ import { Icon } from './Icon';
  * returns to whatever opened it. `initialFocus` picks the first focused element (C31: Cancel
  * for high-impact confirmations).
  */
-export function Dialog({ open, onClose, title, children, footer, variant, initialFocus }: {
+export function Dialog({ open, onClose, title, children, footer, variant, initialFocus, returnFocus }: {
   open: boolean;
   onClose: () => void;
   title: string;
@@ -15,6 +15,8 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
   footer?: ReactNode;
   variant?: 'drawer';
   initialFocus?: string;
+  /** Element to focus on close instead of the opener (e.g. the control that asked for it). */
+  returnFocus?: RefObject<HTMLElement | null>;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -29,7 +31,9 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
       target?.focus();
       return () => {
         if (el.open) el.close();
-        if (opener?.isConnected) opener.focus();
+        const back = returnFocus?.current;
+        if (back?.isConnected) back.focus();
+        else if (opener?.isConnected) opener.focus();
       };
     }
     return undefined;

@@ -39,7 +39,8 @@ p { margin: 8px 0; }
 .btn-icon { padding: 8px; min-width: 38px; }
 
 /* Form fields */
-.field { display: grid; gap: 6px; font-size: 12px; font-weight: 700; }
+/* align-content: start keeps label/control rows top-aligned when a neighbour in the row has a hint. */
+.field { display: grid; gap: 6px; align-content: start; font-size: 12px; font-weight: 700; }
 .field-control { font-size: 14px; font-weight: 400; border: 1px solid var(--input-line); background: #fff; border-radius: 6px; padding: 9px 10px; min-height: 40px; max-width: 100%; width: 100%; }
 textarea.field-control { min-height: 100px; resize: vertical; }
 .field-control[aria-invalid='true'] { border-color: var(--danger-ink); }
@@ -272,7 +273,9 @@ table.tickets td.stack span { display: block; }
 .plain-fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .assign-box { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 0; min-width: 0; }
 .assign-box legend { font-weight: 700; padding: 0 6px; }
-.notice h3, .state-error h3 { margin-bottom: 4px; }
+.notice h3, .state-error h3, .state-warn h3 { margin-bottom: 4px; }
+/* Outcome not known yet: amber warning, never the green success tone. */
+.state-warn { background: var(--waiting-bg); border: 1px solid #ead9a4; color: var(--waiting-ink); border-left: 4px solid #b7791f; text-align: left; padding: 16px; border-radius: 8px; }
 .receipt-head { margin-bottom: 12px; }
 .receipt-head:focus { outline: none; }
 .integration-panel { margin-top: 16px; }

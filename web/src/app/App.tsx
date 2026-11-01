@@ -12,9 +12,9 @@ import { DashboardPage } from '../pages/DashboardPage';
 import { PlannedPage } from '../pages/PlannedPage';
 import { TicketsPage } from '../pages/TicketsPage';
 import { drafts } from './drafts';
-import { navigate, useBoot, useHashRoute, useScope, type ScopeData } from './hooks';
+import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
-import { allowedPages, pageDef, toHash, type PageDef, type PageId } from './routes';
+import { allowedPages, leavesScope, pageDef, parseHash, toHash, type PageDef, type PageId } from './routes';
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
@@ -58,6 +58,9 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
   const [drawer, setDrawer] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [pendingSwitch, setPendingSwitch] = useState<Workspace | null>(null);
+  // The workspace <select> that started a guarded switch: Cancel returns focus to it.
+  const switchOrigin = useRef<HTMLElement | null>(null);
+  const pendingNav = usePendingNav();
   const first = workspaces[0];
 
   // No workspace in the URL: open the first one the server lists.
@@ -98,12 +101,18 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
-  function switchWorkspace(id: string) {
+  // Leaving the page or workspace (nav link, Back/Forward, typed URL) with a dirty intake draft
+  // asks first; the draft stays in memory unless the user discards it. Filters/sort never ask.
+  useEffect(() => setNavGuard((from, to) =>
+    leavesScope(from, to) && !!from.workspaceId && drafts.dirty(session.user.id, from.workspaceId)), [session.user.id]);
+
+  function switchWorkspace(id: string, origin: HTMLElement) {
     const next = workspaces.find((w) => w.id === id);
     if (!next || id === route.workspaceId) return;
     // A dirty intake draft in the current workspace: keep it, discard it or stay (C13/O05).
     if (route.workspaceId && drafts.dirty(session.user.id, route.workspaceId)) {
-      setDrawer(false);
+      // The drawer stays open on mobile so Cancel can hand focus back to the same picker.
+      switchOrigin.current = origin;
       setPendingSwitch(next);
       return;
     }
@@ -112,14 +121,14 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
   function go(next: Workspace) {
     setDrawer(false);
     setPendingSwitch(null);
-    navigate(toHash({ workspaceId: next.id, page: route.page }));
+    navigate(toHash({ workspaceId: next.id, page: route.page }), false, true);
     setToast(`Workspace aktif: ${next.code} · ${next.name}`);
   }
 
   const switcher = (
     <SelectField label="Workspace" className="workspace" value={listed?.id ?? ''}
       hint={data ? roleLabel(data.permissions) : undefined}
-      onChange={(e) => switchWorkspace(e.target.value)}>
+      onChange={(e) => switchWorkspace(e.target.value, e.currentTarget)}>
       {!listed && <option value="">Pilih workspace</option>}
       {workspaces.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
     </SelectField>
@@ -130,7 +139,11 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
       {data && route.workspaceId
         ? pages.map((p) => (
           <a key={p.id} href={toHash({ workspaceId: route.workspaceId!, page: p.id })}
-            aria-current={p.id === route.page ? 'page' : undefined} onClick={onPick}>
+            aria-current={p.id === route.page ? 'page' : undefined} onClick={(e) => {
+              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+              e.preventDefault();
+              if (navigate(e.currentTarget.getAttribute('href') ?? '')) onPick?.();
+            }}>
             <Icon name={p.id} /> {p.label}
           </a>
         ))
@@ -171,7 +184,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D07 (intake &amp; PIC tiket) · data dummy UAT</div>
+          <div className="footer">ITSM Qash · kandidat D07r (intake &amp; PIC tiket) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -180,7 +193,7 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
         <Profile session={session} />
       </Dialog>
       <Dialog open={!!pendingSwitch} onClose={() => setPendingSwitch(null)} title="Draf tiket belum terkirim"
-        initialFocus=".switch-cancel"
+        initialFocus=".switch-cancel" returnFocus={switchOrigin}
         footer={pendingSwitch && (
           <>
             <Button className="switch-cancel" onClick={() => setPendingSwitch(null)}>Batal</Button>
@@ -197,9 +210,32 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
           lagi saat Anda kembali. Draf tidak pernah dipindah ke workspace {pendingSwitch?.code ?? 'lain'} dan hilang saat
           halaman dimuat ulang.</p>
       </Dialog>
+      <Dialog open={pendingNav !== null} onClose={() => resolvePendingNav(false)} title="Tinggalkan draf tiket?"
+        initialFocus=".nav-stay"
+        footer={pendingNav !== null && (
+          <>
+            <Button className="nav-stay" onClick={() => resolvePendingNav(false)}>Tetap di sini</Button>
+            <Button onClick={() => {
+              if (route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
+              resolvePendingNav(true);
+            }}>Buang draf &amp; lanjut</Button>
+            <Button variant="primary" onClick={() => resolvePendingNav(true)}>Lanjut, simpan draf</Button>
+          </>
+        )}>
+        <p>Ada draf tiket di workspace <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
+          terkirim. Anda akan membuka <strong>{pendingNav !== null ? navTargetLabel(pendingNav, workspaces) : ''}</strong>.</p>
+        <p className="tiny muted">Lanjut, simpan draf: draf tetap di memori tab ini dan muncul lagi saat Anda membuka
+          Buat tiket di workspace ini. Draf tidak disimpan ke perangkat dan hilang saat halaman dimuat ulang.</p>
+      </Dialog>
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
+}
+
+function navTargetLabel(hash: string, workspaces: Workspace[]): string {
+  const to = parseHash(hash);
+  const w = workspaces.find((x) => x.id === to.workspaceId);
+  return w ? `${w.code} / ${pageDef(to.page).label}` : pageDef(to.page).label;
 }
 
 function Profile({ session }: { session: Session }) {
