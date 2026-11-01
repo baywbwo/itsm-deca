@@ -307,3 +307,5 @@ dialog.peek .dialog-body { display: grid; gap: 16px; align-content: start; }
   dialog.peek .props dd { margin-bottom: 8px; }
   .detail-page .props { grid-template-columns: 1fr; gap: 2px 0; }
 }
+.column-checks { display: grid; gap: 8px; border: 0; padding: 0; margin: 0 0 12px; }
+.column-checks legend { margin-bottom: 8px; }

@@ -8,6 +8,9 @@
 //! - Filters are parsed and validated against the workspace when saved, but a view grants
 //!   nothing: applying it only opens the List/Board URL, which re-checks permission and
 //!   re-validates every filter (a stale ID answers 400 there).
+//! - C32 properties: a view may also store which optional List columns are shown, from a fixed
+//!   allowlist (`COLUMNS`), deduplicated and kept in canonical order. Number and title are always
+//!   shown and cannot be listed. No stored columns = all columns (the default).
 //! - Rename is optimistic (`version`, 409); names are unique per user+workspace
 //!   (case-insensitive, 422); at most `MAX_VIEWS` per user+workspace (422).
 
@@ -30,6 +33,10 @@ use crate::session::Session;
 
 pub const MAX_VIEWS: i64 = 50;
 pub const MAX_NAME_CHARS: usize = 60;
+/// Optional List columns in display order (the default when a view stores none).
+pub const COLUMNS: [&str; 6] = [
+    "status", "priority", "owner", "channel", "received", "updated",
+];
 const UNIQUE_VIOLATION: &str = "23505";
 
 macro_rules! utc {
@@ -43,7 +50,7 @@ macro_rules! utc {
 }
 
 const SELECT: &str = concat!(
-    "SELECT v.id, v.name, v.view, v.query, v.version, ",
+    "SELECT v.id, v.name, v.view, v.query, v.columns, v.version, ",
     utc!("v.created_at"),
     " AS created_at, ",
     utc!("v.updated_at"),
@@ -109,12 +116,15 @@ pub struct CreateBody {
     view: ViewMode,
     #[serde(default)]
     query: SavedQueryInput,
+    columns: Option<Vec<String>>,
 }
 
+/// Rename and/or change the shown columns; at least one of them.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RenameBody {
-    name: String,
+    name: Option<String>,
+    columns: Option<Vec<String>>,
     version: i32,
 }
 
@@ -124,6 +134,7 @@ struct Row {
     name: String,
     view: String,
     query: sqlx::types::Json<BTreeMap<String, String>>,
+    columns: Option<Vec<String>>,
     version: i32,
     created_at: String,
     updated_at: String,
@@ -137,6 +148,8 @@ pub struct SavedView {
     view: String,
     /// Canonical List/Board query parameters (string values); never contains `q`.
     query: BTreeMap<String, String>,
+    /// Optional List columns shown, canonical order (all of `COLUMNS` when none were stored).
+    columns: Vec<String>,
     version: i32,
     created_at: String,
     updated_at: String,
@@ -149,6 +162,9 @@ impl From<Row> for SavedView {
             name: r.name,
             view: r.view,
             query: r.query.0,
+            columns: r
+                .columns
+                .unwrap_or_else(|| COLUMNS.iter().map(|c| (*c).to_owned()).collect()),
             version: r.version,
             created_at: r.created_at,
             updated_at: r.updated_at,
@@ -163,6 +179,21 @@ fn name(raw: &str) -> Result<String, AppError> {
         return Err(AppError::InvalidRequest);
     }
     Ok(n.to_owned())
+}
+
+/// Validates a column choice against the allowlist; returns it deduplicated in canonical order.
+pub fn columns(raw: &[String]) -> Result<Vec<String>, AppError> {
+    if raw.is_empty() || raw.len() > COLUMNS.len() * 2 {
+        return Err(AppError::InvalidRequest);
+    }
+    if raw.iter().any(|c| !COLUMNS.contains(&c.as_str())) {
+        return Err(AppError::InvalidRequest);
+    }
+    Ok(COLUMNS
+        .iter()
+        .filter(|c| raw.iter().any(|r| r == *c))
+        .map(|c| (*c).to_owned())
+        .collect())
 }
 
 /// Duplicate names are a rule of the resource, not a server fault.
@@ -212,6 +243,7 @@ pub async fn create(
     let access = access(&state, &s, &raw_ws).await?;
     let b = body(payload)?;
     let name = name(&b.name)?;
+    let cols = b.columns.as_deref().map(columns).transpose()?;
     let filters = TicketQuery::parse(&b.query.into_list_query())?;
     let params = filters.saved_params();
 
@@ -237,14 +269,15 @@ pub async fn create(
         return Err(AppError::RuleViolation);
     }
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO saved_views (workspace_id, user_id, name, view, query) \
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO saved_views (workspace_id, user_id, name, view, query, columns) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(access.workspace_id)
     .bind(access.user_id)
     .bind(&name)
     .bind(b.view.code())
     .bind(sqlx::types::Json(&params))
+    .bind(&cols)
     .fetch_one(&mut *tx)
     .await
     .map_err(unique_to_rule)?;
@@ -273,7 +306,11 @@ pub async fn rename(
     if b.version < 1 {
         return Err(AppError::InvalidRequest);
     }
-    let name = name(&b.name)?;
+    if b.name.is_none() && b.columns.is_none() {
+        return Err(AppError::InvalidRequest);
+    }
+    let name = b.name.as_deref().map(name).transpose()?;
+    let cols = b.columns.as_deref().map(columns).transpose()?;
 
     let mut tx = state.pool.begin().await?;
     let current: Option<i32> = sqlx::query_scalar(
@@ -291,11 +328,13 @@ pub async fn rename(
         Some(_) => {}
     }
     sqlx::query(
-        "UPDATE saved_views SET name = $2, version = version + 1, updated_at = now() \
+        "UPDATE saved_views SET name = COALESCE($2, name), columns = COALESCE($3, columns), \
+           version = version + 1, updated_at = now() \
          WHERE id = $1",
     )
     .bind(id)
     .bind(&name)
+    .bind(&cols)
     .execute(&mut *tx)
     .await
     .map_err(unique_to_rule)?;

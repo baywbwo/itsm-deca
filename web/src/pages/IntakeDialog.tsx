@@ -46,7 +46,9 @@ const OPERATION_LABEL: Record<IntegrationSync['operation'], string> = {
   jira_link_issue: 'Jira · tautkan issue',
   lark_ticket_created: 'Lark · notifikasi tiket dibuat',
 };
-const OUTCOME_LABEL = { success: 'berhasil', failed: 'gagal', unknown: 'tidak pasti' } as const;
+const OUTCOME_LABEL = { success: 'berhasil', failed: 'gagal', unknown: 'tidak pasti', transient: 'gangguan sementara (dicoba ulang otomatis)' } as const;
+/** Mirrors the server's bounded automatic retry budget (api/src/outbox.rs MAX_AUTO_ATTEMPTS). */
+const AUTO_ATTEMPT_LIMIT = 5;
 
 /**
  * O05 / D07 intake. Company is the active workspace (read-only, never sent). The draft lives in
@@ -455,17 +457,18 @@ function Receipt({ api, workspace, result, onClose, onAnother }: {
         <div className="props-row"><dt>Diterima</dt><dd>{instantLabel(t.receivedAt, workspace.timezone)}</dd></div>
       </dl>
       <p className="spaced"><a href={href} onClick={onClose}>Lihat {t.displayNumber} di List tiket</a></p>
-      <IntegrationPanel api={api} workspaceId={workspace.id} ticketId={t.id} initial={result.integrations} />
+      <IntegrationPanel api={api} workspaceId={workspace.id} ticketId={t.id} timezone={workspace.timezone} initial={result.integrations} />
       <p className="tiny muted spaced">Catatan tindak lanjut, percakapan, lampiran dan riwayat ada di detail tiket (buka dari List tiket).</p>
     </Dialog>
   );
 }
 
 /** Jira/Lark sync state per intent (SIMULASI). Failed → permissioned retry; unknown → reconcile with evidence. */
-export function IntegrationPanel({ api, workspaceId, ticketId, initial }: {
+export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial }: {
   api: Api;
   workspaceId: string;
   ticketId: string;
+  timezone: string;
   initial: IntegrationSync[];
 }) {
   const [items, setItems] = useState(initial);
@@ -530,7 +533,7 @@ export function IntegrationPanel({ api, workspaceId, ticketId, initial }: {
               {[it.targetLabel, it.issueKey && `Issue ${it.issueKey}`, `percobaan ${it.attempt}`, it.reconciled && 'direkonsiliasi'].filter(Boolean).join(' · ')}
             </p>
             {it.safeError && <p className="tiny">{it.safeError}</p>}
-            {it.state === 'pending' && <p className="tiny muted">Belum selesai. Muat ulang status untuk melihat hasil.</p>}
+            {it.state === 'pending' && <p className="tiny muted">{pendingNote(it, timezone)}</p>}
             {it.state === 'failed' && (canRecover
               ? <Button className="btn-small" onClick={() => void retry(it)}>Coba kirim ulang</Button>
               : <p className="tiny muted">Pemulihan oleh pengelola integrasi berizin.</p>)}
@@ -622,4 +625,12 @@ function recoveryError(e: unknown): string {
     return `${e.message}`;
   }
   return 'Terjadi kesalahan tak terduga.';
+}
+
+function pendingNote(it: IntegrationSync, tz: string): string {
+  if (it.inFlight) return 'Sedang dikirim (simulasi). Muat ulang status untuk melihat hasil.';
+  if (it.nextAttemptAt) {
+    return `Gangguan sementara; dicoba ulang otomatis sekitar ${instantLabel(it.nextAttemptAt, tz)} (percobaan otomatis ${it.autoAttempts} dari ${AUTO_ATTEMPT_LIMIT}).`;
+  }
+  return 'Belum selesai; antrean dikirim otomatis. Muat ulang status untuk melihat hasil.';
 }

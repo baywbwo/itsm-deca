@@ -81,6 +81,10 @@ pub struct Config {
     /// clamd address. Absent = every upload ends as scanner_unavailable (503), never bound.
     pub clamd: Option<ClamdAddr>,
     pub attachment_max_bytes: u64,
+    /// Background outbox worker (simulated delivery). `ITSM_OUTBOX_WORKER=off` disables it.
+    pub outbox_worker: bool,
+    /// Worker poll interval in ms (`ITSM_OUTBOX_POLL_MS`, 200–60000, default 2000).
+    pub outbox_poll_ms: u64,
 }
 
 impl Config {
@@ -169,6 +173,26 @@ impl Config {
                 })?,
         };
 
+        let outbox_worker = match optional("ITSM_OUTBOX_WORKER").as_deref() {
+            None | Some("on") => true,
+            Some("off") => false,
+            Some(_) => {
+                return Err(ConfigError::Invalid {
+                    name: "ITSM_OUTBOX_WORKER",
+                });
+            }
+        };
+        let outbox_poll_ms = match optional("ITSM_OUTBOX_POLL_MS") {
+            None => 2000,
+            Some(v) => v
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (200..=60_000).contains(n))
+                .ok_or(ConfigError::Invalid {
+                    name: "ITSM_OUTBOX_POLL_MS",
+                })?,
+        };
+
         Ok(Config {
             environment,
             access_mode,
@@ -178,6 +202,8 @@ impl Config {
             attachment_dir,
             clamd,
             attachment_max_bytes,
+            outbox_worker,
+            outbox_poll_ms,
         })
     }
 }
@@ -326,6 +352,8 @@ mod tests {
             ("ITSM_CLAMD_ADDR", "tcp://host:0"),
             ("ITSM_CLAMD_ADDR", "unix:relative.sock"),
             ("ITSM_ATTACHMENT_MAX_BYTES", "0"),
+            ("ITSM_OUTBOX_WORKER", "yes"),
+            ("ITSM_OUTBOX_POLL_MS", "10"),
             ("ITSM_ATTACHMENT_MAX_BYTES", "999999999"),
         ] {
             let mut v = base();

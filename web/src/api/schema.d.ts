@@ -1298,6 +1298,8 @@ export interface components {
             /** @enum {string} */
             view: "list" | "board";
             query: components["schemas"]["SavedViewQuery"];
+            /** @description Shown optional columns in canonical order; all six when the view stores none. */
+            columns: components["schemas"]["SavedViewColumn"][];
             version: number;
             /** Format: date-time */
             createdAt: string;
@@ -1313,9 +1315,14 @@ export interface components {
             /** @enum {string} */
             view: "list" | "board";
             query?: components["schemas"]["SavedViewQuery"];
+            /** @description Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400. */
+            columns?: components["schemas"]["SavedViewColumn"][];
         };
+        /** @description Rename and/or change the shown columns; at least one of name/columns (400 otherwise). */
         SavedViewRenameRequest: {
-            name: string;
+            name?: string;
+            /** @description Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400. */
+            columns?: components["schemas"]["SavedViewColumn"][];
             /** @description The version the client saw; stale = 409. */
             version: number;
         };
@@ -1380,7 +1387,7 @@ export interface components {
             /** @enum {string} */
             operation: "jira_create_issue" | "jira_link_issue" | "lark_ticket_created";
             /**
-             * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry).
+             * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry). A pending row with nextAttemptAt had a transient failure (not delivered) and is retried automatically with backoff.
              * @enum {string}
              */
             state: "pending" | "success" | "failed" | "unknown";
@@ -1393,6 +1400,15 @@ export interface components {
             updatedAt: string;
             /** @enum {string} */
             mode: "simulation";
+            /**
+             * Format: date-time
+             * @description Transient failure: when the worker tries again automatically.
+             */
+            nextAttemptAt?: string | null;
+            /** @description Automatic attempts since the last manual retry (max 5, then failed). */
+            autoAttempts: number;
+            /** @description An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown. */
+            inFlight: boolean;
         };
         TicketCreateResult: {
             ticket: components["schemas"]["TicketListItem"];
@@ -1422,7 +1438,7 @@ export interface components {
             /** @enum {string} */
             state: "draft" | "tested" | "active" | "disabled";
             /** @enum {string} */
-            simulatedOutcome: "success" | "failed" | "unknown";
+            simulatedOutcome: "success" | "failed" | "unknown" | "transient";
             version: number;
             /** @description Jira: dummy assignees. Lark: dummy destinations. Empty when disabled. */
             options: components["schemas"]["DirectoryEntry"][];
@@ -1485,7 +1501,7 @@ export interface components {
         };
         SimulationRequest: {
             /** @enum {string} */
-            outcome: "success" | "failed" | "unknown";
+            outcome: "success" | "failed" | "unknown" | "transient";
             version: number;
         };
         SimulationResult: {
@@ -1708,6 +1724,11 @@ export interface components {
             /** Format: uuid */
             auditEventId: string;
         };
+        /**
+         * @description Optional List column. Number and title are always shown.
+         * @enum {string}
+         */
+        SavedViewColumn: "status" | "priority" | "owner" | "channel" | "received" | "updated";
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */

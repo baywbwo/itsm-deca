@@ -203,9 +203,11 @@ export function isSavedView(v: unknown): v is SavedView {
   return (
     isObj(v) && isStr(v.id) && isStr(v.name) && (v.view === 'list' || v.view === 'board') &&
     isObj(v.query) && !('q' in v.query) && Object.values(v.query).every(isStr) &&
+    isArr(v.columns, (c) => SAVED_VIEW_COLUMNS.includes(c as string)) && (v.columns as unknown[]).length > 0 &&
     isNum(v.version) && isStr(v.createdAt) && isStr(v.updatedAt)
   );
 }
+const SAVED_VIEW_COLUMNS = ['status', 'priority', 'owner', 'channel', 'received', 'updated'];
 export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
   isObj(v) && isArr(v.items, isSavedView);
 /** 204 No Content. */
@@ -216,7 +218,8 @@ export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
   isObj(v) && isStr(v.id) && (v.provider === 'jira' || v.provider === 'lark') && isStr(v.operation) &&
   SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
   isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
-  isStr(v.updatedAt) && v.mode === 'simulation';
+  isStr(v.updatedAt) && v.mode === 'simulation' && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isNum(v.autoAttempts) && typeof v.inFlight === 'boolean';
 
 export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
   isObj(v) && isTicketListItem(v.ticket) && typeof v.replayed === 'boolean' && isArr(v.integrations, isIntegrationSync);

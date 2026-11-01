@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.10.0-d08b",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile."
+    "version": "0.11.0-d08c",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease → unknown)."
   },
   "servers": [
     {
@@ -2313,6 +2313,7 @@
           "name",
           "view",
           "query",
+          "columns",
           "version",
           "createdAt",
           "updatedAt"
@@ -2336,6 +2337,16 @@
           },
           "query": {
             "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Shown optional columns in canonical order; all six when the view stores none."
           },
           "version": {
             "type": "integer",
@@ -2390,6 +2401,15 @@
           },
           "query": {
             "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400."
           }
         }
       },
@@ -2397,7 +2417,6 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "name",
           "version"
         ],
         "properties": {
@@ -2406,12 +2425,22 @@
             "minLength": 1,
             "maxLength": 60
           },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400."
+          },
           "version": {
             "type": "integer",
             "minimum": 1,
             "description": "The version the client saw; stale = 409."
           }
-        }
+        },
+        "description": "Rename and/or change the shown columns; at least one of name/columns (400 otherwise)."
       },
       "TicketJiraRequest": {
         "type": "object",
@@ -2561,7 +2590,9 @@
           "attempt",
           "reconciled",
           "updatedAt",
-          "mode"
+          "mode",
+          "autoAttempts",
+          "inFlight"
         ],
         "properties": {
           "id": {
@@ -2591,7 +2622,7 @@
               "failed",
               "unknown"
             ],
-            "description": "pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry)."
+            "description": "pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry). A pending row with nextAttemptAt had a transient failure (not delivered) and is retried automatically with backoff."
           },
           "attempt": {
             "type": "integer",
@@ -2627,6 +2658,23 @@
             "enum": [
               "simulation"
             ]
+          },
+          "nextAttemptAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Transient failure: when the worker tries again automatically."
+          },
+          "autoAttempts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Automatic attempts since the last manual retry (max 5, then failed)."
+          },
+          "inFlight": {
+            "type": "boolean",
+            "description": "An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown."
           }
         }
       },
@@ -2742,7 +2790,8 @@
             "enum": [
               "success",
               "failed",
-              "unknown"
+              "unknown",
+              "transient"
             ]
           },
           "version": {
@@ -3010,7 +3059,8 @@
             "enum": [
               "success",
               "failed",
-              "unknown"
+              "unknown",
+              "transient"
             ]
           },
           "version": {
@@ -3912,6 +3962,18 @@
             "format": "uuid"
           }
         }
+      },
+      "SavedViewColumn": {
+        "type": "string",
+        "enum": [
+          "status",
+          "priority",
+          "owner",
+          "channel",
+          "received",
+          "updated"
+        ],
+        "description": "Optional List column. Number and title are always shown."
       }
     },
     "responses": {

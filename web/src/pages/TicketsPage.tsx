@@ -22,6 +22,10 @@ import {
   ticketApiQuery,
   ticketQuery,
   toHash,
+  canonicalColumns,
+  COLUMN_LABELS,
+  TICKET_COLUMNS,
+  type TicketColumn,
   type TicketFilterKey,
   type TicketParams,
   type TicketSort,
@@ -436,6 +440,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
             ])}
           </select>
         </label>
+        <ColumnChooser params={params} onApply={onApply} />
         <SavedViews api={api} workspaceId={workspaceId} params={params} onApply={onApply} />
         {activeCount > 0 && (
           <Button variant="ghost" onClick={onReset} aria-label={`Reset semua filter (${activeCount} aktif)`}>
@@ -535,6 +540,7 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
   const recv = sortHeader('received_at', 'Umur');
   const upd = sortHeader('updated_at', 'Diperbarui');
   const status = params.filters.status;
+  const show = (c: TicketColumn) => params.columns.includes(c);
 
   return (
     <>
@@ -561,12 +567,12 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
               <tr>
                 <th scope="col" aria-sort={num_.ariaSort}>{num_.node}</th>
                 <th scope="col">Judul</th>
-                <th scope="col">Status</th>
-                <th scope="col">Prioritas</th>
-                <th scope="col">PIC</th>
-                <th scope="col">Kanal · kategori</th>
-                <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>
-                <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>
+                {show('status') && <th scope="col">Status</th>}
+                {show('priority') && <th scope="col">Prioritas</th>}
+                {show('owner') && <th scope="col">PIC</th>}
+                {show('channel') && <th scope="col">Kanal · kategori</th>}
+                {show('received') && <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>}
+                {show('updated') && <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>}
                 <th scope="col"><span className="sr-only">Aksi</span></th>
               </tr>
             </thead>
@@ -575,15 +581,17 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
                 <tr key={t.id}>
                   <td><button type="button" className="linkish" data-open-ticket={t.id} onClick={() => onOpen(t)}>{t.displayNumber}</button></td>
                   <td><span className="subject" title={t.subject}>{t.subject}</span></td>
-                  <td><Badge tone={statusTone(t.status)}>{t.status.label}</Badge></td>
-                  <td>{t.priority ? t.priority.label : <span className="muted">—</span>}</td>
-                  <td>{t.owner ? t.owner.label : <span className="muted">Belum ditugaskan</span>}</td>
-                  <td className="stack">
-                    <span>{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</span>
-                    <span className="tiny muted">{t.category?.label ?? 'Tanpa kategori'}</span>
-                  </td>
-                  <td>{ageLabel(t.ageSeconds)}</td>
-                  <td>{instantLabel(t.updatedAt, tz)}</td>
+                  {show('status') && <td><Badge tone={statusTone(t.status)}>{t.status.label}</Badge></td>}
+                  {show('priority') && <td>{t.priority ? t.priority.label : <span className="muted">—</span>}</td>}
+                  {show('owner') && <td>{t.owner ? t.owner.label : <span className="muted">Belum ditugaskan</span>}</td>}
+                  {show('channel') && (
+                    <td className="stack">
+                      <span>{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</span>
+                      <span className="tiny muted">{t.category?.label ?? 'Tanpa kategori'}</span>
+                    </td>
+                  )}
+                  {show('received') && <td>{ageLabel(t.ageSeconds)}</td>}
+                  {show('updated') && <td>{instantLabel(t.updatedAt, tz)}</td>}
                   <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>
                 </tr>
               ))}
@@ -959,4 +967,40 @@ function TicketError({ error, onRetry, onReset }: { error: unknown; onRetry: () 
 function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
   return 'Terjadi kesalahan tak terduga.';
+}
+
+/** C05 column chooser: allowlisted list columns; number, title and action always stay. */
+function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p: TicketParams) => void }) {
+  const hidden = TICKET_COLUMNS.length - params.columns.length;
+  const toggle = (c: TicketColumn, on: boolean) => {
+    const next = on ? [...params.columns, c] : params.columns.filter((x) => x !== c);
+    if (next.length === 0) return;
+    onApply({ ...params, columns: canonicalColumns(next) });
+  };
+  return (
+    <Popover label="Kolom daftar" title="Kolom daftar"
+      trigger={<>Kolom{hidden > 0 && <span className="count-badge" aria-label={`${hidden} kolom disembunyikan`}>−{hidden}</span>}</>}>
+      {(close) => (
+        <>
+          <fieldset className="column-checks">
+            <legend className="tiny muted">Nomor, judul, dan aksi selalu tampil. Minimal satu kolom lain.</legend>
+            {TICKET_COLUMNS.map((c) => {
+              const on = params.columns.includes(c);
+              const last = on && params.columns.length === 1;
+              return (
+                <label key={c} className="row check">
+                  <input type="checkbox" checked={on} disabled={last} onChange={(e) => toggle(c, e.target.checked)} />
+                  {COLUMN_LABELS[c]}{last && <span className="sr-only"> (kolom terakhir, tidak bisa disembunyikan)</span>}
+                </label>
+              );
+            })}
+          </fieldset>
+          <div className="popover-foot row between">
+            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...TICKET_COLUMNS] })} disabled={hidden === 0}>Tampilkan semua</Button>
+            <Button variant="primary" onClick={() => close()}>Selesai</Button>
+          </div>
+        </>
+      )}
+    </Popover>
+  );
 }

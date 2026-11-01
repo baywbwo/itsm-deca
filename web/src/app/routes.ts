@@ -136,7 +136,24 @@ export interface TicketParams {
   filters: Record<TicketFilterKey, string | null>;
   sort: TicketSort;
   order: TicketOrder;
+  /** Optional List columns shown (canonical order, never empty). Display only; not sent to the API. */
+  columns: TicketColumn[];
 }
+
+/** C32 properties: optional List columns in display order (number and title are always shown). */
+export const TICKET_COLUMNS = ['status', 'priority', 'owner', 'channel', 'received', 'updated'] as const;
+export type TicketColumn = (typeof TICKET_COLUMNS)[number];
+export const COLUMN_LABELS: Record<TicketColumn, string> = {
+  status: 'Status', priority: 'Prioritas', owner: 'PIC', channel: 'Kanal · kategori',
+  received: 'Diterima', updated: 'Diperbarui',
+};
+
+/** Allowlisted, deduplicated, canonical order; unknown names are dropped, nothing left = all. */
+export function canonicalColumns(raw: readonly string[]): TicketColumn[] {
+  const picked = TICKET_COLUMNS.filter((c) => raw.includes(c));
+  return picked.length ? picked : [...TICKET_COLUMNS];
+}
+const allColumns = (c: readonly TicketColumn[]) => c.length === TICKET_COLUMNS.length;
 
 const SORTS: readonly string[] = ['updated_at', 'received_at', 'number'];
 
@@ -149,7 +166,8 @@ export function parseTicketQuery(query: string): TicketParams {
   const s = q.get('sort');
   const sort = (s && SORTS.includes(s) ? s : 'updated_at') as TicketSort;
   const order = q.get('order') === 'asc' ? 'asc' : 'desc';
-  return { view, filters, sort, order };
+  const columns = canonicalColumns((q.get('cols') ?? '').split(','));
+  return { view, filters, sort, order, columns };
 }
 
 /** Canonical API query (no `view`): the same scope always gives the same string and cache key. */
@@ -164,10 +182,11 @@ export function ticketApiQuery(p: TicketParams): string {
   return q.toString();
 }
 
-/** URL query: view first (default list omitted), then the API query. */
+/** URL query: view first (default list omitted), then the API query, then non-default columns. */
 export function ticketQuery(p: TicketParams): string {
-  const api = ticketApiQuery(p);
-  return p.view === 'board' ? (api ? `view=board&${api}` : 'view=board') : api;
+  const parts = [p.view === 'board' ? 'view=board' : '', ticketApiQuery(p),
+    allColumns(p.columns) ? '' : `cols=${canonicalColumns(p.columns).join(',')}`];
+  return parts.filter(Boolean).join('&');
 }
 
 /** Filters that narrow the scope (search included; sort is not a filter). */
@@ -191,22 +210,30 @@ export function savedViewQuery(p: TicketParams): Record<string, string> {
   return q;
 }
 
-/** Ticket params a saved view opens: its view, filters and sort; search is cleared. */
-export function paramsFromSavedView(v: { view: string; query: Record<string, string | undefined> }): TicketParams {
+/** Ticket params a saved view opens: its view, filters, sort and columns; search is cleared. */
+export function paramsFromSavedView(v: {
+  view: string;
+  query: Record<string, string | undefined>;
+  columns?: readonly string[];
+}): TicketParams {
   const q = new URLSearchParams();
   if (v.view === 'board') q.set('view', 'board');
   for (const k of [...SAVED_VIEW_FILTERS, 'sort', 'order'] as const) {
     const value = v.query[k];
     if (value) q.set(k, value);
   }
-  return parseTicketQuery(q.toString());
+  return { ...parseTicketQuery(q.toString()), columns: canonicalColumns(v.columns ?? []) };
 }
 
-/** Same view, filters and sort (search ignored): the saved view that matches the screen. */
+/** Same view, filters, sort and columns (search ignored): the saved view that matches the screen. */
 export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
   const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null } });
   return strip(a) === strip(b);
 }
+
+/** Same as [sameSavedScope] except the columns: the view only needs its columns updated. */
+export const sameFilterScope = (a: TicketParams, b: TicketParams) =>
+  sameSavedScope({ ...a, columns: [...TICKET_COLUMNS] }, { ...b, columns: [...TICKET_COLUMNS] });
 
 /**
  * True when going from `from` to `to` takes the user out of the page or workspace they are in.

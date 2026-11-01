@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod outbox;
 pub mod routes;
 pub mod seed;
 pub mod session;

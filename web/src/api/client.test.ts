@@ -114,7 +114,7 @@ describe('ticket endpoints', () => {
 });
 
 describe('saved views client (C32)', () => {
-  const view = { id: 'v1', name: 'Email P1', view: 'board', query: { channel: 'c1', sort: 'received', order: 'desc' }, version: 1, createdAt: 't', updatedAt: 't' };
+  const view = { id: 'v1', name: 'Email P1', view: 'board', query: { channel: 'c1', sort: 'received', order: 'desc' }, columns: ['status', 'owner'], version: 1, createdAt: 't', updatedAt: 't' };
   const base = '/api/v1/workspaces/w/saved-views';
 
   it('creates with CSRF (201), renames with version, deletes with 204', async () => {

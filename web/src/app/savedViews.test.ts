@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paramsFromSavedView, parseTicketQuery, sameSavedScope, savedViewQuery } from './routes';
+import { canonicalColumns, paramsFromSavedView, parseTicketQuery, sameFilterScope, sameSavedScope, savedViewQuery, ticketApiQuery, ticketQuery, TICKET_COLUMNS } from './routes';
 
 describe('C32 saved view routes', () => {
   const p = parseTicketQuery('view=board&q=rahasia&status=open&priority=p1,p2&owner=none&sort=received_at&order=asc');
@@ -25,5 +25,22 @@ describe('C32 saved view routes', () => {
     expect(back.view).toBe('list');
     expect(sameSavedScope(back, p)).toBe(false);
     expect(sameSavedScope(back, parseTicketQuery('status=closed&q=apa'))).toBe(true);
+  });
+
+  it('columns: allowlisted, canonical, in the URL but never in the API query, part of the saved scope', () => {
+    expect(canonicalColumns(['updated', 'x', 'status', 'status'])).toEqual(['status', 'updated']);
+    expect(canonicalColumns([])).toEqual([...TICKET_COLUMNS]);
+    const all = parseTicketQuery('status=open');
+    expect(all.columns).toEqual([...TICKET_COLUMNS]);
+    expect(ticketQuery(all)).not.toContain('cols=');
+    const some = parseTicketQuery('status=open&cols=updated,owner,bogus');
+    expect(some.columns).toEqual(['owner', 'updated']);
+    expect(decodeURIComponent(ticketQuery(some))).toContain('cols=owner,updated');
+    expect(ticketApiQuery(some)).not.toContain('cols');
+    const saved = paramsFromSavedView({ view: 'list', query: savedViewQuery(all), columns: ['status'] });
+    expect(saved.columns).toEqual(['status']);
+    expect(sameFilterScope(saved, all)).toBe(true);
+    expect(sameSavedScope(saved, all)).toBe(false);
+    expect(sameSavedScope(saved, { ...all, columns: ['status'] })).toBe(true);
   });
 });
