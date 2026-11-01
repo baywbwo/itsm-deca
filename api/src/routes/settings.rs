@@ -72,11 +72,15 @@ fn company_code(raw: &str) -> Result<String, AppError> {
     }
 }
 
+/// Capability named in platform denied audit rows for company administration.
+pub const PLATFORM_COMPANY_ADMIN: &str = "platform.companies";
+
 fn superadmin(state: &AppState, s: &Session) -> Result<(), AppError> {
     if authz::superadmin_effective(state, s) {
         Ok(())
     } else {
         tracing::info!(user_id = %s.user_id, "platform administration denied");
+        crate::denied_audit::record_platform(s.user_id, PLATFORM_COMPANY_ADMIN);
         Err(AppError::Forbidden)
     }
 }

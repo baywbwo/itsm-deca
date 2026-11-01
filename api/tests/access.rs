@@ -824,3 +824,325 @@ async fn member_403_leaves_one_safe_denied_audit_row_and_nothing_else_does(pool:
     );
     assert_eq!(owner, None);
 }
+
+// ---------- D11 G10: platform denied audit ----------
+
+type PlatformRow = (Uuid, String, String, String, String, String, Option<String>);
+
+async fn platform_rows(pool: &PgPool) -> Vec<PlatformRow> {
+    ok(
+        sqlx::query_as(
+            "SELECT actor_id, action, capability, method, route, outcome, correlation_id \
+             FROM platform_audit_events ORDER BY occurred_at, id",
+        )
+        .fetch_all(pool)
+        .await,
+        "platform rows",
+    )
+}
+
+async fn count(pool: &PgPool, sql: &str) -> i64 {
+    ok(sqlx::query_scalar(sql).fetch_one(pool).await, sql)
+}
+
+fn platform_req(
+    method: &str,
+    uri: &str,
+    s: &session::IssuedSession,
+    body: Option<Value>,
+    request_id: &str,
+) -> Request<Body> {
+    let mut b = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(
+            header::COOKIE,
+            format!("{}={}", session::cookie_name(false), s.token),
+        )
+        .header(session::CSRF_HEADER, &s.csrf_token)
+        .header("x-request-id", request_id);
+    if body.is_some() {
+        b = b.header(header::CONTENT_TYPE, "application/json");
+    }
+    let body = body.map_or_else(Body::empty, |v| Body::from(v.to_string()));
+    ok(b.body(body), "request")
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn company_admin_refusal_is_audited_on_the_platform_and_never_in_a_workspace(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    // A Lead CS with every workspace admin grant is still not a platform administrator.
+    let lead_m = membership(&pool, fx.a, fx.lead).await;
+    for code in GRANT_CODES {
+        grant(&pool, fx.a, lead_m, code, fx.admin).await;
+    }
+    let lead = ok(
+        session::issue(&pool, fx.lead, "uat_superadmin").await,
+        "issue",
+    );
+    let st = state_with(&pool, uat_config());
+    let company: Uuid = ok(
+        sqlx::query_scalar("SELECT company_id FROM workspaces WHERE id = $1")
+            .bind(fx.a)
+            .fetch_one(&pool)
+            .await,
+        "company",
+    );
+    let audit_before = count(&pool, "SELECT count(*) FROM audit_events").await;
+    let companies_before = count(&pool, "SELECT count(*) FROM companies").await;
+    let active_before: bool = ok(
+        sqlx::query_scalar("SELECT active FROM workspaces WHERE id = $1")
+            .bind(fx.a)
+            .fetch_one(&pool)
+            .await,
+        "active",
+    );
+
+    let secret_name = "RAHASIA-nama-perusahaan-uji";
+    let calls = [
+        platform_req("GET", "/api/v1/companies", &lead, None, "g10-list"),
+        platform_req(
+            "POST",
+            "/api/v1/companies",
+            &lead,
+            Some(serde_json::json!({
+                "code": "ZZQ", "name": secret_name, "timezone": "Asia/Jakarta"
+            })),
+            "g10-create",
+        ),
+        platform_req(
+            "PATCH",
+            &format!("/api/v1/companies/{company}?probe=RAHASIA-query"),
+            &lead,
+            Some(serde_json::json!({ "active": false, "version": 1 })),
+            "g10-deactivate",
+        ),
+    ];
+    for req in calls {
+        let r = call_state(st.clone(), req).await;
+        assert_eq!(
+            (r.status, r.json["error"]["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("forbidden"))
+        );
+    }
+
+    // Refused requests had no effect and wrote nothing into any workspace audit.
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM companies").await,
+        companies_before
+    );
+    let active_after: bool = ok(
+        sqlx::query_scalar("SELECT active FROM workspaces WHERE id = $1")
+            .bind(fx.a)
+            .fetch_one(&pool)
+            .await,
+        "active",
+    );
+    assert_eq!(active_after, active_before);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM audit_events").await,
+        audit_before
+    );
+
+    let rows = platform_rows(&pool).await;
+    let expected = [
+        ("GET", "/api/v1/companies", "g10-list"),
+        ("POST", "/api/v1/companies", "g10-create"),
+        ("PATCH", "/api/v1/companies/{company_id}", "g10-deactivate"),
+    ];
+    assert_eq!(rows.len(), expected.len());
+    for (row, (method, route, corr)) in rows.iter().zip(expected) {
+        let (actor, action, capability, m, rt, outcome, c) = row;
+        assert_eq!(*actor, fx.lead);
+        assert_eq!(action, "platform.access.denied");
+        assert_eq!(capability, "platform.companies");
+        assert_eq!((m.as_str(), rt.as_str()), (method, route));
+        assert_eq!(outcome, "denied");
+        assert_eq!(c.as_deref(), Some(corr));
+    }
+    // Only the safe projection: no path IDs, query, body values, cookies or tokens anywhere.
+    let dump: String = ok(
+        sqlx::query_scalar(
+            "SELECT coalesce(string_agg(row_to_json(p)::text, '|'), '') FROM platform_audit_events p",
+        )
+        .fetch_one(&pool)
+        .await,
+        "dump",
+    );
+    for leak in [
+        company.to_string(),
+        fx.a.to_string(),
+        secret_name.to_owned(),
+        "RAHASIA-query".to_owned(),
+        lead.token.clone(),
+        lead.csrf_token.clone(),
+    ] {
+        assert!(!dump.contains(&leak), "platform audit leaks {leak}");
+    }
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn platform_audit_is_written_only_for_platform_403(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let st = state_with(&pool, uat_config());
+    let admin = ok(
+        session::issue(&pool, fx.admin, "uat_superadmin").await,
+        "issue",
+    );
+    let cs = ok(
+        session::issue(&pool, fx.cs, "uat_superadmin").await,
+        "issue",
+    );
+
+    // Allowed platform request, anonymous request and a CSRF failure write nothing.
+    let r = call_state(
+        st.clone(),
+        platform_req("GET", "/api/v1/companies", &admin, None, "ok"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        get(&pool, "/api/v1/companies", None).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let no_csrf = Request::builder()
+        .method("POST")
+        .uri("/api/v1/companies")
+        .header(
+            header::COOKIE,
+            format!("{}={}", session::cookie_name(false), cs.token),
+        )
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"));
+    let r = call_state(st.clone(), ok(no_csrf, "req")).await;
+    assert_eq!(r.json["error"]["code"], "csrf_failed");
+    assert!(platform_rows(&pool).await.is_empty());
+
+    // A workspace refusal stays in that workspace's audit, never on the platform.
+    let r = get(
+        &pool,
+        &format!("/api/v1/workspaces/{}/grants", fx.a),
+        Some(&cs.token),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert!(platform_rows(&pool).await.is_empty());
+    assert_eq!(denied_rows(&pool).await.len(), 1);
+
+    // Default deny: the Superadmin session outside UAT mode is refused and audited.
+    let mut cfg = uat_config();
+    cfg.environment = Environment::Production;
+    let r = call_state(
+        state_with(&pool, cfg),
+        platform_req("GET", "/api/v1/companies", &admin, None, "prod"),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let rows = platform_rows(&pool).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0, fx.admin);
+    assert_eq!(denied_rows(&pool).await.len(), 1);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn platform_audit_is_append_only_and_constrained(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let insert = |action: &'static str, route: &'static str, outcome: &'static str| {
+        sqlx::query(
+            "INSERT INTO platform_audit_events (actor_id, action, capability, method, route, outcome) \
+             VALUES ($1, $2, 'platform.companies', 'GET', $3, $4)",
+        )
+        .bind(fx.cs)
+        .bind(action)
+        .bind(route)
+        .bind(outcome)
+    };
+    ok(
+        insert("platform.access.denied", "/api/v1/companies", "denied")
+            .execute(&pool)
+            .await,
+        "valid insert",
+    );
+    for (action, route, outcome) in [
+        ("platform.company.created", "/api/v1/companies", "denied"),
+        ("platform.access.denied", "/api/v1/companies?q=1", "denied"),
+        ("platform.access.denied", "/other", "denied"),
+        ("platform.access.denied", "/api/v1/companies", "success"),
+    ] {
+        let r = insert(action, route, outcome).execute(&pool).await;
+        assert_eq!(
+            sqlstate(&r).as_deref(),
+            Some(CHECK),
+            "{action} {route} {outcome}"
+        );
+    }
+    let unknown_actor = sqlx::query(
+        "INSERT INTO platform_audit_events (actor_id, action, capability, method, route, outcome) \
+         VALUES ($1, 'platform.access.denied', 'platform.companies', 'GET', '/api/v1/companies', 'denied')",
+    )
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await;
+    assert_eq!(sqlstate(&unknown_actor).as_deref(), Some(FK));
+    for sql in [
+        "UPDATE platform_audit_events SET route = '/api/v1/x'",
+        "DELETE FROM platform_audit_events",
+        "TRUNCATE platform_audit_events",
+    ] {
+        let r = sqlx::query(sql).execute(&pool).await;
+        assert_eq!(sqlstate(&r).as_deref(), Some(RULE), "{sql}");
+    }
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM platform_audit_events").await,
+        1
+    );
+    // Workspace audit is not loosened: workspace_id stays mandatory.
+    let r = sqlx::query(
+        "INSERT INTO audit_events (workspace_id, actor_id, action, entity_type, outcome) \
+         VALUES (NULL, $1, 'access.denied', 'access', 'denied')",
+    )
+    .bind(fx.cs)
+    .execute(&pool)
+    .await;
+    assert_eq!(sqlstate(&r).as_deref(), Some("23502"));
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0011_rolls_back_and_reapplies_without_touching_workspace_audit(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let cs = ok(
+        session::issue(&pool, fx.cs, "uat_superadmin").await,
+        "issue",
+    );
+    let r = get(
+        &pool,
+        &format!("/api/v1/workspaces/{}/grants", fx.a),
+        Some(&cs.token),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let audit = count(&pool, "SELECT count(*) FROM audit_events").await;
+
+    ok(db::MIGRATOR.undo(&pool, 10).await, "undo to 10");
+    let exists: bool = ok(
+        sqlx::query_scalar("SELECT to_regclass('platform_audit_events') IS NOT NULL")
+            .fetch_one(&pool)
+            .await,
+        "regclass",
+    );
+    assert!(!exists);
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM audit_events").await,
+        audit
+    );
+
+    ok(db::MIGRATOR.run(&pool).await, "reapply");
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM platform_audit_events").await,
+        0
+    );
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM audit_events").await,
+        audit
+    );
+}
