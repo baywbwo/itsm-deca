@@ -29,6 +29,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
+    ("post", "/api/v1/session/csrf"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
