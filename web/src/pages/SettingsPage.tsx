@@ -4,6 +4,7 @@ import type {
   CatalogEditor, CatalogEntry, CatalogKind, CompanyList, GrantCode, Member, MemberList, SettingsBody, Timezone,
   Workspace, WorkspaceSettings,
 } from '../api/types';
+import { BRAND_PRESETS } from '../app/brand';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
@@ -522,6 +523,7 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
         columns={[
           { key: 'name', header: 'Perusahaan', cell: (c) => c.companyName },
           { key: 'code', header: 'Workspace', cell: (c) => <><code>{c.workspaceCode}</code> {c.workspaceName}{c.workspaceId === workspace.id ? ' (aktif dibuka)' : ''}</> },
+          { key: 'brand', header: 'Branding', cell: (c) => (c.brandKey ? BRAND_PRESETS[c.brandKey].label : 'Netral (belum diatur)') },
           { key: 'members', header: 'Anggota', cell: (c) => c.memberCount },
           { key: 'status', header: 'Status', cell: (c) => <Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge> },
           {
@@ -585,7 +587,9 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
   const [form, setForm] = useState({
     companyName: company.companyName, workspaceName: company.workspaceName,
     timezone: company.timezone as Timezone, reporterCode: company.reporterCode ?? '',
+    brandKey: company.brandKey ?? '', brandName: company.brandName ?? '',
   });
+  const preset = form.brandKey ? BRAND_PRESETS[form.brandKey as keyof typeof BRAND_PRESETS] : null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<WriteError | null>(null);
   const [refreshed, setRefreshed] = useState(false);
@@ -598,7 +602,8 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
     try {
       const r = await api.updateCompany(company.companyId, {
         companyName: form.companyName.trim(), workspaceName: form.workspaceName.trim(), timezone: form.timezone,
-        reporterCode: form.reporterCode.trim() || null, version: company.version,
+        reporterCode: form.reporterCode.trim() || null,
+        brandKey: preset ? preset.key : null, brandName: form.brandName.trim() || null, version: company.version,
       });
       onDone(r.item, r.auditEventId !== null);
     } catch (e) {
@@ -650,6 +655,26 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
           hint="Opsional; isi setelah kode terverifikasi."
           error={error?.field === 'reporterCode' ? 'Periksa kode pelapor.' : undefined}
           onChange={(e) => setForm({ ...form, reporterCode: e.target.value })} />
+        <SelectField label="Branding" value={form.brandKey} disabled={busy}
+          hint="Logo dan warna aplikasi saat workspace ini dibuka. Hanya preset bawaan aplikasi."
+          error={error?.field === 'brandKey' ? 'Pilih salah satu preset.' : undefined}
+          onChange={(e) => setForm({ ...form, brandKey: e.target.value })}>
+          <option value="">Netral (tanpa logo)</option>
+          {Object.values(BRAND_PRESETS).map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </SelectField>
+        <TextField label="Nama tampilan" maxLength={60} value={form.brandName} disabled={busy}
+          hint="Opsional; tampil di bawah logo dan judul tab. Kosong = nama perusahaan."
+          error={error?.field === 'brandName' ? 'Maks. 60 karakter.' : undefined}
+          onChange={(e) => setForm({ ...form, brandName: e.target.value })} />
+        <div className="full brand-preview" data-testid="brand-preview" aria-label="Pratinjau branding">
+          {preset
+            ? <img className="brand-logo" src={preset.logo} alt={`Logo ${preset.logoAlt}`} />
+            : <span className="brand-mark">ITSM</span>}
+          <span>
+            <span className="brand-name">{form.brandName.trim() || form.companyName.trim() || company.companyName}</span>
+            <span className="tiny muted"> · {preset ? preset.label : 'Netral'}</span>
+          </span>
+        </div>
         <p className="full tiny muted">Hanya profil yang berubah. Tiket, nomor tiket, laporan dan histori tidak disentuh; perubahan tercatat di audit.</p>
       </form>
     </Dialog>

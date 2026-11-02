@@ -4,13 +4,20 @@
 
 :root {
   color-scheme: light;
-  --bg: #fff; --side: #f7f7f5; --column: #f8f8f6;
+  --bg: #fff; --side: #f7f8f9; --column: #f8f8f6; --nav-current: #e6e9ed;
   --ink: #18261e; --muted: #536257; --line: #d7dfd7; --input-line: #c9cac4;
-  --accent: #245c31; --accent-hover: #16482f; --soft: #e8f1e5;
+  /* Neutral until the company has a branding preset (D15); presets below, kept in step with app/brand.ts. */
+  --accent: #3f4a56; --accent-hover: #2e3640; --soft: #eef0f3; --brand-stripe: none;
   --focus: #276ba7; --danger-ink: #a13636;
   --blue-bg: #e9eff9; --blue-ink: #30557d; --waiting-bg: #faf0d3; --waiting-ink: #6f5013;
   --ok-bg: #e7f1e9; --ok-ink: #275138; --err-bg: #fae9e7; --err-ink: #903b35;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+}
+:root[data-brand='deca'] { --side: #f7f7f5; --nav-current: #e9e9e5; --accent: #245c31; --accent-hover: #16482f; --soft: #e8f1e5; }
+/* AJR: purple carries text and buttons; magenta and yellow are decoration only (never text). */
+:root[data-brand='ajr'] {
+  --side: #f8f7fc; --nav-current: #e9e5f6; --accent: #3b299c; --accent-hover: #2c1f78; --soft: #efecf9;
+  --brand-stripe: linear-gradient(90deg, #3b299c 0 50%, #ea4e9c 50% 80%, #f4b842 80%);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); }
@@ -63,12 +70,20 @@ textarea.field-control { min-height: 100px; resize: vertical; }
 .sidebar { background: var(--side); border-right: 1px solid var(--line); padding: 24px 12px; display: flex; flex-direction: column; gap: 24px; }
 .brand { padding: 0 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .brand-logo { display: block; width: 148px; max-width: 100%; height: auto; }
+.brand-logo[data-brand-logo='ajr'] { width: 64px; }
+.brand-mark { font-size: 20px; font-weight: 700; letter-spacing: -.3px; color: var(--accent); }
+.brand-name { font-weight: 700; overflow-wrap: anywhere; }
+.brand-stripe { height: 4px; width: 64px; border-radius: 2px; background: var(--brand-stripe); }
+.top-brand { display: none; align-items: center; gap: 8px; min-width: 0; }
+.top-brand .brand-logo { width: auto; height: 28px; }
+.brand-preview { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.brand-preview .brand-logo { width: auto; height: 40px; }
 .workspace { padding: 0 8px; }
 .workspace .field-control { font-weight: 700; }
 .nav { display: grid; gap: 4px; }
 .nav a { display: flex; align-items: center; gap: 8px; border-radius: 7px; padding: 8px 12px; min-height: 38px; color: #55564f; text-decoration: none; }
 .nav a:hover { background: #efefeb; }
-.nav a[aria-current='page'] { background: #e9e9e5; color: var(--ink); font-weight: 700; }
+.nav a[aria-current='page'] { background: var(--nav-current); color: var(--ink); font-weight: 700; }
 .nav-skeleton { height: 38px; border-radius: 7px; background: #efefeb; }
 .profile { margin-top: auto; border-top: 1px solid var(--line); padding: 16px 8px 0; display: flex; gap: 8px; align-items: flex-start; }
 .avatar { flex: none; display: inline-grid; place-items: center; background: #eeeae1; border-radius: 50%; width: 27px; height: 27px; font-size: 11px; font-weight: 700; }
@@ -170,6 +185,7 @@ details .plain li { padding: 4px 0; font-size: 13px; }
   .sidebar { display: none; }
   .main { padding: 20px 16px; }
   .mobile-only { display: inline-flex; }
+  .top-brand { display: inline-flex; }
   .formgrid { grid-template-columns: 1fr; }
   .props { grid-template-columns: 115px minmax(0, 1fr); }
   .card { padding: 16px; }

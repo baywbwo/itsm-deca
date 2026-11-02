@@ -77,6 +77,7 @@ import type {
   MemberResult,
   SettingsBody,
   SettingsPatchRequest,
+  CompanyProfilePatchRequest,
   SettingsResult,
   CompanyList,
   CompanyCreateRequest,
@@ -457,7 +458,7 @@ export function createApi(transport: Transport) {
     setCompanyActive: (companyId: string, body: CompanyActivationRequest): Promise<CompanyResult> =>
       call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}`, headers: csrf(), body }, isCompanyResult),
     /** Edits names/time zone/reporter code; the code is immutable. `auditEventId` is null when nothing changed. */
-    updateCompany: (companyId: string, body: SettingsPatchRequest): Promise<CompanyUpdateResult> =>
+    updateCompany: (companyId: string, body: CompanyProfilePatchRequest): Promise<CompanyUpdateResult> =>
       call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}/profile`, headers: csrf(), body }, isCompanyUpdateResult),
     listCatalogEntries: (id: string, kind: CatalogKind, signal?: AbortSignal): Promise<CatalogEditor> =>
       get(`${ws(id)}/catalogs/${kind}`, isCatalogEditor, signal),

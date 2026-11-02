@@ -45,6 +45,7 @@ import type {
   ReportRun,
   ReportRunList,
   ReportExportResult,
+  BrandKey,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -92,10 +93,14 @@ export const isCsrfIssued = (v: unknown): v is { csrfToken: string } =>
 export const isSessionIssued = (v: unknown): v is SessionIssued =>
   isSession(v) && isStr((v as Obj).csrfToken) && ((v as Obj).csrfToken as string).length > 0;
 
+/** Only the bundled presets (or none): never a URL or a path. */
+export const isBrandKey = (v: unknown): v is BrandKey => v === null || v === 'deca' || v === 'ajr';
+
 export function isWorkspace(v: unknown): v is Workspace {
   return (
     isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.name) && isStr(v.timezone) &&
-    isStr(v.companyId) && typeof v.version === 'number' && isRole(v.myRole)
+    isStr(v.companyId) && typeof v.version === 'number' && isRole(v.myRole) &&
+    isBrandKey(v.brandKey) && isStr(v.brandName)
   );
 }
 
@@ -328,7 +333,8 @@ const TIMEZONES = ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'];
 const isWorkspaceSettings = (v: unknown): v is WorkspaceSettings =>
   isObj(v) && isStr(v.workspaceId) && isStr(v.workspaceCode) && isStr(v.workspaceName) && isStr(v.timezone) &&
   isStr(v.companyId) && isStr(v.companyCode) && isStr(v.companyName) && isStrOrNull(v.reporterCode) &&
-  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount);
+  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount) &&
+  isBrandKey(v.brandKey) && isStrOrNull(v.brandName);
 export const isSettingsBody = (v: unknown): v is SettingsBody =>
   isObj(v) && isWorkspaceSettings(v.settings) && typeof v.canEdit === 'boolean' &&
   isArr(v.timezones, (t) => isStr(t) && TIMEZONES.includes(t));

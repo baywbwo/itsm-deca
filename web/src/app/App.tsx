@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import logoUrl from '../assets/logo-qash.svg';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
@@ -12,6 +12,7 @@ import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
 import { allowedPages, leavesScope, pageDef, parseHash, toHash, type PageDef, type PageId } from './routes';
+import { activeBrand, pageTitle, type ActiveBrand } from './brand';
 import { freshest } from './workspaces';
 
 // G14: one chunk per page, fetched on first visit (same origin, hashed file names). The shell,
@@ -51,6 +52,27 @@ export function App({ api }: { api: Api }) {
   return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry} />;
 }
 
+/** Logo of the active company's preset, or a neutral text mark when none is configured. */
+function BrandMark({ brand, className }: { brand: ActiveBrand; className?: string }) {
+  return (
+    <span className={className} data-testid="brand-mark" data-brand-key={brand.key ?? 'neutral'}>
+      {brand.preset
+        ? <img className="brand-logo" data-brand-logo={brand.preset.key} src={brand.preset.logo} alt={brand.preset.logoAlt} />
+        : <span className="brand-mark" aria-label="ITSM">ITSM</span>}
+    </span>
+  );
+}
+
+function BrandBlock({ brand }: { brand: ActiveBrand }) {
+  return (
+    <div className="brand">
+      <BrandMark brand={brand} />
+      {brand.key === 'ajr' && <span className="brand-stripe" aria-hidden="true" />}
+      {brand.name && <span className="tiny muted brand-name">{brand.name}</span>}
+    </div>
+  );
+}
+
 function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
   api: Api;
   meta: Meta;
@@ -70,8 +92,11 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
   // The switcher list; refreshed after a settings save so a rename or a new company shows
   // without a reload. A failed refresh keeps the previous list (the save itself succeeded).
   const [workspaces, setWorkspaces] = useState(bootWorkspaces);
+  // Only the newest refresh may land: an older, slower answer must not bring back old names or branding.
+  const listSeq = useRef(0);
   const refreshWorkspaces = useCallback(() => {
-    api.listWorkspaces().then(setWorkspaces, () => undefined);
+    const seq = ++listSeq.current;
+    api.listWorkspaces().then((l) => { if (seq === listSeq.current) setWorkspaces(l); }, () => undefined);
   }, [api]);
   const first = workspaces[0];
 
@@ -101,6 +126,15 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
   const pages = data ? allowedPages(data.permissions.permissions, session.uatSuperadmin) : [];
   const current = pageDef(route.page);
   const listed = workspaces.find((w) => w.id === route.workspaceId) ?? null;
+  // Branding follows the workspace in the URL (no URL yet: the first one, which it is about to open).
+  // It is derived in the same render as the route, so a switch never shows the previous company.
+  const brand = activeBrand(route.workspaceId ? listed : first ?? null);
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    if (brand.key) root.dataset.brand = brand.key;
+    else delete root.dataset.brand;
+    document.title = pageTitle(brand);
+  }, [brand.key, brand.name]);
 
   // In-memory intake drafts must not vanish silently: warn before a reload drops them.
   useEffect(() => {
@@ -178,10 +212,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
       </a>
       <div className="shell">
         <aside className="sidebar" aria-label="Sidebar">
-          <div className="brand">
-            <img className="brand-logo" src={logoUrl} alt="Qash" />
-            <span className="tiny muted">DECA Operations</span>
-          </div>
+          <BrandBlock brand={brand} />
           {switcher}
           {nav()}
           <Profile session={session} />
@@ -191,6 +222,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
             <div className="top-left">
               <Button className="mobile-only" iconOnly aria-label="Buka navigasi"
                 aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></Button>
+              <BrandMark brand={brand} className="top-brand" />
               <span className="breadcrumb">{listed ? `${listed.code} / ${current.label}` : current.label}</span>
             </div>
           </div>
@@ -204,10 +236,11 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">ITSM Qash · kandidat D11 (rilis develop) · data dummy UAT</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}ITSM · kandidat D15 (rilis develop) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
+        <BrandBlock brand={brand} />
         {switcher}
         {nav(() => setDrawer(false))}
         <Profile session={session} />
