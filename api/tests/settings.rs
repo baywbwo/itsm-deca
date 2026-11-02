@@ -1415,19 +1415,47 @@ async fn bmt_branding_is_scoped_and_survives_reads(pool: PgPool) {
     assert_eq!(current.json["brandKey"], "bmt");
     assert_eq!(current.json["brandName"], "BMT Uji");
     let b_after = get(&pool, &ws_uri(f.b, "settings"), &t).await.json["settings"].clone();
-    assert_eq!(b_before, b_after, "branding must not change another company");
+    assert_eq!(
+        b_before, b_after,
+        "branding must not change another company"
+    );
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
 async fn bmt_migration_downgrade_refuses_to_discard_branding(pool: PgPool) {
     let _f = fixture(&pool).await;
-    ok(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await, "set BMT");
+    ok(
+        sqlx::query("UPDATE companies SET brand_key = 'bmt'")
+            .execute(&pool)
+            .await,
+        "set BMT",
+    );
     assert!(db::MIGRATOR.undo(&pool, 14).await.is_err());
-    let count: i64 = ok(sqlx::query_scalar("SELECT count(*) FROM companies WHERE brand_key = 'bmt'").fetch_one(&pool).await, "preserved BMT");
+    let count: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM companies WHERE brand_key = 'bmt'")
+            .fetch_one(&pool)
+            .await,
+        "preserved BMT",
+    );
     assert!(count > 0);
-    ok(sqlx::query("UPDATE companies SET brand_key = NULL").execute(&pool).await, "clear preset explicitly");
+    ok(
+        sqlx::query("UPDATE companies SET brand_key = NULL")
+            .execute(&pool)
+            .await,
+        "clear preset explicitly",
+    );
     ok(db::MIGRATOR.undo(&pool, 14).await, "downgrade");
-    assert!(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await.is_err());
+    assert!(
+        sqlx::query("UPDATE companies SET brand_key = 'bmt'")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
     ok(db::MIGRATOR.run(&pool).await, "upgrade");
-    ok(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await, "BMT accepted again");
+    ok(
+        sqlx::query("UPDATE companies SET brand_key = 'bmt'")
+            .execute(&pool)
+            .await,
+        "BMT accepted again",
+    );
 }
