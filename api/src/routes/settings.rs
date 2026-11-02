@@ -171,81 +171,135 @@ pub async fn update_settings(
     let access = authz::resolve(&state, &s, parse_id(&raw)?).await?;
     access.require(Permission::AdminSettings)?;
     let b = body(payload)?;
-    let workspace_name = text(&b.workspace_name, 200, "workspaceName")?;
-    let company_name = text(&b.company_name, 200, "companyName")?;
-    let tz = timezone(&b.timezone)?;
-    let reporter = optional_text(b.reporter_code.as_deref(), 40, "reporterCode")?;
-    let ws = access.workspace_id;
+    let profile = Profile::parse(&b)?;
     let mut tx = state.pool.begin().await?;
-    let current: (i32, Uuid, String, String, String, Option<String>) = sqlx::query_as(
-        "SELECT w.version, c.id, w.name, c.name, w.timezone, c.reporter_code \
-         FROM workspaces w JOIN companies c ON c.id = w.company_id \
+    let (ws, company, version): (Uuid, Uuid, i32) = sqlx::query_as(
+        "SELECT w.id, c.id, w.version FROM workspaces w JOIN companies c ON c.id = w.company_id \
          WHERE w.id = $1 FOR UPDATE OF w, c",
     )
-    .bind(ws)
+    .bind(access.workspace_id)
     .fetch_one(&mut *tx)
     .await?;
-    let (version, company, old_ws_name, old_co_name, old_tz, old_reporter) = current;
-    if version != b.version {
-        return Err(AppError::VersionConflict);
-    }
-    let mut changed = Vec::new();
-    if old_ws_name != workspace_name {
-        changed.push("workspaceName");
-    }
-    if old_co_name != company_name {
-        changed.push("companyName");
-    }
-    if old_tz != tz {
-        changed.push("timezone");
-    }
-    if old_reporter != reporter {
-        changed.push("reporterCode");
-    }
-    // Nothing changed: no version bump, no audit row.
-    if changed.is_empty() {
-        let settings = settings_of(&mut tx, ws).await?;
-        tx.commit().await?;
-        return Ok(Json(SettingsResult {
-            settings,
-            audit_event_id: None,
-        }));
-    }
-    sqlx::query(
-        "UPDATE workspaces SET name = $2, timezone = $3, version = version + 1, updated_at = now() \
-         WHERE id = $1",
-    )
-    .bind(ws)
-    .bind(&workspace_name)
-    .bind(tz)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE companies SET name = $2, reporter_code = $3, version = version + 1, \
-         updated_at = now() WHERE id = $1",
-    )
-    .bind(company)
-    .bind(&company_name)
-    .bind(&reporter)
-    .execute(&mut *tx)
-    .await?;
-    let audit_event_id = audit_entity(
+    let audit_event_id = apply_profile(
         &mut tx,
-        ws,
-        Some(access.user_id),
-        "settings.update",
-        "workspace",
-        ws,
-        serde_json::json!({ "changed": changed, "version": version + 1 }),
-        &correlation(&headers),
+        ProfileTarget {
+            workspace: ws,
+            company,
+            version,
+            expected: b.version,
+        },
+        &profile,
+        access.user_id,
+        ("settings.update", "workspace", ws),
+        &headers,
     )
     .await?;
     let settings = settings_of(&mut tx, ws).await?;
     tx.commit().await?;
     Ok(Json(SettingsResult {
         settings,
-        audit_event_id: Some(audit_event_id),
+        audit_event_id,
     }))
+}
+
+/// Validated editable profile fields. Codes are not among them: a workspace code prefixes
+/// every ticket number already issued and stays immutable (the body rejects unknown fields).
+struct Profile {
+    workspace_name: String,
+    company_name: String,
+    timezone: &'static str,
+    reporter_code: Option<String>,
+}
+
+impl Profile {
+    fn parse(b: &SettingsPatch) -> Result<Self, AppError> {
+        Ok(Self {
+            workspace_name: text(&b.workspace_name, 200, "workspaceName")?,
+            company_name: text(&b.company_name, 200, "companyName")?,
+            timezone: timezone(&b.timezone)?,
+            reporter_code: optional_text(b.reporter_code.as_deref(), 40, "reporterCode")?,
+        })
+    }
+}
+
+/// Rows the caller already locked `FOR UPDATE OF w, c`.
+struct ProfileTarget {
+    workspace: Uuid,
+    company: Uuid,
+    /// Current workspace version (the listed concurrency token).
+    version: i32,
+    /// Version the caller saw.
+    expected: i32,
+}
+
+/// Applies a profile change inside the caller's transaction: 409 on a stale version; when
+/// nothing changed, no version bump and no audit row (`None`); otherwise both rows bump
+/// their version and one audit row names the changed fields (not their values).
+async fn apply_profile(
+    tx: &mut PgConnection,
+    t: ProfileTarget,
+    p: &Profile,
+    actor: Uuid,
+    (action, entity, entity_id): (&str, &str, Uuid),
+    headers: &HeaderMap,
+) -> Result<Option<Uuid>, AppError> {
+    if t.version != t.expected {
+        return Err(AppError::VersionConflict);
+    }
+    let (old_ws_name, old_co_name, old_tz, old_reporter): (String, String, String, Option<String>) =
+        sqlx::query_as(
+            "SELECT w.name, c.name, w.timezone, c.reporter_code \
+             FROM workspaces w JOIN companies c ON c.id = w.company_id WHERE w.id = $1",
+        )
+        .bind(t.workspace)
+        .fetch_one(&mut *tx)
+        .await?;
+    let mut changed = Vec::new();
+    if old_ws_name != p.workspace_name {
+        changed.push("workspaceName");
+    }
+    if old_co_name != p.company_name {
+        changed.push("companyName");
+    }
+    if old_tz != p.timezone {
+        changed.push("timezone");
+    }
+    if old_reporter != p.reporter_code {
+        changed.push("reporterCode");
+    }
+    if changed.is_empty() {
+        return Ok(None);
+    }
+    sqlx::query(
+        "UPDATE workspaces SET name = $2, timezone = $3, version = version + 1, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(t.workspace)
+    .bind(&p.workspace_name)
+    .bind(p.timezone)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE companies SET name = $2, reporter_code = $3, version = version + 1, \
+         updated_at = now() WHERE id = $1",
+    )
+    .bind(t.company)
+    .bind(&p.company_name)
+    .bind(&p.reporter_code)
+    .execute(&mut *tx)
+    .await?;
+    let id = audit_entity(
+        tx,
+        t.workspace,
+        Some(actor),
+        action,
+        entity,
+        entity_id,
+        serde_json::json!({ "changed": changed, "version": t.version + 1 }),
+        &correlation(headers),
+    )
+    .await?;
+    Ok(Some(id))
 }
 
 // ---------- companies (UAT Superadmin only) ----------
@@ -440,6 +494,60 @@ pub async fn set_company_active(
     let item = settings_of(&mut tx, ws).await?;
     tx.commit().await?;
     Ok(Json(CompanyResult {
+        item,
+        audit_event_id,
+    }))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyUpdateResult {
+    item: WorkspaceSettings,
+    /// `None` when nothing changed (no version bump, no audit row).
+    audit_event_id: Option<Uuid>,
+}
+
+/// Edits an existing company's profile (company and workspace name, time zone, reporter
+/// code), active or not. The company/workspace code is immutable: it prefixes every ticket
+/// number already issued, so it is not part of the body. Tickets, history and keys are
+/// untouched; only the two profile rows change.
+pub async fn update_company(
+    State(state): State<AppState>,
+    s: Session,
+    headers: HeaderMap,
+    Path(raw): Path<String>,
+    payload: Result<Json<SettingsPatch>, JsonRejection>,
+) -> Result<Json<CompanyUpdateResult>, AppError> {
+    superadmin(&state, &s)?;
+    let company = parse_id(&raw)?;
+    let b = body(payload)?;
+    let profile = Profile::parse(&b)?;
+    let mut tx = state.pool.begin().await?;
+    let (ws, version): (Uuid, i32) = sqlx::query_as(
+        "SELECT w.id, w.version FROM companies c JOIN workspaces w ON w.company_id = c.id \
+         WHERE c.id = $1 FOR UPDATE OF w, c",
+    )
+    .bind(company)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let audit_event_id = apply_profile(
+        &mut tx,
+        ProfileTarget {
+            workspace: ws,
+            company,
+            version,
+            expected: b.version,
+        },
+        &profile,
+        s.user_id,
+        ("company.update", "company", company),
+        &headers,
+    )
+    .await?;
+    let item = settings_of(&mut tx, ws).await?;
+    tx.commit().await?;
+    Ok(Json(CompanyUpdateResult {
         item,
         audit_event_id,
     }))

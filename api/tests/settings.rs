@@ -825,6 +825,125 @@ async fn companies_are_superadmin_only_and_start_without_members(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn company_profile_edit_is_superadmin_versioned_and_keeps_tickets(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let db: String = ok(
+        sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&pool)
+            .await,
+        "db name",
+    );
+    ok(seed::seed_uat_tickets(&pool, &db).await, "seed tickets");
+    // A workspace admin grant is not platform administration.
+    grant(&pool, f.a, f.lead, "admin.settings", f.admin).await;
+    let tickets = |pool: PgPool, ws: Uuid| async move {
+        let rows: Vec<(Uuid, i64)> = ok(
+            sqlx::query_as("SELECT id, number FROM tickets WHERE workspace_id = $1 ORDER BY id")
+                .bind(ws)
+                .fetch_all(&pool)
+                .await,
+            "tickets",
+        );
+        rows
+    };
+    let before = tickets(pool.clone(), f.a).await;
+    assert!(!before.is_empty(), "seed has DUMA tickets");
+    let t = tok(&pool, f.admin).await;
+    let list = get(&pool, "/api/v1/companies", &t).await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.json);
+    let duma = list.json["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|c| c["workspaceCode"] == "DUMA"))
+        .cloned()
+        .unwrap_or_default();
+    let company = s(&duma["companyId"]);
+    let uri = format!("/api/v1/companies/{company}/profile");
+    let edit = |v: &Value| {
+        json!({"workspaceName": "Ruang Alfa Baru (dummy)", "companyName": "PT Alfa Baru (dummy)",
+               "timezone": duma["timezone"], "reporterCode": duma["reporterCode"], "version": v})
+    };
+
+    for (who, uid) in [
+        ("cs", f.cs),
+        ("lead admin.settings", f.lead),
+        ("bravo", f.bravo),
+    ] {
+        let other = tok(&pool, uid).await;
+        let r = write(&pool, "PATCH", &uri, &other, edit(&duma["version"])).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{who}: {}", r.json);
+    }
+    let mut with_code = edit(&duma["version"]);
+    with_code["code"] = json!("ZZZ");
+    let r = write(&pool, "PATCH", &uri, &t, with_code).await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "code is not editable: {}",
+        r.json
+    );
+    let r = write(&pool, "PATCH", &uri, &t, edit(&json!(999))).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    let unknown = format!("/api/v1/companies/{}/profile", Uuid::new_v4());
+    let r = write(&pool, "PATCH", &unknown, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.json);
+    assert_eq!(
+        audit_count(&pool, f.a, "company.update").await,
+        0,
+        "nothing written yet"
+    );
+
+    let r = write(&pool, "PATCH", &uri, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    audit_exists(&pool, &r.json["auditEventId"], "company.update", f.admin).await;
+    assert_eq!(r.json["item"]["workspaceName"], "Ruang Alfa Baru (dummy)");
+    assert_eq!(r.json["item"]["companyName"], "PT Alfa Baru (dummy)");
+    assert_eq!(r.json["item"]["workspaceCode"], "DUMA", "code unchanged");
+    assert_eq!(r.json["item"]["companyCode"], duma["companyCode"]);
+    let v2 = r.json["item"]["version"].clone();
+    assert_eq!(v2.as_i64(), duma["version"].as_i64().map(|v| v + 1));
+    let changed: Value = ok(
+        sqlx::query_scalar(
+            "SELECT safe_change->'changed' FROM audit_events WHERE action = 'company.update'",
+        )
+        .fetch_one(&pool)
+        .await,
+        "audit payload",
+    );
+    assert_eq!(changed, json!(["workspaceName", "companyName"]));
+
+    // The old version is now stale; an unchanged save writes nothing.
+    let r = write(&pool, "PATCH", &uri, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    let r = write(&pool, "PATCH", &uri, &t, edit(&v2)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["auditEventId"], Value::Null);
+    assert_eq!(r.json["item"]["version"], v2);
+    assert_eq!(audit_count(&pool, f.a, "company.update").await, 1);
+
+    // Reload: the switcher list and the members' own settings show the new name.
+    let ws = get(&pool, "/api/v1/workspaces", &t).await;
+    assert!(
+        ws.json.to_string().contains("Ruang Alfa Baru (dummy)"),
+        "{}",
+        ws.json
+    );
+    let cs = tok(&pool, f.cs).await;
+    let r = get(&pool, &ws_uri(f.a, "settings"), &cs).await;
+    assert_eq!(r.json["settings"]["companyName"], "PT Alfa Baru (dummy)");
+    assert_eq!(
+        tickets(pool.clone(), f.a).await,
+        before,
+        "ticket ids and numbers intact"
+    );
+    let r = get(&pool, &ws_uri(f.a, "tickets"), &cs).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert!(
+        r.json.to_string().contains("\"DUMA-"),
+        "display numbers keep the code"
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
 async fn connection_lifecycle_is_save_test_activate(pool: PgPool) {
     let f = fixture(&pool).await;
     grant(&pool, f.a, f.lead, "integration.manage", f.admin).await;

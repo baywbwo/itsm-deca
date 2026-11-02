@@ -4373,6 +4373,26 @@
         },
         "additionalProperties": false
       },
+      "CompanyUpdateResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/WorkspaceSettings"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "CatalogEntry": {
         "type": "object",
         "required": [
@@ -8362,6 +8382,63 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/companies/{company_id}/profile": {
+      "patch": {
+        "operationId": "updateCompany",
+        "summary": "Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyUpdateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
