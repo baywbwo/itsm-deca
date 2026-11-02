@@ -543,6 +543,7 @@ struct DimensionRow {
 struct AttentionRow {
     id: Uuid,
     number: i64,
+    number_prefix: String,
     subject: String,
     workflow_status: String,
     priority_id: Option<Uuid>,
@@ -682,7 +683,7 @@ fn attention_sql() -> String {
     format!(
         concat!(
             base!(),
-            "SELECT t.id, t.number, t.subject, t.workflow_status, \
+            "SELECT t.id, t.number, t.number_prefix, t.subject, t.workflow_status, \
                pr.id AS priority_id, pr.code AS priority_code, pr.label AS priority_label, \
                t.owner_user_id, u.display_name AS owner_name, \
                ic.id AS channel_id, ic.code AS channel_code, ic.label AS channel_label, \
@@ -978,7 +979,7 @@ pub async fn load(
                 Ok(AttentionTicket {
                     id: r.id,
                     number: r.number,
-                    display_number: format!("{workspace_code}-{}", r.number),
+                    display_number: format!("{}-{}", r.number_prefix, r.number),
                     subject: r.subject,
                     status: status.into(),
                     priority: named(r.priority_id, r.priority_code, r.priority_label),

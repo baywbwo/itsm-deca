@@ -29,6 +29,7 @@ macro_rules! utc {
 struct TicketRow {
     id: Uuid,
     number: i64,
+    number_prefix: String,
     subject: String,
     chronology: String,
     received_at: String,
@@ -84,7 +85,7 @@ pub struct TicketView {
 struct UnknownStatus;
 
 const TICKET_SELECT: &str = concat!(
-    "SELECT id, number, subject, chronology, ",
+    "SELECT id, number, number_prefix, subject, chronology, ",
     utc!("received_at"),
     " AS received_at, workflow_status, cycle_no, intake_channel_id, priority_id, \
      category_id, product_id, receiving_unit_id, region_id, merchant_id, owner_user_id, \
@@ -115,7 +116,7 @@ pub async fn get_one(
         id: row.id,
         workspace_id: ws.workspace_id,
         number: row.number,
-        display_number: format!("{}-{}", ws.workspace_code, row.number),
+        display_number: format!("{}-{}", row.number_prefix, row.number),
         subject: row.subject,
         chronology: row.chronology,
         received_at: row.received_at,

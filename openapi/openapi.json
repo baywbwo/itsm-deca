@@ -4178,6 +4178,7 @@
           "reporterCode",
           "brandKey",
           "brandName",
+          "previousCodes",
           "active",
           "version",
           "memberCount"
@@ -4221,6 +4222,13 @@
               "null"
             ],
             "description": "Display name override; null = the company name."
+          },
+          "previousCodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Codes this workspace used before, oldest first. Tickets issued under them keep their numbers (e.g. DUMA-5) and the codes stay reserved for this workspace."
           },
           "active": {
             "type": "boolean"
@@ -4298,6 +4306,7 @@
       "CompanyProfilePatchRequest": {
         "type": "object",
         "required": [
+          "code",
           "workspaceName",
           "companyName",
           "timezone",
@@ -4306,6 +4315,11 @@
           "version"
         ],
         "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{2,10}$",
+            "description": "Business code of the company and its workspace: prefix of NEW ticket numbers. Changing it never renumbers existing tickets. A code used (now or before) by another workspace is refused with 422 field code."
+          },
           "workspaceName": {
             "type": "string",
             "minLength": 1,
@@ -4342,7 +4356,7 @@
           }
         },
         "additionalProperties": false,
-        "description": "Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable."
+        "description": "Company administration (UAT Superadmin): profile, business code and branding. code is required; brandKey and brandName are required and may be null, so omitting them never clears the branding. Internal ids never change; the reporter code is separate from the workspace code."
       },
       "SettingsResult": {
         "type": "object",

@@ -38,6 +38,17 @@ pub async fn seed_uat(pool: &PgPool, confirm_db: &str) -> Result<(), SeedError> 
         ("DUMA", "PT Dummy Alfa (uji)"),
         ("DUMB", "PT Dummy Beta (uji)"),
     ] {
+        // A seeded workspace may have been renamed since (D17); its old code stays reserved
+        // for it, so find it through the code history instead of creating a duplicate.
+        let renamed: Option<Uuid> =
+            sqlx::query_scalar("SELECT workspace_id FROM workspace_code_history WHERE code = $1")
+                .bind(code)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some(ws) = renamed {
+            workspaces.push(ws);
+            continue;
+        }
         let company: Uuid = sqlx::query_scalar(
             "INSERT INTO companies (code, name) VALUES ($1, $2) \
              ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code RETURNING id",
@@ -451,10 +462,11 @@ pub async fn seed_uat_tickets(pool: &PgPool, confirm_db: &str) -> Result<u64, Se
             .await?;
     let mut created = 0;
     for (code, rows) in [("DUMA", ALFA_TICKETS), ("DUMB", BETA_TICKETS)] {
-        let ws: Uuid = sqlx::query_scalar("SELECT id FROM workspaces WHERE code = $1")
-            .bind(code)
-            .fetch_one(&mut *tx)
-            .await?;
+        let ws: Uuid =
+            sqlx::query_scalar("SELECT workspace_id FROM workspace_code_history WHERE code = $1")
+                .bind(code)
+                .fetch_one(&mut *tx)
+                .await?;
         let existing: i64 =
             sqlx::query_scalar("SELECT count(*) FROM tickets WHERE workspace_id = $1")
                 .bind(ws)

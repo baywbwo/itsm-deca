@@ -116,6 +116,9 @@ pub struct WorkspaceSettings {
     brand_key: Option<String>,
     /// Display name override; `None` = the company name.
     brand_name: Option<String>,
+    /// Codes this workspace used before, oldest first. Tickets issued under them keep their
+    /// numbers, and the codes stay reserved for this workspace.
+    previous_codes: Vec<String>,
     active: bool,
     /// Concurrency token for settings changes (workspace version).
     version: i32,
@@ -124,7 +127,11 @@ pub struct WorkspaceSettings {
 
 const SETTINGS_SQL: &str = "SELECT w.id AS workspace_id, w.code AS workspace_code, \
         w.name AS workspace_name, w.timezone, c.id AS company_id, c.code AS company_code, \
-        c.name AS company_name, c.reporter_code, c.brand_key, c.brand_name, (w.active AND c.active) AS active, w.version, \
+        c.name AS company_name, c.reporter_code, c.brand_key, c.brand_name, \
+        ARRAY(SELECT h.code FROM workspace_code_history h \
+              WHERE h.workspace_id = w.id AND h.code <> w.code ORDER BY h.first_used_at, h.code) \
+            AS previous_codes, \
+        (w.active AND c.active) AS active, w.version, \
         (SELECT count(*) FROM workspace_memberships m WHERE m.workspace_id = w.id AND m.active) \
             AS member_count \
      FROM workspaces w JOIN companies c ON c.id = w.company_id";
@@ -177,6 +184,8 @@ pub struct SettingsPatch {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CompanyProfilePatch {
+    /// Business code of the company and its workspace (prefix of NEW ticket numbers).
+    code: String,
     workspace_name: String,
     company_name: String,
     timezone: String,
@@ -237,13 +246,15 @@ pub async fn update_settings(
     }))
 }
 
-/// Validated editable profile fields. Codes are not among them: a workspace code prefixes
-/// every ticket number already issued and stays immutable (the body rejects unknown fields).
+/// Validated editable profile fields. Workspace settings cannot change the code (the body
+/// rejects unknown fields); only company administration can, see [`update_company`].
 struct Profile {
     workspace_name: String,
     company_name: String,
     timezone: &'static str,
     reporter_code: Option<String>,
+    /// New company/workspace code; None keeps it (workspace settings never send one).
+    code: Option<String>,
 }
 
 impl Profile {
@@ -267,6 +278,7 @@ impl Profile {
             company_name: text(company_name, 200, "companyName")?,
             timezone: timezone(tz)?,
             reporter_code: optional_text(reporter_code, 40, "reporterCode")?,
+            code: None,
         })
     }
 }
@@ -286,7 +298,8 @@ impl Brand {
     }
 }
 
-/// Current workspace name, company name, time zone, reporter code, brand key and brand name.
+/// Current workspace name, company name, time zone, reporter code, brand key, brand name and
+/// workspace code.
 type OldProfile = (
     String,
     String,
@@ -294,6 +307,7 @@ type OldProfile = (
     Option<String>,
     Option<String>,
     Option<String>,
+    String,
 );
 
 /// Rows the caller already locked `FOR UPDATE OF w, c`.
@@ -323,14 +337,19 @@ async fn apply_profile(
         return Err(AppError::VersionConflict);
     }
     let old: OldProfile = sqlx::query_as(
-        "SELECT w.name, c.name, w.timezone, c.reporter_code, c.brand_key, c.brand_name \
+        "SELECT w.name, c.name, w.timezone, c.reporter_code, c.brand_key, c.brand_name, w.code \
          FROM workspaces w JOIN companies c ON c.id = w.company_id WHERE w.id = $1",
     )
     .bind(t.workspace)
     .fetch_one(&mut *tx)
     .await?;
-    let (old_ws_name, old_co_name, old_tz, old_reporter, old_brand_key, old_brand_name) = old;
+    let (old_ws_name, old_co_name, old_tz, old_reporter, old_brand_key, old_brand_name, old_code) =
+        old;
+    let new_code = p.code.as_deref().filter(|c| *c != old_code);
     let mut changed = Vec::new();
+    if new_code.is_some() {
+        changed.push("code");
+    }
     if old_ws_name != p.workspace_name {
         changed.push("workspaceName");
     }
@@ -354,19 +373,32 @@ async fn apply_profile(
     if changed.is_empty() {
         return Ok(None);
     }
+    // A new code only relabels NEW ticket numbers: ids, keys and issued numbers stay as they
+    // are. The database reserves every code per workspace forever (migration 0014), so a code
+    // held now or earlier by another workspace answers unique_violation → 422 `code`.
+    let unique_code = |e: sqlx::Error| {
+        if is_unique_violation(&e) {
+            AppError::Validation("code")
+        } else {
+            e.into()
+        }
+    };
     sqlx::query(
-        "UPDATE workspaces SET name = $2, timezone = $3, version = version + 1, updated_at = now() \
-         WHERE id = $1",
+        "UPDATE workspaces SET name = $2, timezone = $3, code = COALESCE($4, code), \
+         version = version + 1, updated_at = now() WHERE id = $1",
     )
     .bind(t.workspace)
     .bind(&p.workspace_name)
     .bind(p.timezone)
+    .bind(new_code)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(unique_code)?;
     sqlx::query(
         "UPDATE companies SET name = $2, reporter_code = $3, \
          brand_key = CASE WHEN $4 THEN $5 ELSE brand_key END, \
          brand_name = CASE WHEN $4 THEN $6 ELSE brand_name END, \
+         code = COALESCE($7, code), \
          version = version + 1, updated_at = now() WHERE id = $1",
     )
     .bind(t.company)
@@ -375,8 +407,16 @@ async fn apply_profile(
     .bind(brand.is_some())
     .bind(brand.and_then(|b| b.key))
     .bind(brand.and_then(|b| b.name.as_deref()))
+    .bind(new_code)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(unique_code)?;
+    let mut change = serde_json::json!({ "changed": changed, "version": t.version + 1 });
+    if let Some(c) = new_code {
+        // Business codes are not secret; the trail shows which prefix applied from when.
+        change["previousCode"] = old_code.into();
+        change["code"] = c.into();
+    }
     let id = audit_entity(
         tx,
         t.workspace,
@@ -384,7 +424,7 @@ async fn apply_profile(
         action,
         entity,
         entity_id,
-        serde_json::json!({ "changed": changed, "version": t.version + 1 }),
+        change,
         &correlation(headers),
     )
     .await?;
@@ -596,10 +636,12 @@ pub struct CompanyUpdateResult {
     audit_event_id: Option<Uuid>,
 }
 
-/// Edits an existing company's profile (company and workspace name, time zone, reporter
-/// code), active or not. The company/workspace code is immutable: it prefixes every ticket
-/// number already issued, so it is not part of the body. Tickets, history and keys are
-/// untouched; only the two profile rows change.
+/// Edits an existing company's profile (code, company and workspace name, time zone, reporter
+/// code, branding), active or not. A new code changes the company and workspace code together
+/// and prefixes only tickets issued from now on: each ticket keeps the prefix it was issued
+/// with, the counter continues, and the old code stays reserved for this workspace. The BI
+/// reporter code is a separate field and never follows the code. Tickets, history and keys
+/// are untouched; only the two profile rows change.
 pub async fn update_company(
     State(state): State<AppState>,
     s: Session,
@@ -610,12 +652,13 @@ pub async fn update_company(
     superadmin(&state, &s)?;
     let company = parse_id(&raw)?;
     let b = body(payload)?;
-    let profile = Profile::from_parts(
+    let mut profile = Profile::from_parts(
         &b.workspace_name,
         &b.company_name,
         &b.timezone,
         b.reporter_code.as_deref(),
     )?;
+    profile.code = Some(company_code(&b.code)?);
     let brand = Brand::parse(&b)?;
     let mut tx = state.pool.begin().await?;
     let (ws, version): (Uuid, i32) = sqlx::query_as(

@@ -859,7 +859,8 @@ async fn company_profile_edit_is_superadmin_versioned_and_keeps_tickets(pool: Pg
     let company = s(&duma["companyId"]);
     let uri = format!("/api/v1/companies/{company}/profile");
     let edit = |v: &Value| {
-        json!({"workspaceName": "Ruang Alfa Baru (dummy)", "companyName": "PT Alfa Baru (dummy)",
+        json!({"code": duma["workspaceCode"],
+               "workspaceName": "Ruang Alfa Baru (dummy)", "companyName": "PT Alfa Baru (dummy)",
                "timezone": duma["timezone"], "reporterCode": duma["reporterCode"],
                "brandKey": duma["brandKey"], "brandName": duma["brandName"], "version": v})
     };
@@ -873,13 +874,17 @@ async fn company_profile_edit_is_superadmin_versioned_and_keeps_tickets(pool: Pg
         let r = write(&pool, "PATCH", &uri, &other, edit(&duma["version"])).await;
         assert_eq!(r.status, StatusCode::FORBIDDEN, "{who}: {}", r.json);
     }
-    let mut with_code = edit(&duma["version"]);
-    with_code["code"] = json!("ZZZ");
-    let r = write(&pool, "PATCH", &uri, &t, with_code).await;
+    // D17: the code is part of the body and required, so an older client that omits it
+    // cannot clear or change it by accident.
+    let mut without_code = edit(&duma["version"]);
+    if let Some(o) = without_code.as_object_mut() {
+        o.remove("code");
+    }
+    let r = write(&pool, "PATCH", &uri, &t, without_code).await;
     assert_eq!(
         r.status,
         StatusCode::BAD_REQUEST,
-        "code is not editable: {}",
+        "code is required: {}",
         r.json
     );
     let r = write(&pool, "PATCH", &uri, &t, edit(&json!(999))).await;
@@ -1166,7 +1171,8 @@ async fn company_branding_is_a_preset_scoped_per_company_and_versioned(pool: PgP
     );
     assert_eq!(duma["brandName"], Value::Null);
     let body = |c: &Value, key: Value, name: Value, v: &Value| {
-        json!({"workspaceName": c["workspaceName"], "companyName": c["companyName"],
+        json!({"code": c["workspaceCode"],
+               "workspaceName": c["workspaceName"], "companyName": c["companyName"],
                "timezone": c["timezone"], "reporterCode": c["reporterCode"],
                "brandKey": key, "brandName": name, "version": v})
     };

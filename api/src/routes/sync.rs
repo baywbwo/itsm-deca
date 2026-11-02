@@ -167,6 +167,7 @@ pub(crate) struct Intent {
     pub(crate) auto_attempts: i32,
     pub(crate) claim_token: Option<Uuid>,
     pub(crate) outcome: String,
+    /// Prefix the ticket was issued with, so a simulated key stays the same after a code change.
     pub(crate) ws_code: String,
     pub(crate) number: i64,
 }
@@ -180,10 +181,9 @@ pub(crate) async fn lock_intent(
         "SELECT o.ticket_id, o.connection_id, o.operation, o.related_work_id, o.state, o.attempt, \
                 o.auto_attempts, o.claim_token, \
                 CASE WHEN c.state <> 'active' THEN 'inactive' \
-                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, w.code AS ws_code, t.number \
+                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, t.number_prefix AS ws_code, t.number \
          FROM integration_outbox o \
          JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id \
-         JOIN workspaces w ON w.id = o.workspace_id \
          JOIN tickets t ON t.workspace_id = o.workspace_id AND t.id = o.ticket_id \
          WHERE o.workspace_id = $1 AND o.id = $2 FOR UPDATE OF o",
     )
