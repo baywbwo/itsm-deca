@@ -233,7 +233,7 @@ export function createApi(transport: Transport) {
   let csrfToken: string | null = null;
   let refreshing: Promise<string> | null = null;
 
-  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf']);
+  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);
 
   // Shared by concurrent callers; each caller still stops at its own abort or timeout.
   function refreshCsrf(signal?: AbortSignal): Promise<string> {
