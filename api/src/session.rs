@@ -161,7 +161,8 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
         user_id,
         // The grant is honoured only while the server runs in UAT Superadmin mode;
         // the session's access_mode was matched above.
-        uat_superadmin: grant,
+        uat_superadmin: grant
+            && state.config.access_mode == crate::config::AccessMode::UatSuperadmin,
         csrf_hash,
     }))
 }
@@ -196,6 +197,7 @@ pub async fn session_layer(
 ) -> Response {
     let unsafe_method = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     let is_uat_entry = req.uri().path() == UAT_ENTRY_PATH;
+    let is_login = req.uri().path() == "/api/v1/login";
     let is_csrf_refresh = req.uri().path() == CSRF_REFRESH_PATH;
 
     let session = match read_cookie(req.headers(), cookie_name(state.config.cookie_secure)) {
@@ -207,7 +209,15 @@ pub async fn session_layer(
     };
 
     if unsafe_method {
-        let allowed = if is_uat_entry {
+        let allowed = if is_login {
+            req.headers()
+                .get("x-itsm-login")
+                .is_some_and(|v| v.as_bytes() == b"1")
+                && req
+                    .headers()
+                    .get("sec-fetch-site")
+                    .is_none_or(|v| v.as_bytes() == b"same-origin")
+        } else if is_uat_entry {
             req.headers()
                 .get(UAT_ENTRY_HEADER)
                 .is_some_and(|v| v.as_bytes() == b"1")

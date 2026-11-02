@@ -8,6 +8,7 @@ pub mod health;
 pub mod intake;
 pub mod integrations;
 pub mod members;
+pub mod password;
 pub mod reports;
 pub mod saved_views;
 pub mod session;
@@ -27,6 +28,7 @@ use crate::AppState;
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
+    ("post", "/api/v1/login"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
@@ -189,6 +191,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        .route("/api/v1/login", post(password::login))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route("/api/v1/meta", get(session::meta))
         .route("/api/v1/uat/session", post(session::uat_enter))

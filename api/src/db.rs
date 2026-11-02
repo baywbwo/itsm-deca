@@ -52,5 +52,19 @@ pub async fn verify_runtime_guard(cfg: &Config, pool: &PgPool) -> Result<(), Gua
         }
         // Config already refuses SSO; keep this arm fail-closed if that ever changes.
         AccessMode::Sso => Err(GuardError::NotTestDatabase),
+        AccessMode::Password => {
+            let expected = if cfg.environment == crate::config::Environment::Production {
+                "operational"
+            } else {
+                "test_dummy"
+            };
+            let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM itsm_deployment_marker WHERE kind = $1 AND marked_db = current_database())")
+                .bind(expected).fetch_one(pool).await?;
+            if valid {
+                Ok(())
+            } else {
+                Err(GuardError::NotTestDatabase)
+            }
+        }
     }
 }

@@ -1027,6 +1027,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Local password login for one deployment */
+        post: operations["passwordLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1181,7 +1198,7 @@ export interface components {
             /** @enum {string} */
             environment: "uat" | "production";
             /** @enum {string} */
-            accessMode: "uat_superadmin" | "sso";
+            accessMode: "uat_superadmin" | "sso" | "password";
             /** @example Mode uji — Superadmin */
             banner: string | null;
             /** @description Present only in UAT Superadmin mode; null/absent otherwise. */
@@ -2493,6 +2510,10 @@ export interface components {
             suggestion: string;
             /** @constant */
             reviewRequired: true;
+        };
+        PasswordLogin: {
+            username: string;
+            password: string;
         };
     };
     responses: {
@@ -4939,6 +4960,37 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    passwordLogin: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-ITSM-Login": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordLogin"];
+            };
+        };
+        responses: {
+            /** @description Authenticated */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionIssued"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

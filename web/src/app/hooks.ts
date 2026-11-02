@@ -39,12 +39,13 @@ export function useBoot(api: Api) {
     (async () => {
       const meta = await api.getMeta(ctl.signal);
       // No local login exists: outside UAT the app waits for office SSO (not configured).
-      if (!meta.uat) return setBoot({ status: 'no_access', meta });
+      if (meta.accessMode !== 'password' && meta.accessMode !== 'uat_superadmin') return setBoot({ status: 'no_access', meta });
       let session: Session;
       try {
         session = await api.getSession(ctl.signal);
       } catch (e) {
         if (!(e instanceof ApiError && e.status === 401)) throw e;
+        if (meta.accessMode === 'password') return setBoot({ status: 'no_access', meta });
         session = await api.enterUat(ctl.signal);
       }
       const workspaces = await api.listWorkspaces(ctl.signal);

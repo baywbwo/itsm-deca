@@ -38,18 +38,36 @@ export function App({ api }: { api: Api }) {
     );
   }
   if (boot.status === 'no_access') {
-    // Production waits for office SSO; there is deliberately no local login form.
-    return (
-      <main className="main">
-        <img className="brand-logo" src={logoUrl} alt="Qash" />
-        <div className="state">
-          <h1>Masuk belum tersedia</h1>
-          <p className="muted">Akses lingkungan ini memakai SSO kantor yang belum dikonfigurasi. Hubungi administrator.</p>
-        </div>
-      </main>
-    );
+    return <PasswordLogin api={api} meta={boot.meta} onSuccess={retry} />;
   }
   return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry} />;
+}
+
+const MODE_LINKS = { sandbox: 'https://sandbox-itsm.scowork.my.id:8443/', operational: 'https://itsm.scowork.my.id:8443/' };
+function ModePicker({ sandbox }: { sandbox: boolean }) {
+  return <div className="deployment-picker"><label htmlFor="deployment-mode">Lingkungan</label>
+    <select id="deployment-mode" value={sandbox ? 'sandbox' : 'operational'} onChange={e => { window.location.href = MODE_LINKS[e.target.value as keyof typeof MODE_LINKS]; }}>
+      <option value="operational">Operasional · data kerja</option><option value="sandbox">Sandbox · data latihan</option>
+    </select><small>{sandbox ? 'Data latihan terpisah dari operasional.' : 'Database operasional terpisah dari sandbox.'}</small></div>;
+}
+function PasswordLogin({ api, meta, onSuccess }: { api: Api; meta: Meta; onSuccess: () => void }) {
+  const [username, U] = useState(''), [password, P] = useState(''), [busy, B] = useState(false), [error, E] = useState('');
+  async function login(e: React.FormEvent) {
+    e.preventDefault(); if (busy) return; B(true); E('');
+    try { await api.login(username, password); P(''); onSuccess(); }
+    catch { P(''); E('Tidak dapat masuk. Periksa akun dan password, atau coba kembali setelah beberapa saat.'); }
+    finally { B(false); }
+  }
+  return <main className="password-login"><section className="login-card"><img className="brand-logo" src={logoUrl} alt="Qash" />
+    <p className="eyebrow">DECA SERVICE DESK</p><h1>Masuk ke ruang kerja</h1><p className="muted">Kelola layanan dan pengaduan perusahaan Anda.</p>
+    <ModePicker sandbox={meta.environment === 'uat'} />
+    {meta.accessMode === 'password' ? <form onSubmit={e => void login(e)}>
+      <label htmlFor="login-username">Email / username</label><input id="login-username" className="field-control" autoComplete="username" required maxLength={254} value={username} onChange={e => U(e.target.value)} disabled={busy} />
+      <label htmlFor="login-password">Password</label><input id="login-password" className="field-control" type="password" autoComplete="current-password" required maxLength={1024} value={password} onChange={e => P(e.target.value)} disabled={busy} />
+      {error && <p role="alert" className="field-error">{error}</p>}<Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Masuk'}</Button>
+    </form> : <p>Akses SSO belum dikonfigurasi.</p>}
+    <p className="tiny muted">{meta.environment === 'uat' ? 'Sandbox — gunakan data latihan saja.' : 'Operasional — akses sesuai perusahaan dan peran.'}</p>
+  </section></main>;
 }
 
 /** Logo of the active company's preset, or a neutral text mark when none is configured. */
@@ -218,6 +236,8 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
       <div className="shell">
         <aside className="sidebar" aria-label="Sidebar">
           <BrandBlock brand={brand} />
+          <ModePicker sandbox={meta.environment === 'uat'} />
+          <Button variant="ghost" onClick={() => { if (drafts.anyDirty() && !window.confirm('Keluar akan membuang draf yang belum disimpan. Lanjutkan?')) return; void api.logout().then(() => { drafts.clear(); onReenter(); }); }}>Keluar</Button>
           <div className="workspace-label">Service workspace</div>
           {switcher}
           {nav()}
@@ -245,20 +265,21 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
           <div className="content">
           {meta.uat && (
             <div className="uat-banner" role="note" aria-label="Mode uji">
-              <span className="uat-dot" aria-hidden="true" /><strong>{meta.uat.banner}</strong><span>Data dummy · lingkungan UAT</span>
-              <details className="uat-details"><summary>Detail lingkungan</summary><p>Tanpa SSO atau koneksi produksi. Akses Superadmin bukan bukti izin CS/Lead CS.</p></details>
+              <span className="uat-dot" aria-hidden="true" /><strong>{meta.accessMode === 'password' ? 'Sandbox — data latihan' : meta.uat.banner}</strong><span>Data dummy · lingkungan UAT</span>
+              <details className="uat-details"><summary>Detail lingkungan</summary><p>Database latihan terpisah dari operasional. Gunakan data contoh, bukan informasi pelanggan asli.</p></details>
             </div>
           )}
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Service operations · lingkungan UAT</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Service operations · {meta.environment === 'uat' ? 'Sandbox' : 'Operasional'}</div>
           </div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
         <BrandBlock brand={brand} />
+        <ModePicker sandbox={meta.environment === 'uat'} />
         {switcher}
         {nav(() => setDrawer(false))}
         <Profile session={session} />
@@ -367,7 +388,7 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
     }
     if (e instanceof ApiError && e.status === 401) {
       return (
-        <ErrorState title="Sesi berakhir" body="Sesi uji tidak lagi aktif. Masuk lagi ke Mode uji untuk melanjutkan."
+        <ErrorState title="Sesi berakhir" body="Sesi Anda tidak lagi aktif. Masuk kembali untuk melanjutkan."
           requestId={e.requestId} onRetry={onReenter} />
       );
     }

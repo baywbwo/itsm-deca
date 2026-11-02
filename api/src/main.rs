@@ -39,7 +39,13 @@ async fn run(command: &str) -> Result<(), String> {
             .run(&pool)
             .await
             .map_err(|e| format!("migration failed: {e}")),
+        "init-password" => itsm_api::password_bootstrap::run(&pool, &config).await,
         "seed-uat" => {
+            if config.environment != itsm_api::config::Environment::Uat
+                || config.access_mode != itsm_api::config::AccessMode::UatSuperadmin
+            {
+                return Err("seed-uat only allowed in explicit UAT Superadmin mode".into());
+            }
             let confirm = std::env::var("ITSM_SEED_CONFIRM_DB")
                 .map_err(|_| "ITSM_SEED_CONFIRM_DB wajib diisi".to_owned())?;
             seed::seed_uat(&pool, &confirm)
