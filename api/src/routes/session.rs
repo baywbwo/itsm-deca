@@ -153,3 +153,20 @@ pub async fn logout(State(state): State<AppState>, s: Session) -> Result<Respons
     )
         .into_response())
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CsrfIssued {
+    csrf_token: String,
+}
+
+/// D11: a reloaded tab still has its session cookie but not the in-memory CSRF token.
+/// The session layer only lets this through with the refresh header from the same origin.
+pub async fn refresh_csrf(
+    State(state): State<AppState>,
+    s: Session,
+) -> Result<Json<CsrfIssued>, AppError> {
+    let csrf_token = session::rotate_csrf(&state.pool, s.id).await?;
+    tracing::info!(session_id = %s.id, "csrf token re-issued");
+    Ok(Json(CsrfIssued { csrf_token }))
+}

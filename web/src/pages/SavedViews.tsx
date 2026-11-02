@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, isAbort, type Api } from '../api/client';
 import type { SavedView } from '../api/types';
-import { paramsFromSavedView, sameSavedScope, savedViewQuery, type TicketParams } from '../app/routes';
+import {
+  COLUMN_LABELS, paramsFromSavedView, sameFilterScope, sameSavedScope, savedViewQuery, type TicketParams,
+} from '../app/routes';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Popover } from '../components/Popover';
@@ -29,7 +31,7 @@ function failure(e: unknown): string {
 /**
  * C32 saved view: the caller's own presets for this workspace (stored by the server per
  * user+workspace, never in browser storage). A view holds the view mode, filters and sort, not
- * the search text. Applying one only changes the URL; the List/Board API still decides what is
+ * the search text, plus which optional List columns are shown. Applying one only changes the URL; the List/Board API still decides what is
  * visible. Rename/delete act on own views only (the server answers 404 for anything else).
  */
 export function SavedViews({ api, workspaceId, params, onApply }: {
@@ -68,7 +70,10 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
   useEffect(() => { if (editing) editRef.current?.focus(); }, [editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const items = load.status === 'ready' ? load.items : [];
-  const current = items.find((v) => sameSavedScope(paramsFromSavedView(v), params)) ?? null;
+  // Several views can share one scope; the one last saved or applied here wins, else the first match.
+  const [picked, setPicked] = useState<string | null>(null);
+  const matches = items.filter((v) => sameSavedScope(paramsFromSavedView(v), params));
+  const current = matches.find((v) => v.id === picked) ?? matches[0] ?? null;
   const put = (v: SavedView) => setLoad({ status: 'ready', items: [...items.filter((x) => x.id !== v.id), v].sort(byName) });
   const refreshAfter = (e: unknown) => {
     if (e instanceof ApiError && (e.code === 'version_conflict' || e.code === 'not_found')) setAttempt((n) => n + 1);
@@ -81,8 +86,11 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
     if (items.length >= MAX_VIEWS) return setMessage({ tone: 'error', text: 'Batas 50 view tercapai. Hapus salah satu dulu.' });
     setBusy(true);
     try {
-      const v = await api.createSavedView(workspaceId, { name: n, view: params.view, query: savedViewQuery(params) });
+      const v = await api.createSavedView(workspaceId, {
+        name: n, view: params.view, query: savedViewQuery(params), columns: params.columns,
+      });
       put(v);
+      setPicked(v.id);
       setName('');
       setMessage({ tone: 'ok', text: `View "${v.name}" disimpan.` });
     } catch (e) {
@@ -103,6 +111,22 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
       setEditing(null);
       setFocusNext(`${row(next.id)} .saved-apply`);
       setMessage({ tone: 'ok', text: `Nama diubah menjadi "${next.name}".` });
+    } catch (e) {
+      setMessage({ tone: 'error', text: failure(e) });
+      refreshAfter(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveColumns(v: SavedView) {
+    setBusy(true);
+    try {
+      const next = await api.renameSavedView(workspaceId, v.id, { columns: params.columns, version: v.version });
+      put(next);
+      setPicked(next.id);
+      setFocusNext(`${row(next.id)} .saved-apply`);
+      setMessage({ tone: 'ok', text: `Kolom view "${next.name}" diperbarui: ${next.columns.map((c) => COLUMN_LABELS[c]).join(', ')}.` });
     } catch (e) {
       setMessage({ tone: 'error', text: failure(e) });
       refreshAfter(e);
@@ -136,8 +160,8 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
       </>}>
       {(close) => (
         <>
-          <p className="muted tiny">Hanya terlihat oleh Anda di workspace ini. Menyimpan tampilan, filter dan urutan;
-            teks pencarian tidak disimpan. Jangan isi nama dengan data pribadi.</p>
+          <p className="muted tiny">Hanya terlihat oleh Anda di workspace ini. Menyimpan tampilan, filter, urutan dan
+            kolom; teks pencarian tidak disimpan. Jangan isi nama dengan data pribadi.</p>
           <form className="saved-new" onSubmit={(e) => { e.preventDefault(); void save(); }}>
             <label className="period grow">
               Nama view baru
@@ -182,10 +206,14 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
                   ) : (
                     <>
                       <button type="button" className="saved-apply" aria-current={current?.id === v.id ? 'true' : undefined}
-                        onClick={() => { onApply(paramsFromSavedView(v)); close(); }}>
+                        onClick={() => { setPicked(v.id); onApply(paramsFromSavedView(v)); close(); }}>
                         <span className="saved-name">{v.name}</span>
                         <Badge>{v.view === 'board' ? 'Board' : 'List'}</Badge>
                       </button>
+                      {current?.id !== v.id && sameFilterScope(paramsFromSavedView(v), params) && (
+                        <Button variant="ghost" aria-label={`Simpan kolom saat ini ke ${v.name}`} disabled={busy}
+                          onClick={() => void saveColumns(v)}>Simpan kolom</Button>
+                      )}
                       <Button variant="ghost" aria-label={`Ubah nama ${v.name}`}
                         onClick={() => { setConfirming(null); setEditing({ id: v.id, name: v.name }); }}>Ubah nama</Button>
                       <Button variant="ghost" aria-label={`Hapus ${v.name}`}

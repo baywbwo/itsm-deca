@@ -22,6 +22,11 @@ pub const SESSION_TTL_HOURS: i32 = 8;
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const UAT_ENTRY_HEADER: &str = "x-itsm-uat-entry";
 pub const UAT_ENTRY_PATH: &str = "/api/v1/uat/session";
+/// D11: re-issues the CSRF token of the current session (a reloaded tab keeps the cookie but
+/// lost the in-memory token). Guarded like the UAT entry: a custom header forces a CORS
+/// preflight, which no cross-site caller passes (no CORS is configured).
+pub const CSRF_REFRESH_PATH: &str = "/api/v1/session/csrf";
+pub const CSRF_REFRESH_HEADER: &str = "x-itsm-csrf-refresh";
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -112,6 +117,24 @@ pub async fn issue(
     Ok(IssuedSession { token, csrf_token })
 }
 
+/// Rotates the CSRF token of a live session and returns the new token (only its digest is kept).
+/// Any older token for this session stops working.
+pub async fn rotate_csrf(pool: &PgPool, session_id: Uuid) -> Result<String, AppError> {
+    let csrf_token = random_token().map_err(AppError::internal)?;
+    let updated = sqlx::query(
+        "UPDATE sessions SET csrf_hash = $1 \
+         WHERE id = $2 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(digest(&csrf_token))
+    .bind(session_id)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AppError::Unauthenticated);
+    }
+    Ok(csrf_token)
+}
+
 pub async fn revoke(pool: &PgPool, session_id: Uuid) -> Result<(), AppError> {
     sqlx::query("UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
         .bind(session_id)
@@ -151,6 +174,18 @@ fn csrf_matches(session: &Session, headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// The refresh needs the custom header and, when the browser sends fetch metadata, a
+/// same-origin request.
+fn csrf_refresh_allowed(headers: &HeaderMap) -> bool {
+    let header_ok = headers
+        .get(CSRF_REFRESH_HEADER)
+        .is_some_and(|v| v.as_bytes() == b"1");
+    let site_ok = headers
+        .get("sec-fetch-site")
+        .is_none_or(|v| v.as_bytes() == b"same-origin");
+    header_ok && site_ok
+}
+
 /// Resolves the session for every `/api/v1` request and enforces CSRF on unsafe
 /// methods (deny by default). The UAT entry endpoint instead requires a custom
 /// header, which forces a CORS preflight for cross-site callers.
@@ -161,6 +196,7 @@ pub async fn session_layer(
 ) -> Response {
     let unsafe_method = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     let is_uat_entry = req.uri().path() == UAT_ENTRY_PATH;
+    let is_csrf_refresh = req.uri().path() == CSRF_REFRESH_PATH;
 
     let session = match read_cookie(req.headers(), cookie_name(state.config.cookie_secure)) {
         Some(token) => match lookup(&state, token).await {
@@ -175,6 +211,8 @@ pub async fn session_layer(
             req.headers()
                 .get(UAT_ENTRY_HEADER)
                 .is_some_and(|v| v.as_bytes() == b"1")
+        } else if is_csrf_refresh {
+            session.is_some() && csrf_refresh_allowed(req.headers())
         } else {
             session
                 .as_ref()

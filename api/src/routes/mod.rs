@@ -1,11 +1,18 @@
 pub mod access;
+pub mod attachments;
 pub mod catalogs;
 pub mod dashboard;
+pub mod followup;
 pub mod health;
 pub mod intake;
+pub mod integrations;
+pub mod members;
+pub mod reports;
 pub mod saved_views;
 pub mod session;
+pub mod settings;
 pub mod sync;
+pub mod ticket_detail;
 pub mod ticket_list;
 pub mod tickets;
 pub mod workspaces;
@@ -22,6 +29,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
+    ("post", "/api/v1/session/csrf"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -62,6 +70,26 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
     ),
     (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion",
+    ),
+    (
         "post",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions",
     ),
@@ -81,9 +109,78 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "get",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}",
     ),
+    ("get", "/api/v1/workspaces/{workspace_id}/reports/preview"),
+    ("get", "/api/v1/workspaces/{workspace_id}/report-runs"),
+    ("post", "/api/v1/workspaces/{workspace_id}/report-runs"),
     (
         "get",
         "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
+    ),
+    ("patch", "/api/v1/workspaces/{workspace_id}/settings"),
+    ("get", "/api/v1/workspaces/{workspace_id}/settings"),
+    ("get", "/api/v1/companies"),
+    ("post", "/api/v1/companies"),
+    ("patch", "/api/v1/companies/{company_id}"),
+    ("get", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
+    ("post", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}",
+    ),
+    ("post", "/api/v1/workspaces/{workspace_id}/members"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/integrations"),
+    ("post", "/api/v1/workspaces/{workspace_id}/integrations"),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
     ),
 ];
 
@@ -95,6 +192,7 @@ pub fn api_router() -> Router<AppState> {
             "/api/v1/session",
             get(session::current).merge(delete(session::logout)),
         )
+        .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))
@@ -104,7 +202,7 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/members",
-            get(workspaces::members),
+            get(members::list).merge(post(members::add)),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/catalogs",
@@ -140,7 +238,23 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}",
-            get(tickets::get_one),
+            get(tickets::get_one).merge(patch(ticket_detail::update_properties)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail",
+            get(ticket_detail::detail),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity",
+            get(ticket_detail::activity),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work",
+            post(ticket_detail::create_related_work),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion",
+            post(ticket_detail::complete_related_work),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/transitions",
@@ -180,6 +294,88 @@ pub fn api_router() -> Router<AppState> {
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}",
-            get(tickets::report_run),
+            get(reports::get_run),
         )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/reports/preview",
+            get(reports::preview),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/report-runs",
+            get(reports::list_runs).post(reports::create_run),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content",
+            get(reports::download),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes",
+            get(followup::list_notes).post(followup::create_note),
+        )
+        .route("/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations", get(followup::conversations))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content",
+            get(attachments::download),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/settings",
+            get(settings::get_settings).merge(patch(settings::update_settings)),
+        )
+        .route(
+            "/api/v1/companies",
+            get(settings::list_companies).merge(post(settings::create_company)),
+        )
+        .route(
+            "/api/v1/companies/{company_id}",
+            patch(settings::set_company_active),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/catalogs/{kind}",
+            get(settings::list_catalog).merge(post(settings::create_catalog_entry)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}",
+            patch(settings::update_catalog_entry),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}",
+            patch(members::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants",
+            post(members::grant),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke",
+            post(members::revoke),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations",
+            get(integrations::list).merge(post(integrations::create)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}",
+            patch(integrations::update),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test",
+            post(integrations::test),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate",
+            post(integrations::activate),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
+            post(integrations::disable),
+        )
+}
+
+/// The upload route streams large bodies, so it is mounted outside the global 64 KiB body
+/// limit and 10 s timeout (it enforces its own size cap and gets a longer timeout).
+pub fn upload_router() -> Router<AppState> {
+    Router::new().route(
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments",
+        post(attachments::upload),
+    )
 }

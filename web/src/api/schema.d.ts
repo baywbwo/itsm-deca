@@ -208,6 +208,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/csrf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description D11. Re-issues the CSRF synchronizer token of the current session (a reloaded tab keeps the HttpOnly cookie but lost the in-memory token). Requires the session cookie and header `X-ITSM-CSRF-Refresh: 1`; when the browser sends `Sec-Fetch-Site` it must be `same-origin`. Rotates the token: the previous token of this session stops working. Sets no cookie. */
+        post: operations["refreshCsrf"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces": {
         parameters: {
             query?: never;
@@ -249,7 +266,8 @@ export interface paths {
         };
         get: operations["listWorkspaceMembers"];
         put?: never;
-        post?: never;
+        /** Add member by exact account subject (admin.members) */
+        post: operations["addWorkspaceMember"];
         delete?: never;
         options?: never;
         head?: never;
@@ -351,7 +369,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Edit ticket properties (D08)
+         * @description ticket.update. Closed archive = 422 before the version check; stale `version` = 409 and nothing changes. A field error answers 422 validation_failed with the field name. Update, version bump and audit (field names only, never values) commit atomically.
+         */
+        patch: operations["updateTicketProperties"];
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}": {
@@ -377,6 +399,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
+        /**
+         * Report run metadata
+         * @description report.view, this workspace only.
+         */
         get: operations["getReportRun"];
         put?: never;
         post?: never;
@@ -505,6 +531,459 @@ export interface paths {
         put?: never;
         /** Settle an UNKNOWN delivery with evidence (integration.recovery) */
         post: operations["reconcileOutbox"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket detail (D08)
+         * @description ticket.read. One read-only snapshot: header (list projection with allowed actions), labelled properties, related work, bound attachment metadata (attachment.read) and resolution history. Another workspace's ticket = 404.
+         */
+        get: operations["getTicketDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ticket activity log (D08)
+         * @description ticket.read. Successful audit entries of this ticket, newest first, keyset-paginated. Labels are server-built from safe audit fields only.
+         */
+        get: operations["listTicketActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add related work (D08)
+         * @description related_work.manage. Requires Idempotency-Key (scoped to user + workspace): same key + same payload replays (200, replayed=true, nothing written); same key + different payload = 409. Refused (422) on a closed or resolved ticket. Row and audit commit atomically.
+         */
+        post: operations["createRelatedWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete related work locally (D08)
+         * @description related_work.manage. Needs summary and evidence from a person; Jira status never completes work. Stale related-work `version` = 409; already completed or closed ticket = 422.
+         */
+        post: operations["completeRelatedWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operational follow-up notes (D08b)
+         * @description ticket.read. Newest first; cursor `createdAt~id`.
+         */
+        get: operations["listTicketNotes"];
+        put?: never;
+        /**
+         * Add an operational note (D08b)
+         * @description ticket.update. A handling record, not team chat. Idempotent per user + workspace + Idempotency-Key (replay 200, different payload 409). Allowed on resolved, refused on closed (422). Audit stores the note id only.
+         */
+        post: operations["createTicketNote"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Customer conversation panel, read only (D08b)
+         * @description ticket.read. No adapter in this build (adapterConfigured=false); only labelled simulation rows can exist. No send operation.
+         */
+        get: operations["getTicketConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload an attachment: quarantine → scan → bind (D08b)
+         * @description attachment.upload. Raw file body (any Content-Type; the server sniffs PDF/PNG/JPEG). File name in X-File-Name, percent-encoded UTF-8. Bound to the ticket only after an explicit clean clamd verdict; infected/scan error/scanner unavailable are recorded, audited as failed, the bytes deleted, and nothing is bound. Closed ticket = 422.
+         */
+        post: operations["uploadTicketAttachment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a bound clean attachment (D08b)
+         * @description ticket.read + attachment.read, checked at request time. Only clean, bound files of this ticket; hash verified before sending. Content-Disposition attachment, CSP sandbox. Audited.
+         */
+        get: operations["downloadTicketAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Workspace & company settings (C24) */
+        get: operations["getWorkspaceSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update settings (admin.settings grant) */
+        patch: operations["updateWorkspaceSettings"];
+        trace?: never;
+    };
+    "/api/v1/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** All companies (UAT superadmin only) */
+        get: operations["listCompanies"];
+        put?: never;
+        /** Create company + workspace (UAT superadmin only; no memberships) */
+        post: operations["createCompany"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/companies/{company_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Activate/deactivate a company (UAT superadmin only) */
+        patch: operations["setCompanyActive"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Catalog editor entries incl. inactive */
+        get: operations["listCatalogEntries"];
+        put?: never;
+        /** Add catalog entry (admin.settings; priorities fixed → 422) */
+        post: operations["createCatalogEntry"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit/deactivate catalog entry (no hard delete) */
+        patch: operations["updateCatalogEntry"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change role/active (admin.members; not self; deactivation revokes grants) */
+        patch: operations["updateWorkspaceMember"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Grant a code the caller holds (admin.members; not self) */
+        post: operations["addMemberGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke a live grant (admin.members; not self) */
+        post: operations["revokeMemberGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Simulated connections (integration.manage) */
+        get: operations["listIntegrations"];
+        put?: never;
+        /** Save a simulated connection as draft */
+        post: operations["createIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save connection name */
+        patch: operations["updateIntegration"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Simulated test (no provider contacted) */
+        post: operations["testIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Activate a tested connection */
+        post: operations["activateIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a connection */
+        post: operations["disableIntegration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/reports/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Operational report preview over the whole scope (D10)
+         * @description report.view (CS, Lead CS). Same SQL source as the export. Filter values must belong to this workspace (422 + field).
+         */
+        get: operations["previewReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/report-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest report runs of this workspace (D10)
+         * @description report.view. Newest first, at most `limit`.
+         */
+        get: operations["listReportRuns"];
+        put?: never;
+        /**
+         * Export the operational report as CSV (D10)
+         * @description report.view (decision Arka D11, 2 Nov 2026: the scoped OPERATIONAL export keeps report.view from the D01 catalog; no new permission without a contract need; not BI or platform access; the export rows are exactly the preview rows of the same filter in this workspace, never wider). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).
+         */
+        post: operations["createReportRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the CSV of a succeeded run (D10)
+         * @description Membership + report.view re-checked on every request; workspace-scoped; hash verified before sending; expired = 410. UTF-8 with BOM, CRLF, every cell quoted, formula-leading cells prefixed with '. Audited (report.download). Headers: Content-Disposition attachment, X-Content-SHA256, Cache-Control no-store, CSP sandbox.
+         */
+        get: operations["downloadReportRun"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -653,10 +1132,12 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
+                /** @description rate_limited only: seconds until the next request is accepted (same value as the Retry-After header). */
+                retryAfterSeconds?: number;
             };
         };
         Meta: {
@@ -697,11 +1178,17 @@ export interface components {
         };
         Member: {
             /** Format: uuid */
+            membershipId: string;
+            /** Format: uuid */
             userId: string;
             displayName: string;
             /** @enum {string} */
             role: "cs" | "lead_cs";
             active: boolean;
+            /** Format: int32 */
+            version: number;
+            /** @description Live grants; empty unless the caller holds admin.members. */
+            grants: components["schemas"]["GrantCode"][];
         };
         /** @description Internal code + UI label. `closed` is a read-only historical archive state: never selectable, never mapped to resolved. Close final is not available. */
         TicketStatus: {
@@ -790,14 +1277,17 @@ export interface components {
             fileName: string;
             inspectedMime: string | null;
             sizeBytes: number;
-            /** @enum {string} */
+            /**
+             * @description pending | clean | infected | scan_error | scanner_unavailable | rejected
+             * @enum {string}
+             */
             scanStatus: "pending" | "clean" | "infected" | "scanner_unavailable" | "rejected";
             /** @enum {string} */
             visibility: "public" | "internal";
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description Operational report run metadata. Official BI export is held. The artifact reference is not exposed. */
+        /** @description Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed. */
         ReportRun: {
             /** Format: uuid */
             id: string;
@@ -811,9 +1301,25 @@ export interface components {
             state: "queued" | "running" | "succeeded" | "failed";
             /** Format: date-time */
             generatedAt: string | null;
+            /** @description The run produced an artifact (D02 meaning). Use downloadable for the download link. */
             hasArtifact: boolean;
             /** Format: date-time */
             createdAt: string;
+            basis: components["schemas"]["ReportBasis"];
+            filters: components["schemas"]["ReportRunFilters"];
+            /** @description True while the stored CSV can be downloaded (D10 artifact, not expired). */
+            downloadable: boolean;
+            requestedBy: components["schemas"]["PersonRef"];
+            rowCount: number | null;
+            /** @description SHA-256 of the exact bytes served by the download. */
+            artifactSha256: string | null;
+            artifactBytes: number | null;
+            /** Format: date-time */
+            expiresAt: string | null;
+            expired: boolean;
+            /** @enum {string|null} */
+            failureCode: "row_limit" | "internal" | null;
+            fileName: string | null;
         };
         UatNotice: {
             /** @example Mode uji — Superadmin */
@@ -1127,6 +1633,8 @@ export interface components {
             /** @enum {string} */
             view: "list" | "board";
             query: components["schemas"]["SavedViewQuery"];
+            /** @description Shown optional columns in canonical order; all six when the view stores none. */
+            columns: components["schemas"]["SavedViewColumn"][];
             version: number;
             /** Format: date-time */
             createdAt: string;
@@ -1142,9 +1650,14 @@ export interface components {
             /** @enum {string} */
             view: "list" | "board";
             query?: components["schemas"]["SavedViewQuery"];
+            /** @description Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400. */
+            columns?: components["schemas"]["SavedViewColumn"][];
         };
+        /** @description Rename and/or change the shown columns; at least one of name/columns (400 otherwise). */
         SavedViewRenameRequest: {
-            name: string;
+            name?: string;
+            /** @description Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400. */
+            columns?: components["schemas"]["SavedViewColumn"][];
             /** @description The version the client saw; stale = 409. */
             version: number;
         };
@@ -1209,7 +1722,7 @@ export interface components {
             /** @enum {string} */
             operation: "jira_create_issue" | "jira_link_issue" | "lark_ticket_created";
             /**
-             * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry).
+             * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry). A pending row with nextAttemptAt had a transient failure (not delivered) and is retried automatically with backoff.
              * @enum {string}
              */
             state: "pending" | "success" | "failed" | "unknown";
@@ -1222,6 +1735,15 @@ export interface components {
             updatedAt: string;
             /** @enum {string} */
             mode: "simulation";
+            /**
+             * Format: date-time
+             * @description Transient failure: when the worker tries again automatically.
+             */
+            nextAttemptAt?: string | null;
+            /** @description Automatic attempts since the last manual retry (max 5, then failed). */
+            autoAttempts: number;
+            /** @description An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown. */
+            inFlight: boolean;
         };
         TicketCreateResult: {
             ticket: components["schemas"]["TicketListItem"];
@@ -1251,7 +1773,7 @@ export interface components {
             /** @enum {string} */
             state: "draft" | "tested" | "active" | "disabled";
             /** @enum {string} */
-            simulatedOutcome: "success" | "failed" | "unknown";
+            simulatedOutcome: "success" | "failed" | "unknown" | "transient";
             version: number;
             /** @description Jira: dummy assignees. Lark: dummy destinations. Empty when disabled. */
             options: components["schemas"]["DirectoryEntry"][];
@@ -1314,7 +1836,7 @@ export interface components {
         };
         SimulationRequest: {
             /** @enum {string} */
-            outcome: "success" | "failed" | "unknown";
+            outcome: "success" | "failed" | "unknown" | "transient";
             version: number;
         };
         SimulationResult: {
@@ -1324,6 +1846,567 @@ export interface components {
             version: number;
             /** Format: uuid */
             auditEventId: string;
+        };
+        Labeled: {
+            /** Format: uuid */
+            id: string;
+            label: string;
+        };
+        TicketProperties: {
+            subject: string;
+            chronology: string;
+            /** Format: date-time */
+            receivedAt: string;
+            intakeChannel: components["schemas"]["Labeled"] | null;
+            priority: components["schemas"]["Labeled"] | null;
+            category: components["schemas"]["Labeled"] | null;
+            product: components["schemas"]["Labeled"] | null;
+            receivingUnit: components["schemas"]["Labeled"] | null;
+            region: components["schemas"]["Labeled"] | null;
+            /** @description Dummy CIF directory; not editable in D08a. */
+            merchant: components["schemas"]["Labeled"] | null;
+            transactionActivity: string | null;
+            cause: string | null;
+            foreignBranchReference: string | null;
+        };
+        /** @description Simulated provider link; status is informational and never completes work. */
+        JiraLink: {
+            issueKey: string;
+            externalStatus: string | null;
+            safeUrl: string | null;
+        };
+        RelatedWork: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            safeDescription: string | null;
+            blocking: boolean;
+            /**
+             * @description Local completion; independent of Jira status.
+             * @enum {string}
+             */
+            completionState: "open" | "completed";
+            completionSummary: string | null;
+            completionEvidence: string | null;
+            requestedBy: components["schemas"]["Labeled"] | null;
+            completedBy: components["schemas"]["Labeled"] | null;
+            /** Format: date-time */
+            completedAt: string | null;
+            jira: components["schemas"]["JiraLink"] | null;
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description Metadata of an attachment bound to the ticket (bound implies a clean scan). No object key, no URL. */
+        AttachmentMeta: {
+            /** Format: uuid */
+            id: string;
+            fileName: string;
+            inspectedMime: string | null;
+            sizeBytes: number;
+            scanStatus: string;
+            /** @enum {string} */
+            visibility: "public" | "internal";
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ResolutionEvent: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            action: "resolve" | "reopen";
+            cycleNo: number;
+            summary: string;
+            actor: components["schemas"]["Labeled"] | null;
+            /** Format: date-time */
+            at: string;
+        };
+        DetailCapabilities: {
+            /** @description Closed archive; every write is refused (422). */
+            readOnly: boolean;
+            editProperties: boolean;
+            manageRelatedWork: boolean;
+            /** @description ticket.update and not closed. */
+            addNote: boolean;
+            /** @description attachment.upload and not closed. */
+            uploadAttachment: boolean;
+        };
+        TicketDetail: {
+            ticket: components["schemas"]["TicketListItem"];
+            properties: components["schemas"]["TicketProperties"];
+            can: components["schemas"]["DetailCapabilities"];
+            relatedWork: components["schemas"]["RelatedWork"][];
+            /** @description Empty without attachment.read. */
+            attachments: components["schemas"]["AttachmentMeta"][];
+            resolutions: components["schemas"]["ResolutionEvent"][];
+        };
+        TicketDetailMutation: {
+            detail: components["schemas"]["TicketDetail"];
+            /**
+             * Format: uuid
+             * @description null when nothing changed.
+             */
+            auditEventId: string | null;
+        };
+        /** @description Only the fields present change; `null` clears a nullable field. A new catalog value must be active in this workspace (422 validation_failed otherwise). */
+        TicketPropertiesRequest: {
+            /** @description Ticket version the client saw; stale = 409. */
+            version: number;
+            subject?: string;
+            chronology?: string;
+            /** Format: uuid */
+            priorityId?: string | null;
+            /** Format: uuid */
+            categoryId?: string | null;
+            /** Format: uuid */
+            productId?: string | null;
+            /** Format: uuid */
+            receivingUnitId?: string | null;
+            /** Format: uuid */
+            regionId?: string | null;
+            transactionActivity?: string | null;
+            cause?: string | null;
+            foreignBranchReference?: string | null;
+        };
+        ActivityItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            at: string;
+            action: string;
+            /** @description Server-built sentence from safe audit fields; never free text. */
+            label: string;
+            actor: components["schemas"]["Labeled"] | null;
+        };
+        ActivityPage: {
+            items: components["schemas"]["ActivityItem"][];
+            nextCursor: string | null;
+        };
+        RelatedWorkCreateRequest: {
+            title: string;
+            safeDescription?: string | null;
+            blocking: boolean;
+        };
+        RelatedWorkCompletionRequest: {
+            version: number;
+            summary: string;
+            evidence: string;
+        };
+        RelatedWorkCreated: {
+            detail: components["schemas"]["TicketDetail"];
+            /** Format: uuid */
+            relatedWorkId: string;
+            /** @description true = same Idempotency-Key and payload already accepted; nothing new written. */
+            replayed: boolean;
+            /**
+             * Format: uuid
+             * @description null on replay.
+             */
+            auditEventId: string | null;
+        };
+        Note: {
+            /** Format: uuid */
+            id: string;
+            body: string;
+            author: components["schemas"]["PersonRef"];
+            /** Format: date-time */
+            createdAt: string;
+        };
+        NotePage: {
+            items: components["schemas"]["Note"][];
+            nextCursor: string | null;
+        };
+        NoteCreateRequest: {
+            /** @description Trimmed; 1..5000 characters. */
+            body: string;
+        };
+        NoteCreated: {
+            note: components["schemas"]["Note"];
+            replayed: boolean;
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        ConversationMessage: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            direction: "inbound" | "outbound";
+            body: string;
+            /** @enum {string} */
+            deliveryState: "received" | "queued" | "sent" | "delivered" | "failed" | "unknown";
+            /** Format: date-time */
+            occurredAt: string;
+        };
+        Conversation: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            source: "simulation";
+            channelLabel: string;
+            externalThreadId: string;
+            messages: components["schemas"]["ConversationMessage"][];
+        };
+        ConversationPanel: {
+            /** @description No omnichannel adapter exists in this build: always false, nothing can be sent. */
+            adapterConfigured: boolean;
+            conversations: components["schemas"]["Conversation"][];
+            truncated: boolean;
+        };
+        AttachmentUploaded: {
+            /** Format: uuid */
+            attachmentId: string;
+            detail: components["schemas"]["TicketDetail"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        /**
+         * @description Optional List column. Number and title are always shown.
+         * @enum {string}
+         */
+        SavedViewColumn: "status" | "priority" | "owner" | "channel" | "received" | "updated";
+        /** @enum {string} */
+        Timezone: "Asia/Jakarta" | "Asia/Makassar" | "Asia/Jayapura";
+        /** @enum {string} */
+        ProviderCode: "jira" | "lark";
+        /** @enum {string} */
+        CatalogKind: "priorities" | "categories" | "products" | "receiving-units" | "regions" | "intake-channels";
+        WorkspaceSettings: {
+            /** Format: uuid */
+            workspaceId: string;
+            workspaceCode: string;
+            workspaceName: string;
+            timezone: string;
+            /** Format: uuid */
+            companyId: string;
+            companyCode: string;
+            companyName: string;
+            reporterCode: string | null;
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+            /** Format: int64 */
+            memberCount: number;
+        };
+        SettingsBody: {
+            settings: components["schemas"]["WorkspaceSettings"];
+            canEdit: boolean;
+            timezones: components["schemas"]["Timezone"][];
+        };
+        SettingsPatchRequest: {
+            workspaceName: string;
+            companyName: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        SettingsResult: {
+            settings: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        CompanyList: {
+            items: components["schemas"]["WorkspaceSettings"][];
+        };
+        CompanyCreateRequest: {
+            code: string;
+            name: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+        };
+        CompanyActivationRequest: {
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+        };
+        CompanyResult: {
+            item: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        CatalogEntry: {
+            /** Format: uuid */
+            id: string;
+            code: string;
+            label: string;
+            active: boolean;
+            /** Format: int32 */
+            sortOrder: number;
+            /** Format: int32 */
+            version: number;
+        };
+        CatalogEditor: {
+            kind: components["schemas"]["CatalogKind"];
+            items: components["schemas"]["CatalogEntry"][];
+            canEdit: boolean;
+        };
+        CatalogCreateRequest: {
+            code: string;
+            label: string;
+            sortOrder: number;
+        };
+        CatalogPatchRequest: {
+            label: string;
+            active: boolean;
+            sortOrder: number;
+            /** Format: int32 */
+            version: number;
+        };
+        CatalogEntryResult: {
+            kind: components["schemas"]["CatalogKind"];
+            item: components["schemas"]["CatalogEntry"];
+            /** Format: uuid */
+            auditEventId: string | null;
+        };
+        MemberList: {
+            items: components["schemas"]["Member"][];
+            /** Format: uuid */
+            myMembershipId: string | null;
+            canManage: boolean;
+            grantable: components["schemas"]["GrantCode"][];
+        };
+        MemberCreateRequest: {
+            /** @description Exact account subject; unknown → 422 (no enumeration). */
+            subject: string;
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+        };
+        MemberPatchRequest: {
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+            active: boolean;
+            /** Format: int32 */
+            version: number;
+        };
+        GrantChangeRequest: {
+            grantCode: components["schemas"]["GrantCode"];
+            /** Format: int32 */
+            version: number;
+        };
+        MemberResult: {
+            item: components["schemas"]["Member"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        IntegrationLogEntry: {
+            action: string;
+            outcome: string;
+            /** Format: date-time */
+            occurredAt: string;
+            actor: string | null;
+        };
+        IntegrationConnection: {
+            /** Format: uuid */
+            id: string;
+            provider: components["schemas"]["ProviderCode"];
+            displayName: string;
+            /** @enum {string} */
+            mode: "simulation";
+            /** @enum {string} */
+            state: "draft" | "tested" | "active" | "disabled";
+            /** Format: date-time */
+            testedAt: string | null;
+            lastTestNote: string | null;
+            simulatedOutcome: string;
+            /** Format: int32 */
+            version: number;
+            /** Format: int64 */
+            directoryCount: number;
+            /** @enum {string} */
+            credential: "not_available";
+            /** @enum {string} */
+            mapping: "not_available";
+            recent: components["schemas"]["IntegrationLogEntry"][];
+        };
+        IntegrationList: {
+            /** Format: uuid */
+            workspaceId: string;
+            items: components["schemas"]["IntegrationConnection"][];
+            creatable: components["schemas"]["ProviderCode"][];
+            canManageCredentials: boolean;
+        };
+        IntegrationCreateRequest: {
+            provider: components["schemas"]["ProviderCode"];
+            displayName: string;
+        };
+        IntegrationPatchRequest: {
+            displayName: string;
+            /** Format: int32 */
+            version: number;
+        };
+        VersionRequest: {
+            /** Format: int32 */
+            version: number;
+        };
+        IntegrationResult: {
+            item: components["schemas"]["IntegrationConnection"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        /**
+         * @description `received`: received_at in the period. `resolved`: at least one resolve event in the period (a later reopen keeps it).
+         * @enum {string}
+         */
+        ReportBasis: "received" | "resolved";
+        ReportTypeOption: {
+            /** @enum {string} */
+            code: "operational" | "bi_regulator";
+            label: string;
+            available: boolean;
+            reason: string | null;
+        };
+        /** @description Company header from the database (one workspace = one reporting company). Never taken from the client. */
+        ReportHeader: {
+            companyName: string;
+            companyCode: string;
+            /** @description null until configured; never guessed. */
+            reporterCode: string | null;
+            /** Format: uuid */
+            workspaceId: string;
+            workspaceCode: string;
+            /** @example Asia/Jakarta */
+            timezone: string;
+            /** Format: date */
+            periodStart: string;
+            /** Format: date */
+            periodEnd: string;
+            /**
+             * Format: date-time
+             * @description Inclusive, UTC.
+             */
+            startAt: string;
+            /**
+             * Format: date-time
+             * @description Exclusive, UTC (local midnight after periodEnd).
+             */
+            endAt: string;
+            basis: components["schemas"]["ReportBasis"];
+            basisLabel: string;
+        };
+        ReportAppliedFilters: {
+            status: components["schemas"]["TicketStatusCode"][] | null;
+            owner: string | null;
+            channel: string | null;
+            category: string | null;
+            priority: string | null;
+        };
+        ReportTotals: {
+            /** @description Unique tickets in the report = rows of the export. */
+            tickets: number;
+            /** @description Resolve events in the period among those tickets (never added to tickets). */
+            resolutionCycles: number;
+            /** @description Distinct tickets with at least one resolve event in the period. */
+            resolvedTickets: number;
+            unassigned: number;
+            missingChannel: number;
+            missingCategory: number;
+            missingPriority: number;
+        };
+        ReportStatusCount: {
+            status: components["schemas"]["TicketStatus"];
+            count: number;
+        };
+        ReportBreakdown: {
+            /**
+             * Format: uuid
+             * @description null = not recorded / belum ditugaskan.
+             */
+            id: string | null;
+            label: string | null;
+            count: number;
+        };
+        ReportValidationItem: {
+            /** @enum {string} */
+            code: "regulator_mapping_unavailable" | "reporter_code_missing" | "missing_priority" | "missing_category" | "missing_channel" | "unassigned" | "row_limit";
+            /** @enum {string} */
+            level: "info" | "warning" | "blocking";
+            message: string;
+            count?: number;
+        };
+        ReportRow: {
+            /** Format: uuid */
+            ticketId: string;
+            displayNumber: string;
+            subject: string;
+            status: components["schemas"]["TicketStatus"];
+            priority: string | null;
+            category: string | null;
+            channel: string | null;
+            /** @description PIC display name; null = belum ditugaskan. */
+            owner: string | null;
+            /** @description Workspace local time, YYYY-MM-DD HH:MM. */
+            receivedLocal: string;
+            resolutionCycles: number;
+            lastResolvedLocal: string | null;
+        };
+        /** @description One REPEATABLE READ snapshot: totals, breakdowns and rows read the same SQL source as the export. Rows are the first previewLimit in export order; totals cover every row. */
+        ReportPreview: {
+            /** @enum {string} */
+            reportType: "operational";
+            reportLabel: string;
+            reportTypes: components["schemas"]["ReportTypeOption"][];
+            header: components["schemas"]["ReportHeader"];
+            /** Format: date-time */
+            asOf: string;
+            filters: components["schemas"]["ReportAppliedFilters"];
+            filterOptions: components["schemas"]["DashboardFilterOptions"];
+            totals: components["schemas"]["ReportTotals"];
+            byStatus: components["schemas"]["ReportStatusCount"][];
+            byPriority: components["schemas"]["ReportBreakdown"][];
+            byChannel: components["schemas"]["ReportBreakdown"][];
+            byCategory: components["schemas"]["ReportBreakdown"][];
+            byOwner: components["schemas"]["ReportBreakdown"][];
+            validation: components["schemas"]["ReportValidationItem"][];
+            rows: components["schemas"]["ReportRow"][];
+            previewLimit: number;
+            exportMaxRows: number;
+            exportable: boolean;
+            notice: string;
+        };
+        ReportExportRequest: {
+            /**
+             * @description `bi_regulator` answers 422 regulator_mapping_unavailable.
+             * @enum {string}
+             */
+            reportType: "operational" | "bi_regulator";
+            /** Format: date */
+            periodStart: string;
+            /**
+             * Format: date
+             * @description Inclusive; >= periodStart; at most 366 days.
+             */
+            periodEnd: string;
+            basis?: components["schemas"]["ReportBasis"];
+            status?: components["schemas"]["TicketStatusCode"][];
+            /** @description Member UUID or `unassigned`. */
+            owner?: string;
+            /** @description UUID or `none`. */
+            channel?: string;
+            /** @description UUID or `none`. */
+            category?: string;
+            /** @description UUID or `none`. */
+            priority?: string;
+            /** @enum {string} */
+            format?: "csv";
+        };
+        /** @description Validated filters of the run (null = not filtered). Empty object for runs created before D10. */
+        ReportRunFilters: {
+            status?: components["schemas"]["TicketStatusCode"][] | null;
+            owner?: string | null;
+            channel?: string | null;
+            category?: string | null;
+            priority?: string | null;
+        };
+        ReportRunList: {
+            items: components["schemas"]["ReportRun"][];
+            limit: number;
+        };
+        ReportExportResult: {
+            run: components["schemas"]["ReportRun"];
+            replayed: boolean;
+        };
+        CsrfIssued: {
+            csrfToken: string;
         };
     };
     responses: {
@@ -1408,6 +2491,89 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description A dependency (storage, upload slots) is not available (dependency_unavailable); nothing bound */
+        DependencyUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description File is larger than the configured cap (attachment_too_large) */
+        AttachmentTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Server-side sniffing found a type other than PDF/PNG/JPEG (attachment_type_refused) */
+        AttachmentTypeRefused: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description rule_violation (closed ticket) or attachment_infected (scanner verdict; file deleted, not bound) */
+        AttachmentRejected: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description clamd reached but gave no verdict (scan_failed); file deleted, not bound */
+        ScanFailed: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description scanner_unavailable (clamd not configured/unreachable, file deleted, not bound) or dependency_unavailable */
+        ScannerUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Official BI / regulator report requested: held until a verified mapping exists (regulator_mapping_unavailable). Nothing is created. */
+        RegulatorMappingUnavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The report artifact expired (report_expired); create a new export. */
+        ReportExpired: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description rate_limited: too many requests for this user (reads and writes counted separately) or, without a session, for this client address. Nothing was processed. Limits are per server process. Clients must not retry mutations automatically. */
+        RateLimited: {
+            headers: {
+                /** @description Seconds until the next request is accepted. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         /** @description Unknown, malformed or foreign IDs all return 404. */
@@ -1425,6 +2591,13 @@ export interface components {
         ConnectionId: string;
         /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
         IdempotencyKey: string;
+        RelatedWorkId: string;
+        CompanyId: string;
+        MembershipId: string;
+        CatalogKind: components["schemas"]["CatalogKind"];
+        CatalogItemId: string;
+        /** @description One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409. */
+        ReportIdempotencyKey: string;
     };
     requestBodies: never;
     headers: never;
@@ -1456,6 +2629,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createSavedView: {
@@ -1488,6 +2662,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     deleteSavedView: {
@@ -1514,6 +2689,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     renameSavedView: {
@@ -1549,6 +2725,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTickets: {
@@ -1605,6 +2782,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     createTicket: {
@@ -1650,6 +2828,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["IdempotencyConflict"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketBoard: {
@@ -1704,6 +2883,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     transitionTicket: {
@@ -1739,6 +2919,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     assignTicket: {
@@ -1774,6 +2955,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     healthLive: {
@@ -1837,6 +3019,7 @@ export interface operations {
                     "application/json": components["schemas"]["Meta"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     enterUatSuperadmin: {
@@ -1868,6 +3051,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
             /** @description uat_not_available */
             503: {
                 headers: {
@@ -1898,6 +3082,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     logout: {
@@ -1918,6 +3103,32 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    refreshCsrf: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-ITSM-CSRF-Refresh": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New CSRF token (shown once; only its digest is stored) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CsrfIssued"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaces: {
@@ -1941,6 +3152,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getWorkspace: {
@@ -1966,6 +3178,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaceMembers: {
@@ -1986,14 +3199,47 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        items: components["schemas"]["Member"][];
-                    };
+                    "application/json": components["schemas"]["MemberList"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    addWorkspaceMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Added */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listTicketStatuses: {
@@ -2017,6 +3263,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getPermissionCatalog: {
@@ -2038,6 +3285,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getMyWorkspacePermissions: {
@@ -2063,6 +3311,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     listWorkspaceGrants: {
@@ -2091,6 +3340,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getWorkspaceCatalogs: {
@@ -2117,6 +3367,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicket: {
@@ -2145,6 +3396,43 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateTicketProperties: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketPropertiesRequest"];
+            };
+        };
+        responses: {
+            /** @description Fresh detail and the audit entry (null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetailMutation"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketAttachment: {
@@ -2175,6 +3463,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getReportRun: {
@@ -2203,6 +3492,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getDashboard: {
@@ -2240,6 +3530,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getAssignmentHistory: {
@@ -2268,6 +3559,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getTicketIntegrations: {
@@ -2296,6 +3588,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     getIntakeDirectory: {
@@ -2322,6 +3615,7 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
     setSimulationOutcome: {
@@ -2355,6 +3649,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
+            429: components["responses"]["RateLimited"];
         };
     };
     retryOutbox: {
@@ -2390,6 +3685,7 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
         };
     };
     reconcileOutbox: {
@@ -2425,6 +3721,1064 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getTicketDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ticket detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetail"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listTicketActivity: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Activity page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityPage"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createRelatedWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelatedWorkCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay of an earlier create */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedWorkCreated"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedWorkCreated"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    completeRelatedWork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+                related_work_id: components["parameters"]["RelatedWorkId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RelatedWorkCompletionRequest"];
+            };
+        };
+        responses: {
+            /** @description Fresh detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketDetailMutation"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listTicketNotes: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotePage"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createTicketNote: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NoteCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteCreated"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NoteCreated"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getTicketConversations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Panel */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationPanel"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    uploadTicketAttachment: {
+        parameters: {
+            query?: {
+                visibility?: "internal" | "public";
+            };
+            header: {
+                "X-File-Name": string;
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Clean and bound */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentUploaded"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            413: components["responses"]["AttachmentTooLarge"];
+            415: components["responses"]["AttachmentTypeRefused"];
+            422: components["responses"]["AttachmentRejected"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["ScanFailed"];
+            503: components["responses"]["ScannerUnavailable"];
+        };
+    };
+    downloadTicketAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+                /** @description Scoped to workspace_id and ticket_id; otherwise 404. */
+                attachment_id: components["parameters"]["AttachmentId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description File bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                    "image/png": string;
+                    "image/jpeg": string;
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    getWorkspaceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsBody"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateWorkspaceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated (auditEventId null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listCompanies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Companies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    setCompanyActive: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyActivationRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listCatalogEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEditor"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEntryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateCatalogEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                kind: components["parameters"]["CatalogKind"];
+                item_id: components["parameters"]["CatalogItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CatalogPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated (auditEventId null when nothing changed) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogEntryResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateWorkspaceMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    addMemberGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Granted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    revokeMemberGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                membership_id: components["parameters"]["MembershipId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listIntegrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connections */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    testIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    activateIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    disableIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    previewReport: {
+        parameters: {
+            query: {
+                /** @description First local day (YYYY-MM-DD). */
+                periodStart: string;
+                /** @description Last local day, inclusive; at most 366 days. */
+                periodEnd: string;
+                /** @description `operational` (default). `bi_regulator` = 422 regulator_mapping_unavailable. */
+                reportType?: "operational" | "bi_regulator";
+                /** @description Date basis. */
+                basis?: components["schemas"]["ReportBasis"];
+                /** @description Comma-separated TicketStatusCode values; absent = all. */
+                status?: string;
+                /** @description Member UUID or `unassigned`. */
+                owner?: string;
+                /** @description UUID or `none`. */
+                channel?: string;
+                /** @description UUID or `none`. */
+                category?: string;
+                /** @description UUID or `none`. */
+                priority?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preview */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportPreview"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description validation_failed (+ field) or regulator_mapping_unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listReportRuns: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Runs */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportRunList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createReportRun: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409. */
+                "Idempotency-Key": components["parameters"]["ReportIdempotencyKey"];
+            };
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReportExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Replay (replayed=true) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExportResult"];
+                };
+            };
+            /** @description Run created (succeeded or failed) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReportExportResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IdempotencyConflict"];
+            /** @description validation_failed (+ field) or regulator_mapping_unavailable */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    downloadReportRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; otherwise 404. */
+                report_run_id: components["parameters"]["ReportRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description CSV bytes */
+            200: {
+                headers: {
+                    "X-Content-SHA256"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            410: components["responses"]["ReportExpired"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

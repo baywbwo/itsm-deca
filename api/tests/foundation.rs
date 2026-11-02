@@ -607,3 +607,108 @@ async fn error_bodies_do_not_leak_internals(pool: PgPool) {
         assert!(!text.contains(needle), "leaked {needle}");
     }
 }
+
+/// D11: a reloaded tab keeps its cookie but lost the in-memory CSRF token. The refresh needs
+/// the session, the custom header and (when sent) same-origin fetch metadata; it rotates the
+/// token so the old one stops working, and never works for another or a revoked session.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn csrf_refresh_needs_session_header_and_same_origin_then_rotates(pool: PgPool) {
+    seeded(&pool).await;
+    let s = fixture_session(&pool, "dummy:cs-alfa").await;
+    let c = cookie(&s.token);
+    let path = "/api/v1/session/csrf";
+
+    let anon = call(
+        &pool,
+        build(req("POST", path).header("x-itsm-csrf-refresh", "1")),
+    )
+    .await;
+    assert_eq!(anon.status, StatusCode::UNAUTHORIZED);
+    let no_header = call(&pool, build(req("POST", path).header(header::COOKIE, &c))).await;
+    assert_eq!(no_header.status, StatusCode::FORBIDDEN);
+    assert_eq!(no_header.json["error"]["code"], "csrf_failed");
+    let cross_site = call(
+        &pool,
+        build(
+            req("POST", path)
+                .header(header::COOKIE, &c)
+                .header("x-itsm-csrf-refresh", "1")
+                .header("sec-fetch-site", "cross-site"),
+        ),
+    )
+    .await;
+    assert_eq!(cross_site.status, StatusCode::FORBIDDEN);
+    let get = call(&pool, build(req("GET", path).header(header::COOKIE, &c))).await;
+    assert_eq!(get.status, StatusCode::METHOD_NOT_ALLOWED);
+
+    let ok = call(
+        &pool,
+        build(
+            req("POST", path)
+                .header(header::COOKIE, &c)
+                .header("x-itsm-csrf-refresh", "1")
+                .header("sec-fetch-site", "same-origin"),
+        ),
+    )
+    .await;
+    assert_eq!(ok.status, StatusCode::OK);
+    let fresh = ok.json["csrfToken"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(fresh.len(), 43);
+    assert_ne!(fresh, s.csrf_token);
+    assert_eq!(ok.json.as_object().map(|o| o.len()), Some(1));
+    assert!(ok.headers.get(header::SET_COOKIE).is_none());
+
+    // The old token no longer works; the new one does (a safe unsafe-method check: logout).
+    let old = call(
+        &pool,
+        build(
+            req("DELETE", "/api/v1/session")
+                .header(header::COOKIE, &c)
+                .header("x-csrf-token", &s.csrf_token),
+        ),
+    )
+    .await;
+    assert_eq!(old.status, StatusCode::FORBIDDEN);
+    // Another session's cookie with this token is refused.
+    let other = fixture_session(&pool, "dummy:cs-alfa").await;
+    let cross = call(
+        &pool,
+        build(
+            req("DELETE", "/api/v1/session")
+                .header(header::COOKIE, cookie(&other.token))
+                .header("x-csrf-token", &fresh),
+        ),
+    )
+    .await;
+    assert_eq!(cross.status, StatusCode::FORBIDDEN);
+    let out = call(
+        &pool,
+        build(
+            req("DELETE", "/api/v1/session")
+                .header(header::COOKIE, &c)
+                .header("x-csrf-token", &fresh),
+        ),
+    )
+    .await;
+    assert_eq!(out.status, StatusCode::NO_CONTENT);
+
+    // Revoked session: no new token.
+    let revoked = call(
+        &pool,
+        build(
+            req("POST", path)
+                .header(header::COOKIE, &c)
+                .header("x-itsm-csrf-refresh", "1"),
+        ),
+    )
+    .await;
+    assert_eq!(revoked.status, StatusCode::UNAUTHORIZED);
+    let digest_stored: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sessions WHERE csrf_hash = convert_to($1, 'UTF8')",
+    )
+    .bind(&fresh)
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(-1);
+    assert_eq!(digest_stored, 0, "the raw token is never stored");
+}

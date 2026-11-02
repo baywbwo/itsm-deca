@@ -2,7 +2,8 @@
 //!
 //! Intake writes one outbox intent per target inside the ticket transaction. After commit the
 //! simulated delivery settles each intent to the outcome configured on its connection
-//! (`config.simulatedOutcome`: `success` | `failed` | `unknown`, default `success`):
+//! (`config.simulatedOutcome`: `success` | `failed` | `unknown` | `transient`, default `success`;
+//! claim/settle/backoff live in [`crate::outbox`]):
 //! - `success`: Jira create gets a simulated issue (`SIM-…`, no URL) linked to related work;
 //!   Jira link and Lark notifications are marked delivered.
 //! - `failed`: definite failure with a safe message; `integration.recovery` may retry.
@@ -25,6 +26,7 @@ use crate::AppState;
 use crate::authz::{self, Permission, WorkspaceAccess};
 use crate::config::Environment;
 use crate::error::AppError;
+use crate::outbox;
 use crate::routes::ticket_list::{body, correlation};
 use crate::routes::workspaces::parse_id;
 use crate::session::Session;
@@ -47,6 +49,12 @@ pub struct SyncView {
     issue_key: Option<String>,
     safe_error: Option<String>,
     reconciled: bool,
+    /// Transient failure: next automatic attempt (UTC), otherwise null.
+    next_attempt_at: Option<String>,
+    /// Automatic attempts used since the last manual retry (bounded by the worker).
+    auto_attempts: i32,
+    /// A delivery attempt is in flight (claimed, not settled yet).
+    in_flight: bool,
     updated_at: String,
     /// Always `simulation` in this build.
     mode: String,
@@ -56,6 +64,8 @@ const VIEW_SQL: &str = concat!(
     "SELECT o.id, o.provider, o.operation, o.state, o.attempt, ",
     "COALESCE(d.display_name, a.display_name) AS target_label, ",
     "ji.issue_key, o.safe_error, (o.reconcile_evidence IS NOT NULL) AS reconciled, ",
+    "to_char(o.next_attempt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS next_attempt_at, ",
+    "o.auto_attempts, (o.claim_token IS NOT NULL) AS in_flight, ",
     "to_char(o.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, ",
     "c.mode ",
     "FROM integration_outbox o ",
@@ -120,10 +130,10 @@ pub(crate) async fn enqueue(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn audit_entity(
+pub(crate) async fn audit_entity(
     conn: &mut PgConnection,
     ws: Uuid,
-    actor: Uuid,
+    actor: Option<Uuid>,
     action: &str,
     entity_type: &str,
     entity: Uuid,
@@ -147,22 +157,30 @@ async fn audit_entity(
 }
 
 #[derive(sqlx::FromRow)]
-struct Intent {
-    ticket_id: Uuid,
-    connection_id: Uuid,
-    operation: String,
-    related_work_id: Option<Uuid>,
-    state: String,
-    attempt: i32,
-    outcome: String,
-    ws_code: String,
-    number: i64,
+pub(crate) struct Intent {
+    pub(crate) ticket_id: Uuid,
+    pub(crate) connection_id: Uuid,
+    pub(crate) operation: String,
+    pub(crate) related_work_id: Option<Uuid>,
+    pub(crate) state: String,
+    pub(crate) attempt: i32,
+    pub(crate) auto_attempts: i32,
+    pub(crate) claim_token: Option<Uuid>,
+    pub(crate) outcome: String,
+    pub(crate) ws_code: String,
+    pub(crate) number: i64,
 }
 
-async fn lock_intent(conn: &mut PgConnection, ws: Uuid, id: Uuid) -> Result<Intent, AppError> {
+pub(crate) async fn lock_intent(
+    conn: &mut PgConnection,
+    ws: Uuid,
+    id: Uuid,
+) -> Result<Intent, AppError> {
     sqlx::query_as::<_, Intent>(
         "SELECT o.ticket_id, o.connection_id, o.operation, o.related_work_id, o.state, o.attempt, \
-                COALESCE(c.config->>'simulatedOutcome', 'success') AS outcome, w.code AS ws_code, t.number \
+                o.auto_attempts, o.claim_token, \
+                CASE WHEN c.state <> 'active' THEN 'inactive' \
+                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, w.code AS ws_code, t.number \
          FROM integration_outbox o \
          JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id \
          JOIN workspaces w ON w.id = o.workspace_id \
@@ -177,7 +195,7 @@ async fn lock_intent(conn: &mut PgConnection, ws: Uuid, id: Uuid) -> Result<Inte
 }
 
 /// Links a (simulated or reconciled) Jira issue to the intent's related work.
-async fn link_issue(
+pub(crate) async fn link_issue(
     conn: &mut PgConnection,
     ws: Uuid,
     intent: &Intent,
@@ -208,8 +226,8 @@ async fn link_issue(
     Ok(())
 }
 
-/// Settles one pending intent to the connection's simulated outcome. No-op when the intent
-/// is no longer pending (another request settled it first).
+/// Claims and settles one intent on behalf of a request. No-op when it is not pending, already
+/// in flight or not due yet (another claimer owns it).
 async fn deliver(
     state: &AppState,
     ws: Uuid,
@@ -217,61 +235,13 @@ async fn deliver(
     actor: Uuid,
     corr: &Option<String>,
 ) -> Result<(), AppError> {
-    let mut tx = state.pool.begin().await?;
-    let intent = lock_intent(&mut tx, ws, id).await?;
-    if intent.state != "pending" {
-        return Ok(());
-    }
-    let attempt = intent.attempt + 1;
-    let (next, error) = match intent.outcome.as_str() {
-        "failed" => (
-            "failed",
-            Some(
-                "Simulasi: penyedia menolak permintaan. Aman untuk dicoba ulang oleh petugas berizin.",
-            ),
-        ),
-        "unknown" => (
-            "unknown",
-            Some(
-                "Simulasi: hasil tidak diketahui (batas waktu). Jangan kirim ulang; rekonsiliasi dengan bukti.",
-            ),
-        ),
-        _ => ("success", None),
+    let claim = {
+        let mut conn = state.pool.acquire().await?;
+        outbox::claim_one(&mut conn, ws, id).await?
     };
-    if next == "success" && intent.operation == "jira_create_issue" {
-        let key = format!("SIM-{}-{}", intent.ws_code, intent.number);
-        link_issue(&mut tx, ws, &intent, format!("sim-{id}"), &key).await?;
+    if let Some(claim) = claim {
+        outbox::settle(state, claim, Some(actor), corr).await?;
     }
-    sqlx::query(
-        "UPDATE integration_outbox SET state = $3, attempt = $4, safe_error = $5, next_attempt_at = NULL \
-         WHERE workspace_id = $1 AND id = $2",
-    )
-    .bind(ws)
-    .bind(id)
-    .bind(next)
-    .bind(attempt)
-    .bind(error)
-    .execute(&mut *tx)
-    .await?;
-    audit_entity(
-        &mut tx,
-        ws,
-        actor,
-        "integration.sync",
-        "integration_outbox",
-        id,
-        serde_json::json!({
-            "ticketId": intent.ticket_id,
-            "operation": intent.operation,
-            "state": next,
-            "attempt": attempt,
-            "mode": "simulation",
-        }),
-        corr,
-    )
-    .await?;
-    tx.commit().await?;
-    tracing::info!(workspace_id = %ws, outbox_id = %id, state = next, "simulated delivery settled");
     Ok(())
 }
 
@@ -414,15 +384,19 @@ pub async fn retry(
     if intent.state != "failed" {
         return Err(AppError::RuleViolation);
     }
-    sqlx::query("UPDATE integration_outbox SET state = 'pending', safe_error = NULL WHERE workspace_id = $1 AND id = $2")
-        .bind(ws)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    // A manual retry starts a fresh automatic budget.
+    sqlx::query(
+        "UPDATE integration_outbox SET state = 'pending', safe_error = NULL, auto_attempts = 0, \
+         next_attempt_at = NULL WHERE workspace_id = $1 AND id = $2",
+    )
+    .bind(ws)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
     let audit_event_id = audit_entity(
         &mut tx,
         ws,
-        access.user_id,
+        Some(access.user_id),
         "integration.retry",
         "integration_outbox",
         id,
@@ -501,7 +475,7 @@ pub async fn reconcile(
     let audit_event_id = audit_entity(
         &mut tx,
         ws,
-        access.user_id,
+        Some(access.user_id),
         "integration.reconcile",
         "integration_outbox",
         id,
@@ -532,6 +506,8 @@ pub enum SimulatedOutcome {
     Success,
     Failed,
     Unknown,
+    /// Definite non-delivery that the worker retries automatically (bounded, with backoff).
+    Transient,
 }
 
 impl SimulatedOutcome {
@@ -540,6 +516,7 @@ impl SimulatedOutcome {
             Self::Success => "success",
             Self::Failed => "failed",
             Self::Unknown => "unknown",
+            Self::Transient => "transient",
         }
     }
 }
@@ -601,7 +578,7 @@ pub async fn set_simulation(
     let audit_event_id = audit_entity(
         &mut tx,
         ws,
-        access.user_id,
+        Some(access.user_id),
         "integration.simulation",
         "integration_connection",
         id,

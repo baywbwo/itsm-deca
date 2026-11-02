@@ -624,3 +624,141 @@ async fn applied_view_gives_list_board_parity_and_grants_nothing(pool: PgPool) {
     .await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn columns_are_allowlisted_persisted_and_private(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let t = tok(&pool, f.cs).await;
+    let all = json!([
+        "status", "priority", "owner", "channel", "received", "updated"
+    ]);
+
+    // No columns stored = the default (all optional columns).
+    let d = create(&pool, f.a, &t, json!({ "name": "Default", "view": "list" })).await;
+    assert_eq!(d.status, StatusCode::CREATED, "{}", d.json);
+    assert_eq!(d.json["columns"], all);
+    // Duplicates dropped, canonical order.
+    let r = create(
+        &pool,
+        f.a,
+        &t,
+        json!({ "name": "Ringkas", "view": "list", "columns": ["updated", "status", "status"] }),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    assert_eq!(r.json["columns"], json!(["status", "updated"]));
+    let id = s(&r.json["id"]);
+    // Outside the allowlist (title/number are always shown), empty, or wrong type: 400.
+    for bad in [
+        json!(["title"]),
+        json!(["number"]),
+        json!([]),
+        json!(["status", "secret"]),
+        json!("status"),
+        json!([1]),
+    ] {
+        let r = create(
+            &pool,
+            f.a,
+            &t,
+            json!({ "name": "Tolak", "view": "list", "columns": bad }),
+        )
+        .await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}: {}", r.json);
+    }
+    assert_eq!(
+        names(&list(&pool, f.a, &t).await),
+        vec!["Default", "Ringkas"]
+    );
+
+    // Update columns only: optimistic, keeps name/query; stale = 409; nothing to change = 400.
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.a, &id),
+        &t,
+        true,
+        Some(&json!({ "columns": ["owner", "priority"], "version": 1 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["columns"], json!(["priority", "owner"]));
+    assert_eq!(r.json["name"], "Ringkas");
+    assert_eq!(r.json["version"], 2);
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.a, &id),
+        &t,
+        true,
+        Some(&json!({ "columns": ["status"], "version": 1 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.a, &id),
+        &t,
+        true,
+        Some(&json!({ "version": 2 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.json);
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.a, &id),
+        &t,
+        true,
+        Some(&json!({ "columns": ["title"], "version": 2 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.json);
+
+    // Reload in a new session: the stored choice is back.
+    let reload = tok(&pool, f.cs).await;
+    let items = list(&pool, f.a, &reload).await;
+    let got = items.iter().find(|v| v["id"] == id.as_str()).cloned();
+    assert_eq!(
+        got.map(|v| v["columns"].clone()),
+        Some(json!(["priority", "owner"]))
+    );
+    // Another user, or the same view through another workspace: 404, unchanged.
+    let other = tok(&pool, f.lead).await;
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.a, &id),
+        &other,
+        true,
+        Some(&json!({ "columns": ["status"], "version": 2 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let admin = tok(&pool, f.admin).await;
+    let r = send(
+        &pool,
+        "PATCH",
+        &view_uri(f.b, &id),
+        &admin,
+        true,
+        Some(&json!({ "columns": ["status"], "version": 2 })),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let stored: Vec<String> = ok(
+        sqlx::query_scalar("SELECT columns FROM saved_views WHERE id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&pool)
+            .await,
+        "stored columns",
+    );
+    assert_eq!(stored, vec!["priority", "owner"]);
+    // The database refuses columns outside the allowlist even without the API.
+    let raw = sqlx::query("UPDATE saved_views SET columns = ARRAY['title'] WHERE id = $1::uuid")
+        .bind(&id)
+        .execute(&pool)
+        .await;
+    assert!(raw.is_err());
+}

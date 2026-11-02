@@ -30,3 +30,7 @@ Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATA
 
 ## Belum termasuk
 Endpoint mutasi tiket/intake, SLA, mutasi grant/membership (D09), penulisan audit, worker outbox, scan clamd, FE, SSO kantor, deploy.
+
+## Deploy UAT terbatas
+`deploy/uat/` berisi compose (ingress Caddy + api + postgres + clamd), Dockerfile, guard akses ingress
+yang gagal tutup, dan runbook (`deploy/uat/README.md`). Hanya untuk DB dummy UAT.

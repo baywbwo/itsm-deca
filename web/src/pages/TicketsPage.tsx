@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent, type ReactNode } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
 import type {
   CatalogItem,
   TicketAllowedAction,
@@ -17,14 +17,20 @@ import { navigate, useTicketData, useTicketOptions, type TicketOptions } from '.
 import {
   activeTicketFilters,
   emptyTicketFilters,
+  parseDetailQuery,
   parseTicketQuery,
   ticketApiQuery,
   ticketQuery,
   toHash,
+  canonicalColumns,
+  COLUMN_LABELS,
+  TICKET_COLUMNS,
+  type TicketColumn,
   type TicketFilterKey,
   type TicketParams,
   type TicketSort,
   type TicketView,
+  withDetail,
 } from '../app/routes';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
@@ -36,6 +42,7 @@ import { statusTone } from './DashboardPage';
 import { AssignDialog } from './AssignDialog';
 import { IntakeDialog } from './IntakeDialog';
 import { SavedViews } from './SavedViews';
+import { TicketDetailView } from './TicketDetail';
 
 /** Lifecycle order of the D01 freeze; labels come from the server when it has sent them. */
 const STATUS_ORDER: readonly TicketStatusCode[] = [
@@ -93,7 +100,8 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   const options = useTicketOptions(api, workspace.id);
   const [labels, setLabels] = useState<Partial<Record<TicketStatusCode, string>>>({});
   const [transition, setTransition] = useState<{ ticket: TicketListItem; to: TicketStatusCode | null } | null>(null);
-  const [detail, setDetail] = useState<TicketListItem | null>(null);
+  const dp = parseDetailQuery(query);
+  const [detailRefresh, setDetailRefresh] = useState(0);
   const [createOpen, setCreateOpen] = useState(false);
   const [assign, setAssign] = useState<TicketListItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -130,13 +138,50 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
     go({ ...params, filters: emptyTicketFilters() });
   };
   const reload = () => setAttempt((n) => n + 1);
+  // D08 deep link: the open ticket lives in the URL next to the list scope (reload/back keep it).
+  const detailHash = (id: string | null, full = false) =>
+    toHash({ workspaceId: workspace.id, page: 'tickets', query: withDetail(ticketQuery(params), id, full) });
+  const openDetail = (t: TicketListItem) => navigate(detailHash(t.id));
+  const closeDetail = () => {
+    const id = dp.ticketId;
+    navigate(detailHash(null));
+    // After full page or a deep link the opener is gone: land on the same ticket's row/card.
+    window.setTimeout(() => {
+      const row = id ? document.querySelector<HTMLElement>(`[data-open-ticket="${CSS.escape(id)}"]`) : null;
+      if (row && (document.activeElement === document.body || !document.activeElement?.isConnected)) row.focus();
+    }, 0);
+  };
 
   function onDone(t: TicketListItem, message: string) {
     setTransition(null);
     setAssign(null);
-    setDetail((d) => (d && d.id === t.id ? t : d));
+    if (dp.ticketId === t.id) setDetailRefresh((n) => n + 1);
     setNotice(message);
     reload();
+  }
+
+  const dialogs = (
+    <>
+      {transition && (
+        <TransitionDialog api={api} workspace={workspace} ticket={transition.ticket} initialTo={transition.to}
+          onClose={() => setTransition(null)} onDone={onDone} onReloadList={reload} />
+      )}
+      {assign && (
+        <AssignDialog api={api} workspace={workspace} userId={userId} permissions={permissions} ticket={assign}
+          onClose={() => setAssign(null)} onDone={onDone} onReloadList={reload} />
+      )}
+    </>
+  );
+  if (dp.ticketId && dp.full) {
+    return (
+      <>
+        <TicketDetailView key={`${workspace.id}|${dp.ticketId}`} api={api} workspace={workspace} ticketId={dp.ticketId}
+          full refresh={detailRefresh} canAssign={canAssign} onClose={closeDetail}
+          onToggleFull={() => navigate(detailHash(dp.ticketId, false), true)} onChanged={() => undefined}
+          onTransition={(t) => setTransition({ ticket: t, to: null })} onAssign={setAssign} />
+        {dialogs}
+      </>
+    );
   }
 
   return (
@@ -170,13 +215,13 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
             apiQuery={apiQuery} filtered={active.length > 0} canCreate={canCreate}
             onSort={(sort) => go({ ...params, sort, order: params.sort === sort && params.order === 'desc' ? 'asc' : 'desc' })}
             onStatus={(code) => setFilter('status', params.filters.status === code ? null : code)}
-            onOpen={setDetail} onTransition={(t) => setTransition({ ticket: t, to: null })}
+            onOpen={openDetail} onTransition={(t) => setTransition({ ticket: t, to: null })}
             onReset={reset} onCreate={() => setCreateOpen(true)} />
         )}
         {data?.view === 'board' && (
           <BoardView key={state.status === "success" ? state.key : ""} api={api} workspace={workspace} board={data.board} apiQuery={apiQuery}
             filtered={active.length > 0} canCreate={canCreate}
-            onOpen={setDetail} onTransition={(t, to) => setTransition({ ticket: t, to })}
+            onOpen={openDetail} onTransition={(t, to) => setTransition({ ticket: t, to })}
             onRefused={setNotice} onReset={reset} onCreate={() => setCreateOpen(true)} />
         )}
       </div>
@@ -184,9 +229,13 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
         <TransitionDialog api={api} workspace={workspace} ticket={transition.ticket} initialTo={transition.to}
           onClose={() => setTransition(null)} onDone={onDone} onReloadList={reload} />
       )}
-      <DetailDialog ticket={detail} tz={tz} onClose={() => setDetail(null)}
-        canAssign={canAssign} onAssign={(t) => { setDetail(null); setAssign(t); }}
-        onTransition={(t) => setTransition({ ticket: t, to: null })} />
+      {dp.ticketId && (
+        <TicketDetailView key={`${workspace.id}|${dp.ticketId}`} api={api} workspace={workspace} ticketId={dp.ticketId}
+          full={dp.full} refresh={detailRefresh} canAssign={canAssign} onClose={closeDetail}
+          onToggleFull={() => navigate(detailHash(dp.ticketId, !dp.full), true)}
+          onChanged={() => { if (!dp.full) reload(); }}
+          onTransition={(t) => setTransition({ ticket: t, to: null })} onAssign={setAssign} />
+      )}
       {assign && (
         <AssignDialog api={api} workspace={workspace} userId={userId} permissions={permissions} ticket={assign}
           onClose={() => setAssign(null)} onDone={onDone} onReloadList={reload} />
@@ -391,6 +440,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
             ])}
           </select>
         </label>
+        <ColumnChooser params={params} onApply={onApply} />
         <SavedViews api={api} workspaceId={workspaceId} params={params} onApply={onApply} />
         {activeCount > 0 && (
           <Button variant="ghost" onClick={onReset} aria-label={`Reset semua filter (${activeCount} aktif)`}>
@@ -490,6 +540,7 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
   const recv = sortHeader('received_at', 'Umur');
   const upd = sortHeader('updated_at', 'Diperbarui');
   const status = params.filters.status;
+  const show = (c: TicketColumn) => params.columns.includes(c);
 
   return (
     <>
@@ -516,29 +567,31 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
               <tr>
                 <th scope="col" aria-sort={num_.ariaSort}>{num_.node}</th>
                 <th scope="col">Judul</th>
-                <th scope="col">Status</th>
-                <th scope="col">Prioritas</th>
-                <th scope="col">PIC</th>
-                <th scope="col">Kanal · kategori</th>
-                <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>
-                <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>
+                {show('status') && <th scope="col">Status</th>}
+                {show('priority') && <th scope="col">Prioritas</th>}
+                {show('owner') && <th scope="col">PIC</th>}
+                {show('channel') && <th scope="col">Kanal · kategori</th>}
+                {show('received') && <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>}
+                {show('updated') && <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>}
                 <th scope="col"><span className="sr-only">Aksi</span></th>
               </tr>
             </thead>
             <tbody>
               {items.map((t) => (
                 <tr key={t.id}>
-                  <td><button type="button" className="linkish" onClick={() => onOpen(t)}>{t.displayNumber}</button></td>
+                  <td><button type="button" className="linkish" data-open-ticket={t.id} onClick={() => onOpen(t)}>{t.displayNumber}</button></td>
                   <td><span className="subject" title={t.subject}>{t.subject}</span></td>
-                  <td><Badge tone={statusTone(t.status)}>{t.status.label}</Badge></td>
-                  <td>{t.priority ? t.priority.label : <span className="muted">—</span>}</td>
-                  <td>{t.owner ? t.owner.label : <span className="muted">Belum ditugaskan</span>}</td>
-                  <td className="stack">
-                    <span>{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</span>
-                    <span className="tiny muted">{t.category?.label ?? 'Tanpa kategori'}</span>
-                  </td>
-                  <td>{ageLabel(t.ageSeconds)}</td>
-                  <td>{instantLabel(t.updatedAt, tz)}</td>
+                  {show('status') && <td><Badge tone={statusTone(t.status)}>{t.status.label}</Badge></td>}
+                  {show('priority') && <td>{t.priority ? t.priority.label : <span className="muted">—</span>}</td>}
+                  {show('owner') && <td>{t.owner ? t.owner.label : <span className="muted">Belum ditugaskan</span>}</td>}
+                  {show('channel') && (
+                    <td className="stack">
+                      <span>{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</span>
+                      <span className="tiny muted">{t.category?.label ?? 'Tanpa kategori'}</span>
+                    </td>
+                  )}
+                  {show('received') && <td>{ageLabel(t.ageSeconds)}</td>}
+                  {show('updated') && <td>{instantLabel(t.updatedAt, tz)}</td>}
                   <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>
                 </tr>
               ))}
@@ -718,7 +771,7 @@ function TicketCard({ ticket: t, tz, draggable, onDragStart, onDragEnd, onOpen, 
     <article className="ticket" draggable={draggable} aria-label={`${t.displayNumber}: ${t.subject}`}
       onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; onDragStart(); } : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}>
-      <button type="button" className="ticket-open" onClick={onOpen}>
+      <button type="button" className="ticket-open" data-open-ticket={t.id} onClick={onOpen}>
         <span className="tiny muted">{t.displayNumber}</span>
         <span className="ticket-title">{t.subject}</span>
       </button>
@@ -865,6 +918,8 @@ function transitionError(e: unknown): { title: string; body: string; conflict: b
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {
+      case 429:
+        return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} Status belum berubah; isian Anda tetap di sini.${rid}`, conflict: false };
       case 409:
         return { title: 'Tiket sudah diubah pihak lain', body: `Status tidak disimpan. Isian Anda tetap di sini; muat ulang data lalu coba lagi.${rid}`, conflict: true };
       case 403:
@@ -882,55 +937,6 @@ function transitionError(e: unknown): { title: string; body: string; conflict: b
     }
   }
   return { title: 'Belum tersimpan', body: 'Terjadi kesalahan tak terduga. Status belum berubah.', conflict: false };
-}
-
-/** Honest placeholder for D08: the safe list projection only, plus the same status action. */
-function DetailDialog({ ticket: t, tz, canAssign, onAssign, onClose, onTransition }: {
-  ticket: TicketListItem | null;
-  tz: string;
-  canAssign: boolean;
-  onAssign: (t: TicketListItem) => void;
-  onClose: () => void;
-  onTransition: (t: TicketListItem) => void;
-}) {
-  const rows: [string, ReactNode][] = t ? [
-    ['Status', <Badge key="s" tone={statusTone(t.status)}>{t.status.label}</Badge>],
-    ['Siklus', `ke-${t.cycleNo}`],
-    ['Prioritas', t.priority?.label ?? '—'],
-    ['PIC', <span key="p">{t.owner?.label ?? 'Belum ditugaskan'}{canAssign && !t.status.archived && (
-      <> <Button variant="ghost" className="btn-small" onClick={() => onAssign(t)}>Ubah PIC</Button></>
-    )}</span>],
-    ['Kanal', t.channel?.label ?? '—'],
-    ['Kategori', t.category?.label ?? '—'],
-    ['Diterima', instantLabel(t.receivedAt, tz)],
-    ['Diperbarui', instantLabel(t.updatedAt, tz)],
-    ['Pekerjaan terkait', t.relatedWork.open ? `${t.relatedWork.open} terbuka (${t.relatedWork.blockingOpen} memblokir)` : 'Tidak ada yang terbuka'],
-  ] : [];
-  return (
-    <Dialog open={!!t} onClose={onClose} title={t ? `${t.displayNumber} · ${t.subject}` : 'Detail tiket'}
-      footer={t && (
-        <>
-          <Button onClick={onClose}>Tutup</Button>
-          {!t.status.archived && t.allowedActions.length > 0 && (
-            <Button variant="primary" onClick={() => { onClose(); onTransition(t); }}>Ubah status</Button>
-          )}
-        </>
-      )}>
-      {t && (
-        <>
-          <dl className="props">
-            {rows.map(([k, v]) => (
-              <div key={k} className="props-row"><dt>{k}</dt><dd>{v}</dd></div>
-            ))}
-          </dl>
-          <p className="tiny muted spaced">
-            Detail lengkap (percakapan, lampiran, riwayat aktivitas dan pekerjaan terkait) dibangun pada D08. Ini ringkasan dari daftar.
-            {t.status.archived && ' Tiket ditutup adalah arsip historis read-only.'}
-          </p>
-        </>
-      )}
-    </Dialog>
-  );
 }
 
 function TicketSkeleton({ view }: { view: TicketView }) {
@@ -961,6 +967,42 @@ function TicketError({ error, onRetry, onReset }: { error: unknown; onRetry: () 
 }
 
 function errorMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
+  if (e instanceof ApiError) return e.code === 'rate_limited' ? rateLimitText(e) : e.code === 'network' ? 'Server tidak dapat dihubungi.' : e.message;
   return 'Terjadi kesalahan tak terduga.';
+}
+
+/** C05 column chooser: allowlisted list columns; number, title and action always stay. */
+function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p: TicketParams) => void }) {
+  const hidden = TICKET_COLUMNS.length - params.columns.length;
+  const toggle = (c: TicketColumn, on: boolean) => {
+    const next = on ? [...params.columns, c] : params.columns.filter((x) => x !== c);
+    if (next.length === 0) return;
+    onApply({ ...params, columns: canonicalColumns(next) });
+  };
+  return (
+    <Popover label="Kolom daftar" title="Kolom daftar"
+      trigger={<>Kolom{hidden > 0 && <span className="count-badge" aria-label={`${hidden} kolom disembunyikan`}>−{hidden}</span>}</>}>
+      {(close) => (
+        <>
+          <fieldset className="column-checks">
+            <legend className="tiny muted">Nomor, judul, dan aksi selalu tampil. Minimal satu kolom lain.</legend>
+            {TICKET_COLUMNS.map((c) => {
+              const on = params.columns.includes(c);
+              const last = on && params.columns.length === 1;
+              return (
+                <label key={c} className="row check">
+                  <input type="checkbox" checked={on} disabled={last} onChange={(e) => toggle(c, e.target.checked)} />
+                  {COLUMN_LABELS[c]}{last && <span className="sr-only"> (kolom terakhir, tidak bisa disembunyikan)</span>}
+                </label>
+              );
+            })}
+          </fieldset>
+          <div className="popover-foot row between">
+            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...TICKET_COLUMNS] })} disabled={hidden === 0}>Tampilkan semua</Button>
+            <Button variant="primary" onClick={() => close()}>Selesai</Button>
+          </div>
+        </>
+      )}
+    </Popover>
+  );
 }

@@ -40,8 +40,34 @@ pub enum AppError {
     /// request. Nothing was created.
     #[error("idempotency_conflict")]
     IdempotencyConflict,
+    /// An official BI / regulator report was requested. It stays held until a verified
+    /// mapping exists (D01); nothing was created.
+    #[error("regulator_mapping_unavailable")]
+    RegulatorMappingUnavailable,
+    /// The report artifact is past its expiry. Request a new export.
+    #[error("report_expired")]
+    ReportExpired,
     #[error("uat_not_available")]
     UatNotAvailable,
+    /// Upload larger than the configured cap. Nothing was kept.
+    #[error("attachment_too_large")]
+    AttachmentTooLarge,
+    /// Content (sniffed by the server, not the client's type) is not on the allow-list.
+    #[error("attachment_type_refused")]
+    AttachmentTypeRefused,
+    /// The scanner reported malware. The bytes were deleted and never bound.
+    #[error("attachment_infected")]
+    AttachmentInfected,
+    /// The scanner answered but did not complete the scan. Fail closed: nothing bound.
+    #[error("scan_failed")]
+    ScanFailed,
+    /// No scanner reachable (or not configured). Fail closed: nothing bound.
+    #[error("scanner_unavailable")]
+    ScannerUnavailable,
+    /// Too many requests for this user (or peer, without a session) in the current window.
+    /// Nothing was processed; `Retry-After` says when the next request is accepted.
+    #[error("rate_limited")]
+    RateLimited { retry_after_secs: u64 },
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -94,12 +120,52 @@ impl AppError {
             AppError::IdempotencyConflict => (
                 StatusCode::CONFLICT,
                 "idempotency_conflict",
-                "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada tiket baru yang dibuat.",
+                "Kunci pengiriman ini sudah dipakai untuk isian berbeda. Tidak ada data baru yang disimpan.",
+            ),
+            AppError::RegulatorMappingUnavailable => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "regulator_mapping_unavailable",
+                "Ekspor resmi BI ditahan: format, kode dan field wajib belum diverifikasi. Gunakan rekap operasional.",
+            ),
+            AppError::ReportExpired => (
+                StatusCode::GONE,
+                "report_expired",
+                "Berkas laporan sudah kedaluwarsa. Buat ekspor baru.",
             ),
             AppError::UatNotAvailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "uat_not_available",
                 "Mode uji tidak tersedia pada database ini.",
+            ),
+            AppError::AttachmentTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "attachment_too_large",
+                "Ukuran berkas melebihi batas. Berkas tidak disimpan.",
+            ),
+            AppError::AttachmentTypeRefused => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "attachment_type_refused",
+                "Jenis berkas tidak diizinkan (hanya PDF, PNG atau JPEG). Berkas tidak disimpan.",
+            ),
+            AppError::AttachmentInfected => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "attachment_infected",
+                "Pemindai menandai berkas berbahaya. Berkas dihapus dan tidak dilampirkan.",
+            ),
+            AppError::ScanFailed => (
+                StatusCode::BAD_GATEWAY,
+                "scan_failed",
+                "Pemindaian berkas gagal. Berkas tidak dilampirkan; coba lagi nanti.",
+            ),
+            AppError::ScannerUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "scanner_unavailable",
+                "Pemindai berkas tidak tersedia. Berkas tidak dilampirkan.",
+            ),
+            AppError::RateLimited { .. } => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate_limited",
+                "Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi; permintaan ini tidak diproses.",
             ),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -167,9 +233,24 @@ impl IntoResponse for AppError {
             AppError::Validation(field) => {
                 json!({ "error": { "code": code, "message": message, "field": field } })
             }
+            AppError::RateLimited { retry_after_secs } => json!({
+                "error": { "code": code, "message": message, "retryAfterSeconds": retry_after_secs }
+            }),
             _ => json!({ "error": { "code": code, "message": message } }),
         };
-        (status, Json(body)).into_response()
+        let mut response = (status, Json(body)).into_response();
+        if let AppError::RateLimited { retry_after_secs } = &self {
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(*retry_after_secs),
+            );
+        }
+        if matches!(self, AppError::Forbidden) {
+            response
+                .extensions_mut()
+                .insert(crate::denied_audit::ForbiddenMarker);
+        }
+        response
     }
 }
 

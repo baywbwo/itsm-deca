@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, createApi, type TransportRequest, type TransportResponse } from './client';
+import { ApiError, createApi, rateLimitText, type TransportRequest, type TransportResponse } from './client';
+import { writeError } from '../pages/adminKit';
 
 function fake(responses: Record<string, TransportResponse>) {
   const seen: TransportRequest[] = [];
   const transport = async (req: TransportRequest) => {
+    // D11: a client that never entered re-issues its CSRF token first (kept out of `seen`).
+    if (req.path === '/api/v1/session/csrf' && !responses['POST /api/v1/session/csrf']) {
+      return { status: 200, body: { csrfToken: 're-issued' }, requestId: null };
+    }
     seen.push(req);
     const r = responses[`${req.method} ${req.path}`];
     if (!r) throw new Error(`unexpected ${req.method} ${req.path}`);
@@ -114,7 +119,7 @@ describe('ticket endpoints', () => {
 });
 
 describe('saved views client (C32)', () => {
-  const view = { id: 'v1', name: 'Email P1', view: 'board', query: { channel: 'c1', sort: 'received', order: 'desc' }, version: 1, createdAt: 't', updatedAt: 't' };
+  const view = { id: 'v1', name: 'Email P1', view: 'board', query: { channel: 'c1', sort: 'received', order: 'desc' }, columns: ['status', 'owner'], version: 1, createdAt: 't', updatedAt: 't' };
   const base = '/api/v1/workspaces/w/saved-views';
 
   it('creates with CSRF (201), renames with version, deletes with 204', async () => {
@@ -143,5 +148,151 @@ describe('saved views client (C32)', () => {
     });
     await expect(api.listSavedViews('w')).rejects.toMatchObject({ code: 'bad_response' });
     await expect(api.createSavedView('w', { name: 'x', view: 'list', query: {} })).rejects.toMatchObject({ code: 'bad_response' });
+  });
+});
+
+describe('D08b follow-up client', () => {
+  it('upload sends the raw file with CSRF, an encoded file name and the visibility; errors keep their code', async () => {
+    const path = '/api/v1/workspaces/w/tickets/t/attachments?visibility=public';
+    const { api, seen } = fake({
+      [`POST ${path}`]: { status: 503, body: { error: { code: 'scanner_unavailable', message: 'x' } }, requestId: 'r' },
+    });
+    const file = new File(['%PDF-1.4'], 'laporan akhir/ä.pdf', { type: 'application/pdf' });
+    await expect(api.uploadTicketAttachment('w', 't', file, 'public')).rejects.toMatchObject({ status: 503, code: 'scanner_unavailable' });
+    expect(seen[0]?.file).toBe(file);
+    expect(seen[0]?.body).toBeUndefined();
+    expect(seen[0]?.headers['X-File-Name']).toBe(encodeURIComponent('laporan akhir/ä.pdf'));
+  });
+
+  it('notes and related work carry the Idempotency-Key; a note without an author is not trusted', async () => {
+    const path = '/api/v1/workspaces/w/tickets/t/notes';
+    const note = { id: 'n', body: 'b', author: null, createdAt: '2026-11-01T00:00:00Z' };
+    const { api, seen } = fake({ [`POST ${path}`]: { status: 201, body: { note, replayed: false, auditEventId: 'a' }, requestId: null } });
+    await expect(api.createTicketNote('w', 't', 'k', { body: 'b' })).rejects.toMatchObject({ code: 'bad_response' });
+    expect(seen[0]?.headers['Idempotency-Key']).toBe('k');
+  });
+
+  it('download link stays same-origin and encoded', () => {
+    const { api } = fake({});
+    expect(api.attachmentContentUrl('w', 't', 'a/b')).toBe('/api/v1/workspaces/w/tickets/t/attachments/a%2Fb/content');
+  });
+});
+
+describe('D11 CSRF re-issue after a reload', () => {
+  const view = { name: 'v', filters: {} };
+  const err = (code: string) => ({ status: 403, body: { error: { code, message: 'x' } }, requestId: null });
+  function scripted(answers: Array<(req: TransportRequest) => TransportResponse>) {
+    const seen: TransportRequest[] = [];
+    const api = createApi(async (req) => {
+      seen.push(req);
+      const next = answers.shift();
+      if (!next) throw new Error(`unexpected ${req.method} ${req.path}`);
+      return next(req);
+    });
+    return { api, seen };
+  }
+  const issued = (t: string) => () => ({ status: 200, body: { csrfToken: t }, requestId: null });
+
+  it('a restored session gets a token from the refresh endpoint before its first unsafe request', async () => {
+    const { api, seen } = scripted([issued('t1'), () => err('not_found')]);
+    await api.createSavedView('w1', view as never).catch(() => undefined);
+    expect(seen.map((r) => `${r.method} ${r.path}`)).toEqual(['POST /api/v1/session/csrf', 'POST /api/v1/workspaces/w1/saved-views']);
+    expect(seen[0]?.headers).toEqual({ 'X-ITSM-CSRF-Refresh': '1' });
+    expect(seen[1]?.headers['X-CSRF-Token']).toBe('t1');
+    expect(api.csrfHeaders()).toEqual({ 'X-CSRF-Token': 't1' });
+  });
+
+  it('GET never refreshes; a csrf_failed refusal refreshes and retries exactly once', async () => {
+    const { api, seen } = scripted([
+      () => ({ status: 200, body: { items: [] }, requestId: null }),
+      issued('t1'), () => err('csrf_failed'), issued('t2'), () => err('csrf_failed'),
+    ]);
+    await api.listWorkspaces();
+    const e = await api.createSavedView('w1', view as never).catch((x: unknown) => x);
+    expect(e).toMatchObject({ status: 403, code: 'csrf_failed' });
+    expect(seen.map((r) => r.headers['X-CSRF-Token'] ?? r.headers['X-ITSM-CSRF-Refresh'] ?? '-')).toEqual(['-', '1', 't1', '1', 't2']);
+  });
+
+  it('a forbidden (permission) answer is not retried', async () => {
+    const { api, seen } = scripted([issued('t1'), () => err('forbidden')]);
+    await expect(api.createSavedView('w1', view as never)).rejects.toMatchObject({ code: 'forbidden' });
+    expect(seen).toHaveLength(2);
+  });
+
+  it('concurrent unsafe requests share one refresh', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const seen: string[] = [];
+    const api = createApi(async (req) => {
+      seen.push(req.path);
+      if (req.path === '/api/v1/session/csrf') { await gate; return issued('t1')(); }
+      return err('not_found');
+    });
+    const a = api.createSavedView('w1', view as never).catch(() => undefined);
+    const b = api.createSavedView('w2', view as never).catch(() => undefined);
+    release(); await Promise.all([a, b]);
+    expect(seen.filter((p) => p === '/api/v1/session/csrf')).toHaveLength(1);
+  });
+
+  it('a failed refresh surfaces its error (401 stays a session problem) and is not cached', async () => {
+    const { api, seen } = scripted([
+      () => ({ status: 401, body: { error: { code: 'unauthenticated', message: 'x' } }, requestId: null }),
+      issued('t1'), () => err('not_found'),
+    ]);
+    await expect(api.createSavedView('w1', view as never)).rejects.toMatchObject({ status: 401, code: 'unauthenticated' });
+    await api.createSavedView('w1', view as never).catch(() => undefined);
+    expect(seen.map((r) => r.path)).toEqual(['/api/v1/session/csrf', '/api/v1/session/csrf', '/api/v1/workspaces/w1/saved-views']);
+  });
+});
+
+describe('D11 rework: 429 rate_limited', () => {
+  const limited = (wait: number) => ({
+    status: 429,
+    body: { error: { code: 'rate_limited', message: 'Terlalu banyak permintaan.', retryAfterSeconds: wait } },
+    requestId: 'r429',
+  });
+  function scripted(answers: Array<() => TransportResponse>) {
+    const seen: TransportRequest[] = [];
+    const api = createApi(async (req) => {
+      seen.push(req);
+      const next = answers.shift();
+      if (!next) throw new Error(`unexpected ${req.method} ${req.path}`);
+      return next();
+    });
+    return { api, seen };
+  }
+  const issued = () => ({ status: 200, body: { csrfToken: 't1' }, requestId: null });
+
+  it('a rate-limited mutation is sent once, never retried, and carries Retry-After seconds', async () => {
+    const { api, seen } = scripted([issued, () => limited(7)]);
+    const e = await api.createTicket('w1', 'key-1', { subject: 's' } as never).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(ApiError);
+    expect(e).toMatchObject({ status: 429, code: 'rate_limited', retryAfterSeconds: 7, requestId: 'r429' });
+    expect(seen.filter((r) => r.path === '/api/v1/workspaces/w1/tickets')).toHaveLength(1);
+    expect(seen[1]?.headers['Idempotency-Key']).toBe('key-1');
+  });
+
+  it('a rate-limited CSRF refresh is surfaced, not looped, and the mutation is not sent', async () => {
+    const { api, seen } = scripted([() => limited(3)]);
+    await expect(api.transitionTicket('w1', 't', { to: 'open', version: 1 } as never))
+      .rejects.toMatchObject({ status: 429, code: 'rate_limited', retryAfterSeconds: 3 });
+    expect(seen.map((r) => r.path)).toEqual(['/api/v1/session/csrf']);
+  });
+
+  it('a rate-limited read is not retried either', async () => {
+    const { api, seen } = scripted([() => limited(2)]);
+    await expect(api.listWorkspaces()).rejects.toMatchObject({ code: 'rate_limited' });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('copy names the wait and keeps the input; a missing value falls back to a neutral wait', () => {
+    const e = new ApiError(429, 'rate_limited', 'x', 'r1', null, 12);
+    expect(rateLimitText(e)).toContain('12 detik');
+    expect(rateLimitText(new ApiError(429, 'rate_limited', 'x'))).toContain('sebentar lagi');
+    const w = writeError(e, 'Pengaturan');
+    expect(w).toMatchObject({ title: 'Terlalu banyak permintaan', conflict: false, field: null });
+    expect(w.body).toContain('12 detik');
+    expect(w.body).toContain('isian Anda tetap');
+    expect(w.body).toContain('r1');
   });
 });

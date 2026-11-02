@@ -4,7 +4,7 @@ import { Icon } from './Icon';
 
 /**
  * Native modal <dialog>: the rest of the page is inert while open, Escape closes, and focus
- * returns to whatever opened it. `initialFocus` picks the first focused element (C31: Cancel
+ * returns to whatever opened it (or to the title of a dialog still open underneath). `initialFocus` picks the first focused element (C31: Cancel
  * for high-impact confirmations).
  */
 export function Dialog({ open, onClose, title, children, footer, variant, initialFocus, returnFocus }: {
@@ -13,7 +13,7 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
   title: string;
   children: ReactNode;
   footer?: ReactNode;
-  variant?: 'drawer';
+  variant?: 'drawer' | 'peek';
   initialFocus?: string;
   /** Element to focus on close instead of the opener (e.g. the control that asked for it). */
   returnFocus?: RefObject<HTMLElement | null>;
@@ -34,6 +34,9 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
         const back = returnFocus?.current;
         if (back?.isConnected) back.focus();
         else if (opener?.isConnected) opener.focus();
+        // The opener went away with the change it confirmed (e.g. Nonaktifkan once disabled):
+        // keep focus in the dialog still open underneath instead of dropping it to <body>.
+        else document.querySelector<HTMLElement>('dialog[open] .dialog-head h2')?.focus();
       };
     }
     return undefined;
@@ -45,7 +48,7 @@ export function Dialog({ open, onClose, title, children, footer, variant, initia
       {open && (
         <>
           <div className="dialog-head">
-            <h2 id={titleId}>{title}</h2>
+            <h2 id={titleId} tabIndex={-1}>{title}</h2>
             <Button variant="ghost" iconOnly aria-label="Tutup" onClick={onClose}><Icon name="close" /></Button>
           </div>
           <div className="dialog-body">{children}</div>

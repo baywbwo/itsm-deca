@@ -1,7 +1,15 @@
 // Runtime checks at the network boundary. The compile-time types are generated; these
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
+  ActivityPage,
+  AttachmentUploaded,
+  ConversationPanel,
+  NoteCreated,
+  NotePage,
+  RelatedWorkCreated,
   ApiErrorBody,
+  TicketDetail,
+  TicketDetailMutation,
   AssignmentHistory,
   IntakeDirectory,
   IntegrationSync,
@@ -11,6 +19,19 @@ import type {
   Catalogs,
   Dashboard,
   Member,
+  MemberList,
+  MemberResult,
+  WorkspaceSettings,
+  SettingsBody,
+  SettingsResult,
+  CompanyList,
+  CompanyResult,
+  CatalogEditor,
+  CatalogEntry,
+  CatalogEntryResult,
+  IntegrationConnection,
+  IntegrationList,
+  IntegrationResult,
   Meta,
   PermissionCode,
   SavedView,
@@ -20,6 +41,10 @@ import type {
   TicketList,
   TicketListItem,
   TicketMutationResult,
+  ReportPreview,
+  ReportRun,
+  ReportRunList,
+  ReportExportResult,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -59,6 +84,10 @@ export function isSession(v: unknown): v is Session {
     isStrOrNull(v.banner) && typeof v.uatSuperadmin === 'boolean'
   );
 }
+
+/** D11 CSRF re-issue after a reload. */
+export const isCsrfIssued = (v: unknown): v is { csrfToken: string } =>
+  isObj(v) && isStr(v.csrfToken) && v.csrfToken.length > 0;
 
 export const isSessionIssued = (v: unknown): v is SessionIssued =>
   isSession(v) && isStr((v as Obj).csrfToken) && ((v as Obj).csrfToken as string).length > 0;
@@ -182,8 +211,14 @@ export function isTicketBoard(v: unknown): v is TicketBoard {
 export const isTicketMutationResult = (v: unknown): v is TicketMutationResult =>
   isObj(v) && isTicketListItem(v.ticket) && isStr(v.auditEventId);
 
-export const isMemberList = (v: unknown): v is { items: Member[] } =>
-  isObj(v) && isArr(v.items, (m) => isObj(m) && isStr(m.userId) && isStr(m.displayName) && typeof m.active === 'boolean');
+const GRANTS = ['admin.members', 'admin.settings', 'integration.manage', 'integration.credentials', 'integration.recovery'];
+const isGrant = (v: unknown) => isStr(v) && GRANTS.includes(v);
+export const isMember = (m: unknown): m is Member =>
+  isObj(m) && isStr(m.membershipId) && isStr(m.userId) && isStr(m.displayName) &&
+  (m.role === 'cs' || m.role === 'lead_cs') && typeof m.active === 'boolean' && isNum(m.version) && isArr(m.grants, isGrant);
+export const isMemberList = (v: unknown): v is MemberList =>
+  isObj(v) && isArr(v.items, isMember) && isStrOrNull(v.myMembershipId) && typeof v.canManage === 'boolean' &&
+  isArr(v.grantable, isGrant);
 
 const isCatalogItem = (c: unknown) =>
   isObj(c) && isStr(c.id) && isStr(c.code) && isStr(c.label) && typeof c.active === 'boolean' && isNum(c.sortOrder);
@@ -195,9 +230,11 @@ export function isSavedView(v: unknown): v is SavedView {
   return (
     isObj(v) && isStr(v.id) && isStr(v.name) && (v.view === 'list' || v.view === 'board') &&
     isObj(v.query) && !('q' in v.query) && Object.values(v.query).every(isStr) &&
+    isArr(v.columns, (c) => SAVED_VIEW_COLUMNS.includes(c as string)) && (v.columns as unknown[]).length > 0 &&
     isNum(v.version) && isStr(v.createdAt) && isStr(v.updatedAt)
   );
 }
+const SAVED_VIEW_COLUMNS = ['status', 'priority', 'owner', 'channel', 'received', 'updated'];
 export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
   isObj(v) && isArr(v.items, isSavedView);
 /** 204 No Content. */
@@ -208,7 +245,8 @@ export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
   isObj(v) && isStr(v.id) && (v.provider === 'jira' || v.provider === 'lark') && isStr(v.operation) &&
   SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
   isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
-  isStr(v.updatedAt) && v.mode === 'simulation';
+  isStr(v.updatedAt) && v.mode === 'simulation' && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isNum(v.autoAttempts) && typeof v.inFlight === 'boolean';
 
 export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
   isObj(v) && isTicketListItem(v.ticket) && typeof v.replayed === 'boolean' && isArr(v.integrations, isIntegrationSync);
@@ -232,3 +270,143 @@ export const isAssignmentHistory = (v: unknown): v is AssignmentHistory =>
   isArr(v.items, (e) => isObj(e) && isStr(e.id) && isStr(e.at) &&
     ['initial', 'take_for_self', 'reassign'].includes(e.kind as string) &&
     isPersonOrNull(e.actor) && isPersonOrNull(e.from) && isPersonOrNull(e.to) && isStrOrNull(e.reason ?? null));
+
+// D08a ticket detail.
+const isTextOrNull = isStrOrNull;
+const isProps = (p: unknown) =>
+  isObj(p) && isStr(p.subject) && isStr(p.chronology) && isStr(p.receivedAt) &&
+  isRefOrNull(p.intakeChannel) && isRefOrNull(p.priority) && isRefOrNull(p.category) && isRefOrNull(p.product) &&
+  isRefOrNull(p.receivingUnit) && isRefOrNull(p.region) && isRefOrNull(p.merchant) &&
+  isTextOrNull(p.transactionActivity) && isTextOrNull(p.cause) && isTextOrNull(p.foreignBranchReference);
+const isJiraOrNull = (j: unknown) =>
+  j === null || (isObj(j) && isStr(j.issueKey) && isStrOrNull(j.externalStatus) && isStrOrNull(j.safeUrl));
+const isRelatedWork = (r: unknown) =>
+  isObj(r) && isStr(r.id) && isStr(r.title) && isStrOrNull(r.safeDescription) && typeof r.blocking === 'boolean' &&
+  (r.completionState === 'open' || r.completionState === 'completed') && isStrOrNull(r.completionSummary) &&
+  isStrOrNull(r.completionEvidence) && isRefOrNull(r.requestedBy) && isRefOrNull(r.completedBy) &&
+  isStrOrNull(r.completedAt) && isJiraOrNull(r.jira) && isNum(r.version) && isStr(r.createdAt);
+const isAttachmentMeta = (a: unknown) =>
+  isObj(a) && isStr(a.id) && isStr(a.fileName) && isStrOrNull(a.inspectedMime) && isNum(a.sizeBytes) &&
+  isStr(a.scanStatus) && (a.visibility === 'public' || a.visibility === 'internal') && isStr(a.createdAt);
+const isResolution = (e: unknown) =>
+  isObj(e) && isStr(e.id) && (e.action === 'resolve' || e.action === 'reopen') && isNum(e.cycleNo) &&
+  isStr(e.summary) && isRefOrNull(e.actor) && isStr(e.at);
+export const isTicketDetail = (v: unknown): v is TicketDetail =>
+  isObj(v) && isTicketListItem(v.ticket) && isProps(v.properties) &&
+  isObj(v.can) && typeof v.can.readOnly === 'boolean' && typeof v.can.editProperties === 'boolean' &&
+  typeof v.can.manageRelatedWork === 'boolean' &&
+  typeof v.can.addNote === 'boolean' && typeof v.can.uploadAttachment === 'boolean' &&
+  isArr(v.relatedWork, isRelatedWork) && isArr(v.attachments, isAttachmentMeta) && isArr(v.resolutions, isResolution);
+export const isTicketDetailMutation = (v: unknown): v is TicketDetailMutation =>
+  isObj(v) && isTicketDetail(v.detail) && isStrOrNull(v.auditEventId);
+export const isActivityPage = (v: unknown): v is ActivityPage =>
+  isObj(v) && isStrOrNull(v.nextCursor) &&
+  isArr(v.items, (i) => isObj(i) && isStr(i.id) && isStr(i.at) && isStr(i.action) && isStr(i.label) && isRefOrNull(i.actor));
+
+// D08b follow-up: notes, read-only conversation panel, attachment upload, idempotent related work.
+const isNote = (n: unknown) =>
+  isObj(n) && isStr(n.id) && isStr(n.body) && isRefOrNull(n.author) && n.author !== null && isStr(n.createdAt);
+export const isNotePage = (v: unknown): v is NotePage =>
+  isObj(v) && isStrOrNull(v.nextCursor) && isArr(v.items, isNote);
+export const isNoteCreated = (v: unknown): v is NoteCreated =>
+  isObj(v) && isNote(v.note) && typeof v.replayed === 'boolean' && isStrOrNull(v.auditEventId);
+const DIRECTIONS = ['inbound', 'outbound'];
+const DELIVERY = ['received', 'queued', 'sent', 'delivered', 'failed', 'unknown'];
+const isConversation = (c: unknown) =>
+  isObj(c) && isStr(c.id) && c.source === 'simulation' && isStr(c.channelLabel) && isStr(c.externalThreadId) &&
+  isArr(c.messages, (m) => isObj(m) && isStr(m.id) && DIRECTIONS.includes(m.direction as string) && isStr(m.body) &&
+    DELIVERY.includes(m.deliveryState as string) && isStr(m.occurredAt));
+export const isConversationPanel = (v: unknown): v is ConversationPanel =>
+  isObj(v) && typeof v.adapterConfigured === 'boolean' && typeof v.truncated === 'boolean' && isArr(v.conversations, isConversation);
+export const isRelatedWorkCreated = (v: unknown): v is RelatedWorkCreated =>
+  isObj(v) && isTicketDetail(v.detail) && isStr(v.relatedWorkId) && typeof v.replayed === 'boolean' && isStrOrNull(v.auditEventId);
+export const isAttachmentUploaded = (v: unknown): v is AttachmentUploaded =>
+  isObj(v) && isStr(v.attachmentId) && isTicketDetail(v.detail) && isStr(v.auditEventId);
+
+// D09 settings, members, catalogs and simulated integration connections.
+const TIMEZONES = ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'];
+const isWorkspaceSettings = (v: unknown): v is WorkspaceSettings =>
+  isObj(v) && isStr(v.workspaceId) && isStr(v.workspaceCode) && isStr(v.workspaceName) && isStr(v.timezone) &&
+  isStr(v.companyId) && isStr(v.companyCode) && isStr(v.companyName) && isStrOrNull(v.reporterCode) &&
+  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount);
+export const isSettingsBody = (v: unknown): v is SettingsBody =>
+  isObj(v) && isWorkspaceSettings(v.settings) && typeof v.canEdit === 'boolean' &&
+  isArr(v.timezones, (t) => isStr(t) && TIMEZONES.includes(t));
+export const isSettingsResult = (v: unknown): v is SettingsResult =>
+  isObj(v) && isWorkspaceSettings(v.settings) && isStrOrNull(v.auditEventId);
+export const isCompanyList = (v: unknown): v is CompanyList => isObj(v) && isArr(v.items, isWorkspaceSettings);
+export const isCompanyResult = (v: unknown): v is CompanyResult =>
+  isObj(v) && isWorkspaceSettings(v.item) && isStr(v.auditEventId);
+const CATALOG_KINDS = ['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'];
+const isCatalogEntry = (v: unknown): v is CatalogEntry =>
+  isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.label) && typeof v.active === 'boolean' &&
+  isNum(v.sortOrder) && isNum(v.version);
+export const isCatalogEditor = (v: unknown): v is CatalogEditor =>
+  isObj(v) && isStr(v.kind) && CATALOG_KINDS.includes(v.kind) && isArr(v.items, isCatalogEntry) && typeof v.canEdit === 'boolean';
+export const isCatalogEntryResult = (v: unknown): v is CatalogEntryResult =>
+  isObj(v) && isStr(v.kind) && CATALOG_KINDS.includes(v.kind) && isCatalogEntry(v.item) && isStrOrNull(v.auditEventId);
+export const isMemberResult = (v: unknown): v is MemberResult => isObj(v) && isMember(v.item) && isStr(v.auditEventId);
+const isProviderCode = (v: unknown) => v === 'jira' || v === 'lark';
+const CONNECTION_STATES = ['draft', 'tested', 'active', 'disabled'];
+const isConnection = (v: unknown): v is IntegrationConnection =>
+  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && v.mode === 'simulation' &&
+  isStr(v.state) && CONNECTION_STATES.includes(v.state) && isStrOrNull(v.testedAt) && isStrOrNull(v.lastTestNote) &&
+  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) &&
+  v.credential === 'not_available' && v.mapping === 'not_available' &&
+  isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
+export const isIntegrationList = (v: unknown): v is IntegrationList =>
+  isObj(v) && isStr(v.workspaceId) && isArr(v.items, isConnection) && isArr(v.creatable, isProviderCode) &&
+  typeof v.canManageCredentials === 'boolean';
+export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId);
+
+// --- D10 reports -------------------------------------------------------------
+const isReportBasis = (v: unknown) => v === 'received' || v === 'resolved';
+const isBreakdown = (v: unknown) => isObj(v) && isStrOrNull(v.id) && isStrOrNull(v.label) && isNum(v.count);
+const REPORT_TOTALS = [
+  'tickets', 'resolutionCycles', 'resolvedTickets', 'unassigned', 'missingChannel', 'missingCategory', 'missingPriority',
+] as const;
+const LEVELS = ['info', 'warning', 'blocking'];
+
+/** Preview of the operational report; totals must be numbers and the header must name the scope. */
+export function isReportPreview(v: unknown): v is ReportPreview {
+  if (!isObj(v) || v.reportType !== 'operational' || !isStr(v.reportLabel) || !isStr(v.asOf) || !isStr(v.notice)) return false;
+  const h = v.header;
+  if (!isObj(h) || !isStr(h.companyName) || !isStr(h.companyCode) || !isStrOrNull(h.reporterCode) ||
+    !isStr(h.workspaceId) || !isStr(h.workspaceCode) || !isStr(h.timezone) || !isStr(h.periodStart) ||
+    !isStr(h.periodEnd) || !isStr(h.startAt) || !isStr(h.endAt) || !isReportBasis(h.basis) || !isStr(h.basisLabel)) return false;
+  const t = v.totals;
+  const f = v.filters;
+  const o = v.filterOptions;
+  return (
+    isObj(t) && REPORT_TOTALS.every((k) => isNum(t[k])) &&
+    isObj(f) && FILTER_KEYS.every((k) => isStrOrNull(f[k])) && (f.status === null || isArr(f.status, isStr)) &&
+    isObj(o) && (['owners', 'channels', 'categories', 'priorities'] as const).every((k) => isArr(o[k], isOption)) &&
+    isArr(v.reportTypes, (r) => isObj(r) && isStr(r.code) && isStr(r.label) && typeof r.available === 'boolean' && isStrOrNull(r.reason)) &&
+    isArr(v.byStatus, (s) => isObj(s) && isStatus(s.status) && isNum(s.count)) &&
+    isArr(v.byPriority, isBreakdown) && isArr(v.byChannel, isBreakdown) &&
+    isArr(v.byCategory, isBreakdown) && isArr(v.byOwner, isBreakdown) &&
+    isArr(v.validation, (i) => isObj(i) && isStr(i.code) && LEVELS.includes(i.level as string) && isStr(i.message)) &&
+    isArr(v.rows, (r) => isObj(r) && isStr(r.ticketId) && isStr(r.displayNumber) && isStr(r.subject) &&
+      isStatus(r.status) && isStr(r.receivedLocal) && isNum(r.resolutionCycles)) &&
+    isNum(v.previewLimit) && isNum(v.exportMaxRows) && typeof v.exportable === 'boolean'
+  );
+}
+
+export function isReportRun(v: unknown): v is ReportRun {
+  return (
+    isObj(v) && isStr(v.id) && isStr(v.periodStart) && isStr(v.periodEnd) &&
+    ['queued', 'running', 'succeeded', 'failed'].includes(v.state as string) &&
+    isReportBasis(v.basis) && isObj(v.filters) && typeof v.downloadable === 'boolean' &&
+    typeof v.hasArtifact === 'boolean' && typeof v.expired === 'boolean' &&
+    isObj(v.requestedBy) && isStr(v.requestedBy.id) && isStr(v.requestedBy.label) &&
+    isNumOrNull(v.rowCount) && isStrOrNull(v.artifactSha256) && isNumOrNull(v.artifactBytes) &&
+    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName)
+  );
+}
+
+export const isReportRunList = (v: unknown): v is ReportRunList =>
+  isObj(v) && isArr(v.items, isReportRun) && isNum(v.limit);
+
+export const isReportExportResult = (v: unknown): v is ReportExportResult =>
+  isObj(v) && isReportRun(v.run) && typeof v.replayed === 'boolean';

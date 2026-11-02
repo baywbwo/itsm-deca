@@ -70,6 +70,20 @@ for (const w of list.body.items) {
   responses[`GET ${base}/members`] = await rec('GET', `${base}/members`);
   responses[`GET ${base}/catalogs`] = await rec('GET', `${base}/catalogs`);
   responses[`GET ${base}/intake-directory`] = await rec('GET', `${base}/intake-directory`);
+  // D09 read-only screens: settings, every catalog kind and the simulated connections.
+  for (const p of ['settings', 'integrations', ...['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'].map((k) => `catalogs/${k}`)]) {
+    responses[`GET ${base}/${p}`] = await rec('GET', `${base}/${p}`);
+  }
+  // D10 reports: run list plus the preview of the recording month and of October 2026 (both bases).
+  // Exports are not recorded: a review package must not hold report files.
+  responses[`GET ${base}/report-runs`] = await rec('GET', `${base}/report-runs`);
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: w.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(Date.now());
+  for (const [s, e] of [[`${day.slice(0, 8)}01`, day], ['2026-10-01', '2026-10-31']]) {
+    for (const basis of ['received', 'resolved']) {
+      const rp = `${base}/reports/preview?${new URLSearchParams({ periodStart: s, periodEnd: e, basis })}`;
+      responses[`GET ${rp}`] = await rec('GET', rp);
+    }
+  }
   const today = responses[`GET ${base}/dashboard?period=today`].body;
   const order = ['status', 'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore'];
   const toQuery = (f) => {
@@ -179,7 +193,86 @@ if (candidate) {
     responses[`GET ${ap}-history#after`] = await rec('GET', `${ap}-history`);
   }
 }
+// D08 detail: every ticket on the first list pages (and the resolved/closed ones) gets its detail,
+// first activity page and PIC history; one open ticket also gets a real edit sequence where each
+// mutation step (s1 properties, s2 related work, s3 completion) re-records detail and activity.
+for (const w of list.body.items) {
+  const base = `/api/v1/workspaces/${w.id}`;
+  const seen = new Set();
+  for (const q of ["", "?status=resolved", "?status=closed", "?status=pending_engineering"]) {
+    for (const t of responses[`GET ${base}/tickets${q}`]?.body?.items ?? []) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      const tp = `${base}/tickets/${t.id}`;
+      responses[`GET ${tp}/detail`] = await rec("GET", `${tp}/detail`);
+      const act = await rec("GET", `${tp}/activity`);
+      responses[`GET ${tp}/activity`] = act;
+      if (act.body?.nextCursor) {
+        const more = `${tp}/activity?${new URLSearchParams({ cursor: act.body.nextCursor })}`;
+        responses[`GET ${more}`] = await rec("GET", more);
+      }
+      responses[`GET ${tp}/assignment-history`] ??= await rec("GET", `${tp}/assignment-history`);
+      responses[`GET ${tp}/notes`] = await rec("GET", `${tp}/notes`);
+      responses[`GET ${tp}/conversations`] = await rec("GET", `${tp}/conversations`);
+    }
+  }
+}
+{
+  const items = responses[`GET ${fb}/tickets`].body.items;
+  const t = items.find((x) => x.status.code === "open" && x.relatedWork.open === 0) ?? items.find((x) => !x.status.archived && x.status.code !== "resolved");
+  if (t) {
+    const tp = `${fb}/tickets/${t.id}`;
+    const d0 = responses[`GET ${tp}/detail`].body;
+    const cat = responses[`GET ${fb}/catalogs`].body;
+    const region = cat.regions.find((r) => r.active && r.id !== d0.properties.region?.id);
+    const props = { version: d0.ticket.version, cause: "Penyebab dummy: batch settlement tertunda (rekaman review D08).", ...(region && { regionId: region.id }) };
+    const h = { "X-CSRF-Token": csrf };
+    responses[`PATCH ${tp}#stale`] = await rec("PATCH", tp, h, { ...props, version: d0.ticket.version - 1 });
+    responses[`PATCH ${tp}#ok`] = await rec("PATCH", tp, h, props);
+    const stage = async (n) => {
+      responses[`GET ${tp}/detail#s${n}`] = await rec("GET", `${tp}/detail`);
+      responses[`GET ${tp}/activity#s${n}`] = await rec("GET", `${tp}/activity`);
+      responses[`GET ${tp}/notes#s${n}`] = await rec("GET", `${tp}/notes`);
+    };
+    await stage(1);
+    // D08b: related work is idempotent per key; the same key + payload is the real replay (200).
+    const rwBody = { title: "Cek log settlement (dummy)", safeDescription: "Tanpa data nasabah.", blocking: true };
+    const rwKey = { ...h, "Idempotency-Key": `review-rw-${Date.now()}` };
+    const rw = await rec("POST", `${tp}/related-work`, rwKey, rwBody);
+    responses[`POST ${tp}/related-work#ok`] = rw;
+    responses[`POST ${tp}/related-work#replayed`] = await rec("POST", `${tp}/related-work`, rwKey, rwBody);
+    responses[`POST ${tp}/related-work#conflict`] = await rec("POST", `${tp}/related-work`, rwKey, { ...rwBody, title: "Isian lain (dummy)" });
+    await stage(2);
+    const work = rw.body?.detail?.relatedWork?.find((x) => x.completionState === "open");
+    if (work) {
+      const cp = `${tp}/related-work/${work.id}/completion`;
+      const body = { summary: "Settlement diproses ulang (dummy).", evidence: "Referensi uji dummy REV-D08." };
+      responses[`POST ${cp}#stale`] = await rec("POST", cp, h, { ...body, version: work.version + 1 });
+      responses[`POST ${cp}#ok`] = await rec("POST", cp, h, { ...body, version: work.version });
+      await stage(3);
+      // s4: an operational follow-up note (same key replays), then upload attempts. This host has no
+      // clamd, so the live server refuses the upload fail-closed; that real answer is recorded.
+      const nKey = { ...h, "Idempotency-Key": `review-note-${Date.now()}` };
+      const nBody = { body: "Merchant dihubungi; menunggu konfirmasi settlement (dummy, rekaman review D08b)." };
+      responses[`POST ${tp}/notes#ok`] = await rec("POST", `${tp}/notes`, nKey, nBody);
+      responses[`POST ${tp}/notes#replayed`] = await rec("POST", `${tp}/notes`, nKey, nBody);
+      await stage(4);
+      const png = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da6360f8cfc0f01f0005000201a5d5ee6b0000000049454e44ae426082", "hex");
+      const up = async (q, bytes, name) => {
+        const res = await fetch(BASE + `${tp}/attachments?visibility=${q}`, {
+          method: "POST", body: bytes,
+          headers: { Accept: "application/json", Cookie: cookie, "X-CSRF-Token": csrf, "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(name) },
+        });
+        const text = await res.text();
+        return { status: res.status, body: text ? JSON.parse(text) : null, requestId: res.headers.get("x-request-id") };
+      };
+      responses[`POST ${tp}/attachments#scanner`] = await up("internal", png, "bukti-dummy.png");
+      responses[`POST ${tp}/attachments#type`] = await up("internal", Buffer.from("bukan berkas yang diizinkan"), "catatan.txt");
+    }
+  }
+}
 // Any other workspace path replays the server's real 404 (unknown/foreign/malformed look alike).
+responses['GET /api/v1/companies'] = await rec('GET', '/api/v1/companies');
 responses['GET #not_found'] = await rec('GET', '/api/v1/workspaces/00000000-0000-4000-8000-000000000000');
 
 const fixtures = { recordedAt: new Date().toISOString(), origin: BASE, backendSha: process.env.BACKEND_SHA ?? null, responses };

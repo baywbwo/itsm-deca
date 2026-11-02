@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "ITSM API",
-    "version": "0.8.0-d07",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile."
+    "version": "0.12.0-d10",
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden; each such 403 to a member leaves one append-only audit_events row (action access.denied, outcome denied, safe projection: permission, method, route template; no IDs, query or body). 404, 401 and CSRF refusals write no row. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease → unknown). + D10 operational company reports (O06/C21/C22): server preview over the whole scope (Jakarta-day period, received/resolved basis, status + PIC/kanal/kategori/prioritas filters, unique tickets vs resolution cycles kept apart) and an idempotent, audited CSV export with scoped download, SHA-256, expiry and formula-injection neutralization. Official BI/regulator report stays held (422 regulator_mapping_unavailable); the export is labelled non-regulator."
   },
   "servers": [
     {
@@ -106,6 +106,62 @@
           "pattern": "^[A-Za-z0-9_:.-]{8,128}$"
         },
         "description": "One key per intake draft, scoped to user + workspace. Same key + same payload replays the original ticket; same key + other payload = 409. Reuse the key when retrying after a timeout."
+      },
+      "RelatedWorkId": {
+        "name": "related_work_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "CompanyId": {
+        "name": "company_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "MembershipId": {
+        "name": "membership_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "CatalogKind": {
+        "name": "kind",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CatalogKind"
+        }
+      },
+      "CatalogItemId": {
+        "name": "item_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ReportIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_:.-]{8,128}$"
+        },
+        "description": "One key per export request, scoped to user + workspace. Same key + same request replays the run (200, replayed=true); same key + another request = 409."
       }
     },
     "schemas": {
@@ -674,7 +730,15 @@
                   "dependency_unavailable",
                   "internal",
                   "validation_failed",
-                  "idempotency_conflict"
+                  "idempotency_conflict",
+                  "attachment_too_large",
+                  "attachment_type_refused",
+                  "attachment_infected",
+                  "scan_failed",
+                  "scanner_unavailable",
+                  "regulator_mapping_unavailable",
+                  "report_expired",
+                  "rate_limited"
                 ]
               },
               "message": {
@@ -683,6 +747,11 @@
               "field": {
                 "type": "string",
                 "description": "validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields)."
+              },
+              "retryAfterSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "rate_limited only: seconds until the next request is accepted (same value as the Retry-After header)."
               }
             }
           }
@@ -838,12 +907,19 @@
       "Member": {
         "type": "object",
         "required": [
+          "membershipId",
           "userId",
           "displayName",
           "role",
-          "active"
+          "active",
+          "version",
+          "grants"
         ],
         "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
           "userId": {
             "type": "string",
             "format": "uuid"
@@ -860,8 +936,20 @@
           },
           "active": {
             "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantCode"
+            },
+            "description": "Live grants; empty unless the caller holds admin.members."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "TicketStatus": {
         "type": "object",
@@ -1180,7 +1268,8 @@
               "infected",
               "scanner_unavailable",
               "rejected"
-            ]
+            ],
+            "description": "pending | clean | infected | scan_error | scanner_unavailable | rejected"
           },
           "visibility": {
             "type": "string",
@@ -1197,7 +1286,7 @@
       },
       "ReportRun": {
         "type": "object",
-        "description": "Operational report run metadata. Official BI export is held. The artifact reference is not exposed.",
+        "description": "Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed.",
         "required": [
           "id",
           "reportType",
@@ -1206,7 +1295,18 @@
           "state",
           "generatedAt",
           "hasArtifact",
-          "createdAt"
+          "createdAt",
+          "basis",
+          "filters",
+          "downloadable",
+          "requestedBy",
+          "rowCount",
+          "artifactSha256",
+          "artifactBytes",
+          "expiresAt",
+          "expired",
+          "failureCode",
+          "fileName"
         ],
         "properties": {
           "id": {
@@ -1244,11 +1344,72 @@
             "format": "date-time"
           },
           "hasArtifact": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "The run produced an artifact (D02 meaning). Use downloadable for the download link."
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/ReportRunFilters"
+          },
+          "downloadable": {
+            "type": "boolean",
+            "description": "True while the stored CSV can be downloaded (D10 artifact, not expired)."
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/PersonRef"
+          },
+          "rowCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "artifactSha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the exact bytes served by the download."
+          },
+          "artifactBytes": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "failureCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "row_limit",
+              "internal",
+              null
+            ]
+          },
+          "fileName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -2298,6 +2459,7 @@
           "name",
           "view",
           "query",
+          "columns",
           "version",
           "createdAt",
           "updatedAt"
@@ -2321,6 +2483,16 @@
           },
           "query": {
             "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Shown optional columns in canonical order; all six when the view stores none."
           },
           "version": {
             "type": "integer",
@@ -2375,6 +2547,15 @@
           },
           "query": {
             "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400."
           }
         }
       },
@@ -2382,7 +2563,6 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "name",
           "version"
         ],
         "properties": {
@@ -2391,12 +2571,22 @@
             "minLength": 1,
             "maxLength": 60
           },
+          "columns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "$ref": "#/components/schemas/SavedViewColumn"
+            },
+            "description": "Allowlisted columns; duplicates are dropped and the order is canonicalised. Unknown or empty = 400."
+          },
           "version": {
             "type": "integer",
             "minimum": 1,
             "description": "The version the client saw; stale = 409."
           }
-        }
+        },
+        "description": "Rename and/or change the shown columns; at least one of name/columns (400 otherwise)."
       },
       "TicketJiraRequest": {
         "type": "object",
@@ -2546,7 +2736,9 @@
           "attempt",
           "reconciled",
           "updatedAt",
-          "mode"
+          "mode",
+          "autoAttempts",
+          "inFlight"
         ],
         "properties": {
           "id": {
@@ -2576,7 +2768,7 @@
               "failed",
               "unknown"
             ],
-            "description": "pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry)."
+            "description": "pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry). A pending row with nextAttemptAt had a transient failure (not delivered) and is retried automatically with backoff."
           },
           "attempt": {
             "type": "integer",
@@ -2612,6 +2804,23 @@
             "enum": [
               "simulation"
             ]
+          },
+          "nextAttemptAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Transient failure: when the worker tries again automatically."
+          },
+          "autoAttempts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Automatic attempts since the last manual retry (max 5, then failed)."
+          },
+          "inFlight": {
+            "type": "boolean",
+            "description": "An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown."
           }
         }
       },
@@ -2727,7 +2936,8 @@
             "enum": [
               "success",
               "failed",
-              "unknown"
+              "unknown",
+              "transient"
             ]
           },
           "version": {
@@ -2995,7 +3205,8 @@
             "enum": [
               "success",
               "failed",
-              "unknown"
+              "unknown",
+              "transient"
             ]
           },
           "version": {
@@ -3027,6 +3238,2202 @@
           "auditEventId": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "Labeled": {
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "TicketProperties": {
+        "type": "object",
+        "required": [
+          "subject",
+          "chronology",
+          "receivedAt",
+          "intakeChannel",
+          "priority",
+          "category",
+          "product",
+          "receivingUnit",
+          "region",
+          "merchant",
+          "transactionActivity",
+          "cause",
+          "foreignBranchReference"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "chronology": {
+            "type": "string"
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "intakeChannel": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "priority": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "category": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "receivingUnit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "region": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "merchant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Dummy CIF directory; not editable in D08a."
+          },
+          "transactionActivity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "foreignBranchReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "JiraLink": {
+        "type": "object",
+        "required": [
+          "issueKey",
+          "externalStatus",
+          "safeUrl"
+        ],
+        "description": "Simulated provider link; status is informational and never completes work.",
+        "properties": {
+          "issueKey": {
+            "type": "string"
+          },
+          "externalStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "safeUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RelatedWork": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "safeDescription",
+          "blocking",
+          "completionState",
+          "completionSummary",
+          "completionEvidence",
+          "requestedBy",
+          "completedBy",
+          "completedAt",
+          "jira",
+          "version",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "safeDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "blocking": {
+            "type": "boolean"
+          },
+          "completionState": {
+            "type": "string",
+            "enum": [
+              "open",
+              "completed"
+            ],
+            "description": "Local completion; independent of Jira status."
+          },
+          "completionSummary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completionEvidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestedBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "completedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "jira": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/JiraLink"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AttachmentMeta": {
+        "type": "object",
+        "required": [
+          "id",
+          "fileName",
+          "inspectedMime",
+          "sizeBytes",
+          "scanStatus",
+          "visibility",
+          "createdAt"
+        ],
+        "description": "Metadata of an attachment bound to the ticket (bound implies a clean scan). No object key, no URL.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "inspectedMime": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer"
+          },
+          "scanStatus": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResolutionEvent": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "cycleNo",
+          "summary",
+          "actor",
+          "at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "reopen"
+            ]
+          },
+          "cycleNo": {
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DetailCapabilities": {
+        "type": "object",
+        "required": [
+          "readOnly",
+          "editProperties",
+          "manageRelatedWork",
+          "addNote",
+          "uploadAttachment"
+        ],
+        "properties": {
+          "readOnly": {
+            "type": "boolean",
+            "description": "Closed archive; every write is refused (422)."
+          },
+          "editProperties": {
+            "type": "boolean"
+          },
+          "manageRelatedWork": {
+            "type": "boolean"
+          },
+          "addNote": {
+            "type": "boolean",
+            "description": "ticket.update and not closed."
+          },
+          "uploadAttachment": {
+            "type": "boolean",
+            "description": "attachment.upload and not closed."
+          }
+        }
+      },
+      "TicketDetail": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "properties",
+          "can",
+          "relatedWork",
+          "attachments",
+          "resolutions"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/TicketListItem"
+          },
+          "properties": {
+            "$ref": "#/components/schemas/TicketProperties"
+          },
+          "can": {
+            "$ref": "#/components/schemas/DetailCapabilities"
+          },
+          "relatedWork": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelatedWork"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentMeta"
+            },
+            "description": "Empty without attachment.read."
+          },
+          "resolutions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolutionEvent"
+            }
+          }
+        }
+      },
+      "TicketDetailMutation": {
+        "type": "object",
+        "required": [
+          "detail",
+          "auditEventId"
+        ],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null when nothing changed."
+          }
+        }
+      },
+      "TicketPropertiesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "description": "Only the fields present change; `null` clears a nullable field. A new catalog value must be active in this workspace (422 validation_failed otherwise).",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Ticket version the client saw; stale = 409."
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "chronology": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "priorityId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "categoryId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "productId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "receivingUnitId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "regionId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "transactionActivity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "cause": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "foreignBranchReference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 100
+          }
+        }
+      },
+      "ActivityItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "action",
+          "label",
+          "actor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "action": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string",
+            "description": "Server-built sentence from safe audit fields; never free text."
+          },
+          "actor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Labeled"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ActivityPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityItem"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RelatedWorkCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "blocking"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "safeDescription": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "blocking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RelatedWorkCompletionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "summary",
+          "evidence"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          }
+        }
+      },
+      "RelatedWorkCreated": {
+        "type": "object",
+        "required": [
+          "detail",
+          "relatedWorkId",
+          "replayed",
+          "auditEventId"
+        ],
+        "properties": {
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "relatedWorkId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "true = same Idempotency-Key and payload already accepted; nothing new written."
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null on replay."
+          }
+        }
+      },
+      "Note": {
+        "type": "object",
+        "required": [
+          "id",
+          "body",
+          "author",
+          "createdAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body": {
+            "type": "string"
+          },
+          "author": {
+            "$ref": "#/components/schemas/PersonRef"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NotePage": {
+        "type": "object",
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Note"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "NoteCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000,
+            "description": "Trimmed; 1..5000 characters."
+          }
+        }
+      },
+      "NoteCreated": {
+        "type": "object",
+        "required": [
+          "note",
+          "replayed",
+          "auditEventId"
+        ],
+        "properties": {
+          "note": {
+            "$ref": "#/components/schemas/Note"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "ConversationMessage": {
+        "type": "object",
+        "required": [
+          "id",
+          "direction",
+          "body",
+          "deliveryState",
+          "occurredAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "deliveryState": {
+            "type": "string",
+            "enum": [
+              "received",
+              "queued",
+              "sent",
+              "delivered",
+              "failed",
+              "unknown"
+            ]
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Conversation": {
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "channelLabel",
+          "externalThreadId",
+          "messages"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "channelLabel": {
+            "type": "string"
+          },
+          "externalThreadId": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessage"
+            }
+          }
+        }
+      },
+      "ConversationPanel": {
+        "type": "object",
+        "required": [
+          "adapterConfigured",
+          "conversations",
+          "truncated"
+        ],
+        "properties": {
+          "adapterConfigured": {
+            "type": "boolean",
+            "description": "No omnichannel adapter exists in this build: always false, nothing can be sent."
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Conversation"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AttachmentUploaded": {
+        "type": "object",
+        "required": [
+          "attachmentId",
+          "detail",
+          "auditEventId"
+        ],
+        "properties": {
+          "attachmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/TicketDetail"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SavedViewColumn": {
+        "type": "string",
+        "enum": [
+          "status",
+          "priority",
+          "owner",
+          "channel",
+          "received",
+          "updated"
+        ],
+        "description": "Optional List column. Number and title are always shown."
+      },
+      "Timezone": {
+        "type": "string",
+        "enum": [
+          "Asia/Jakarta",
+          "Asia/Makassar",
+          "Asia/Jayapura"
+        ]
+      },
+      "ProviderCode": {
+        "type": "string",
+        "enum": [
+          "jira",
+          "lark"
+        ]
+      },
+      "CatalogKind": {
+        "type": "string",
+        "enum": [
+          "priorities",
+          "categories",
+          "products",
+          "receiving-units",
+          "regions",
+          "intake-channels"
+        ]
+      },
+      "WorkspaceSettings": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "workspaceCode",
+          "workspaceName",
+          "timezone",
+          "companyId",
+          "companyCode",
+          "companyName",
+          "reporterCode",
+          "active",
+          "version",
+          "memberCount"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceCode": {
+            "type": "string"
+          },
+          "workspaceName": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "companyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "companyCode": {
+            "type": "string"
+          },
+          "companyName": {
+            "type": "string"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SettingsBody": {
+        "type": "object",
+        "required": [
+          "settings",
+          "canEdit",
+          "timezones"
+        ],
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/WorkspaceSettings"
+          },
+          "canEdit": {
+            "type": "boolean"
+          },
+          "timezones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Timezone"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SettingsPatchRequest": {
+        "type": "object",
+        "required": [
+          "workspaceName",
+          "companyName",
+          "timezone",
+          "version"
+        ],
+        "properties": {
+          "workspaceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "companyName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "timezone": {
+            "$ref": "#/components/schemas/Timezone"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SettingsResult": {
+        "type": "object",
+        "required": [
+          "settings",
+          "auditEventId"
+        ],
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/WorkspaceSettings"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanyList": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceSettings"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanyCreateRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "timezone"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{2,10}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "timezone": {
+            "$ref": "#/components/schemas/Timezone"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanyActivationRequest": {
+        "type": "object",
+        "required": [
+          "active",
+          "version"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanyResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/WorkspaceSettings"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "label",
+          "active",
+          "sortOrder",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogEditor": {
+        "type": "object",
+        "required": [
+          "kind",
+          "items",
+          "canEdit"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CatalogKind"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CatalogEntry"
+            }
+          },
+          "canEdit": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogCreateRequest": {
+        "type": "object",
+        "required": [
+          "code",
+          "label",
+          "sortOrder"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,40}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogPatchRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "active",
+          "sortOrder",
+          "version"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9999
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CatalogEntryResult": {
+        "type": "object",
+        "required": [
+          "kind",
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CatalogKind"
+          },
+          "item": {
+            "$ref": "#/components/schemas/CatalogEntry"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemberList": {
+        "type": "object",
+        "required": [
+          "items",
+          "myMembershipId",
+          "canManage",
+          "grantable"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            }
+          },
+          "myMembershipId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "canManage": {
+            "type": "boolean"
+          },
+          "grantable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GrantCode"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemberCreateRequest": {
+        "type": "object",
+        "required": [
+          "subject",
+          "role"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Exact account subject; unknown → 422 (no enumeration)."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemberPatchRequest": {
+        "type": "object",
+        "required": [
+          "role",
+          "active",
+          "version"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "GrantChangeRequest": {
+        "type": "object",
+        "required": [
+          "grantCode",
+          "version"
+        ],
+        "properties": {
+          "grantCode": {
+            "$ref": "#/components/schemas/GrantCode"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemberResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/Member"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationLogEntry": {
+        "type": "object",
+        "required": [
+          "action",
+          "outcome",
+          "occurredAt",
+          "actor"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationConnection": {
+        "type": "object",
+        "required": [
+          "id",
+          "provider",
+          "displayName",
+          "mode",
+          "state",
+          "testedAt",
+          "lastTestNote",
+          "simulatedOutcome",
+          "version",
+          "directoryCount",
+          "credential",
+          "mapping",
+          "recent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/ProviderCode"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "simulation"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "tested",
+              "active",
+              "disabled"
+            ]
+          },
+          "testedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastTestNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "simulatedOutcome": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "directoryCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credential": {
+            "type": "string",
+            "enum": [
+              "not_available"
+            ]
+          },
+          "mapping": {
+            "type": "string",
+            "enum": [
+              "not_available"
+            ]
+          },
+          "recent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationLogEntry"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationList": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "items",
+          "creatable",
+          "canManageCredentials"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationConnection"
+            }
+          },
+          "creatable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCode"
+            }
+          },
+          "canManageCredentials": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationCreateRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "displayName"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/ProviderCode"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationPatchRequest": {
+        "type": "object",
+        "required": [
+          "displayName",
+          "version"
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "VersionRequest": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "IntegrationResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationConnection"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReportBasis": {
+        "type": "string",
+        "enum": [
+          "received",
+          "resolved"
+        ],
+        "description": "`received`: received_at in the period. `resolved`: at least one resolve event in the period (a later reopen keeps it)."
+      },
+      "ReportTypeOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label",
+          "available",
+          "reason"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "operational",
+              "bi_regulator"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportHeader": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Company header from the database (one workspace = one reporting company). Never taken from the client.",
+        "required": [
+          "companyName",
+          "companyCode",
+          "reporterCode",
+          "workspaceId",
+          "workspaceCode",
+          "timezone",
+          "periodStart",
+          "periodEnd",
+          "startAt",
+          "endAt",
+          "basis",
+          "basisLabel"
+        ],
+        "properties": {
+          "companyName": {
+            "type": "string"
+          },
+          "companyCode": {
+            "type": "string"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "null until configured; never guessed."
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceCode": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "examples": [
+              "Asia/Jakarta"
+            ]
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date"
+          },
+          "startAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive, UTC."
+          },
+          "endAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive, UTC (local midnight after periodEnd)."
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "basisLabel": {
+            "type": "string"
+          }
+        }
+      },
+      "ReportAppliedFilters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "owner",
+          "channel",
+          "category",
+          "priority"
+        ],
+        "properties": {
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportTotals": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tickets",
+          "resolutionCycles",
+          "resolvedTickets",
+          "unassigned",
+          "missingChannel",
+          "missingCategory",
+          "missingPriority"
+        ],
+        "properties": {
+          "tickets": {
+            "type": "integer",
+            "description": "Unique tickets in the report = rows of the export."
+          },
+          "resolutionCycles": {
+            "type": "integer",
+            "description": "Resolve events in the period among those tickets (never added to tickets)."
+          },
+          "resolvedTickets": {
+            "type": "integer",
+            "description": "Distinct tickets with at least one resolve event in the period."
+          },
+          "unassigned": {
+            "type": "integer"
+          },
+          "missingChannel": {
+            "type": "integer"
+          },
+          "missingCategory": {
+            "type": "integer"
+          },
+          "missingPriority": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportStatusCount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "count"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportBreakdown": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "label",
+          "count"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "null = not recorded / belum ditugaskan."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportValidationItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "level",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "regulator_mapping_unavailable",
+              "reporter_code_missing",
+              "missing_priority",
+              "missing_category",
+              "missing_channel",
+              "unassigned",
+              "row_limit"
+            ]
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "blocking"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportRow": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ticketId",
+          "displayNumber",
+          "subject",
+          "status",
+          "priority",
+          "category",
+          "channel",
+          "owner",
+          "receivedLocal",
+          "resolutionCycles",
+          "lastResolvedLocal"
+        ],
+        "properties": {
+          "ticketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayNumber": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TicketStatus"
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PIC display name; null = belum ditugaskan."
+          },
+          "receivedLocal": {
+            "type": "string",
+            "description": "Workspace local time, YYYY-MM-DD HH:MM."
+          },
+          "resolutionCycles": {
+            "type": "integer"
+          },
+          "lastResolvedLocal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One REPEATABLE READ snapshot: totals, breakdowns and rows read the same SQL source as the export. Rows are the first previewLimit in export order; totals cover every row.",
+        "required": [
+          "reportType",
+          "reportLabel",
+          "reportTypes",
+          "header",
+          "asOf",
+          "filters",
+          "filterOptions",
+          "totals",
+          "byStatus",
+          "byPriority",
+          "byChannel",
+          "byCategory",
+          "byOwner",
+          "validation",
+          "rows",
+          "previewLimit",
+          "exportMaxRows",
+          "exportable",
+          "notice"
+        ],
+        "properties": {
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "operational"
+            ]
+          },
+          "reportLabel": {
+            "type": "string"
+          },
+          "reportTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportTypeOption"
+            }
+          },
+          "header": {
+            "$ref": "#/components/schemas/ReportHeader"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/ReportAppliedFilters"
+          },
+          "filterOptions": {
+            "$ref": "#/components/schemas/DashboardFilterOptions"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/ReportTotals"
+          },
+          "byStatus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportStatusCount"
+            }
+          },
+          "byPriority": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byChannel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byCategory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "byOwner": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakdown"
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportValidationItem"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportRow"
+            }
+          },
+          "previewLimit": {
+            "type": "integer"
+          },
+          "exportMaxRows": {
+            "type": "integer"
+          },
+          "exportable": {
+            "type": "boolean"
+          },
+          "notice": {
+            "type": "string"
+          }
+        }
+      },
+      "ReportExportRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reportType",
+          "periodStart",
+          "periodEnd"
+        ],
+        "properties": {
+          "reportType": {
+            "type": "string",
+            "enum": [
+              "operational",
+              "bi_regulator"
+            ],
+            "description": "`bi_regulator` answers 422 regulator_mapping_unavailable."
+          },
+          "periodStart": {
+            "type": "string",
+            "format": "date"
+          },
+          "periodEnd": {
+            "type": "string",
+            "format": "date",
+            "description": "Inclusive; >= periodStart; at most 366 days."
+          },
+          "basis": {
+            "$ref": "#/components/schemas/ReportBasis"
+          },
+          "status": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": "string",
+            "description": "Member UUID or `unassigned`."
+          },
+          "channel": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "category": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "priority": {
+            "type": "string",
+            "description": "UUID or `none`."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          }
+        }
+      },
+      "ReportRunFilters": {
+        "type": "object",
+        "description": "Validated filters of the run (null = not filtered). Empty object for runs created before D10.",
+        "properties": {
+          "status": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TicketStatusCode"
+            }
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportRunList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "limit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportRun"
+            }
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "ReportExportResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run",
+          "replayed"
+        ],
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/ReportRun"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CsrfIssued": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "csrfToken"
+        ],
+        "properties": {
+          "csrfToken": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43
           }
         }
       }
@@ -3121,6 +5528,105 @@
             }
           }
         }
+      },
+      "DependencyUnavailable": {
+        "description": "A dependency (storage, upload slots) is not available (dependency_unavailable); nothing bound",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentTooLarge": {
+        "description": "File is larger than the configured cap (attachment_too_large)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentTypeRefused": {
+        "description": "Server-side sniffing found a type other than PDF/PNG/JPEG (attachment_type_refused)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "AttachmentRejected": {
+        "description": "rule_violation (closed ticket) or attachment_infected (scanner verdict; file deleted, not bound)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ScanFailed": {
+        "description": "clamd reached but gave no verdict (scan_failed); file deleted, not bound",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ScannerUnavailable": {
+        "description": "scanner_unavailable (clamd not configured/unreachable, file deleted, not bound) or dependency_unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RegulatorMappingUnavailable": {
+        "description": "Official BI / regulator report requested: held until a verified mapping exists (regulator_mapping_unavailable). Nothing is created.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ReportExpired": {
+        "description": "The report artifact expired (report_expired); create a new export.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "rate_limited: too many requests for this user (reads and writes counted separately) or, without a session, for this client address. Nothing was processed. Limits are per server process. Clients must not retry mutations automatically.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until the next request is accepted.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     }
   },
@@ -3159,6 +5665,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -3212,6 +5721,9 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3272,6 +5784,9 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -3304,6 +5819,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3475,6 +5993,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -3544,6 +6065,9 @@
           },
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3707,6 +6231,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3768,6 +6295,9 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3829,6 +6359,9 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3869,6 +6402,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3908,6 +6444,9 @@
           "413": {
             "description": "Body too large"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "description": "uat_not_available",
             "content": {
@@ -3942,6 +6481,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthenticated"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -3962,6 +6504,47 @@
           },
           "403": {
             "$ref": "#/components/responses/CsrfFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/session/csrf": {
+      "post": {
+        "operationId": "refreshCsrf",
+        "description": "D11. Re-issues the CSRF synchronizer token of the current session (a reloaded tab keeps the HttpOnly cookie but lost the in-memory token). Requires the session cookie and header `X-ITSM-CSRF-Refresh: 1`; when the browser sends `Sec-Fetch-Site` it must be `same-origin`. Rotates the token: the previous token of this session stops working. Sets no cookie.",
+        "parameters": [
+          {
+            "name": "X-ITSM-CSRF-Refresh",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New CSRF token (shown once; only its digest is stored)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CsrfIssued"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -3998,6 +6581,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthenticated"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4031,6 +6617,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4054,18 +6643,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "items"
-                  ],
-                  "properties": {
-                    "items": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/Member"
-                      }
-                    }
-                  }
+                  "$ref": "#/components/schemas/MemberList"
                 }
               }
             }
@@ -4078,6 +6656,67 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addWorkspaceMember",
+        "summary": "Add member by exact account subject (admin.members)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4114,6 +6753,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthenticated"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4140,6 +6782,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthenticated"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4173,6 +6818,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4221,6 +6869,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4257,6 +6908,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4296,6 +6950,71 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateTicketProperties",
+        "summary": "Edit ticket properties (D08)",
+        "description": "ticket.update. Closed archive = 422 before the version check; stale `version` = 409 and nothing changes. A field error answers 422 validation_failed with the field name. Update, version bump and audit (field names only, never values) commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketPropertiesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh detail and the audit entry (null when nothing changed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetailMutation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4338,6 +7057,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4377,8 +7099,13 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "summary": "Report run metadata",
+        "description": "report.view, this workspace only."
       }
     },
     "/api/v1/workspaces/{workspace_id}/dashboard": {
@@ -4462,6 +7189,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4502,6 +7232,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4542,6 +7275,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4579,6 +7315,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4637,6 +7376,9 @@
           },
           "409": {
             "$ref": "#/components/responses/VersionConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4698,6 +7440,9 @@
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -4758,6 +7503,1882 @@
           },
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/detail": {
+      "get": {
+        "operationId": "getTicketDetail",
+        "summary": "Ticket detail (D08)",
+        "description": "ticket.read. One read-only snapshot: header (list projection with allowed actions), labelled properties, related work, bound attachment metadata (attachment.read) and resolution history. Another workspace's ticket = 404.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ticket detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/activity": {
+      "get": {
+        "operationId": "listTicketActivity",
+        "summary": "Ticket activity log (D08)",
+        "description": "ticket.read. Successful audit entries of this ticket, newest first, keyset-paginated. Labels are server-built from safe audit fields only.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Activity page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivityPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work": {
+      "post": {
+        "operationId": "createRelatedWork",
+        "summary": "Add related work (D08)",
+        "description": "related_work.manage. Requires Idempotency-Key (scoped to user + workspace): same key + same payload replays (200, replayed=true, nothing written); same key + different payload = 409. Refused (422) on a closed or resolved ticket. Row and audit commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelatedWorkCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay of an earlier create",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedWorkCreated"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedWorkCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/related-work/{related_work_id}/completion": {
+      "post": {
+        "operationId": "completeRelatedWork",
+        "summary": "Complete related work locally (D08)",
+        "description": "related_work.manage. Needs summary and evidence from a person; Jira status never completes work. Stale related-work `version` = 409; already completed or closed ticket = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/RelatedWorkId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelatedWorkCompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fresh detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketDetailMutation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/notes": {
+      "get": {
+        "operationId": "listTicketNotes",
+        "summary": "Operational follow-up notes (D08b)",
+        "description": "ticket.read. Newest first; cursor `createdAt~id`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTicketNote",
+        "summary": "Add an operational note (D08b)",
+        "description": "ticket.update. A handling record, not team chat. Idempotent per user + workspace + Idempotency-Key (replay 200, different payload 409). Allowed on resolved, refused on closed (422). Audit stores the note id only.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NoteCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteCreated"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/conversations": {
+      "get": {
+        "operationId": "getTicketConversations",
+        "summary": "Customer conversation panel, read only (D08b)",
+        "description": "ticket.read. No adapter in this build (adapterConfigured=false); only labelled simulation rows can exist. No send operation.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Panel",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPanel"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments": {
+      "post": {
+        "operationId": "uploadTicketAttachment",
+        "summary": "Upload an attachment: quarantine → scan → bind (D08b)",
+        "description": "attachment.upload. Raw file body (any Content-Type; the server sniffs PDF/PNG/JPEG). File name in X-File-Name, percent-encoded UTF-8. Bound to the ticket only after an explicit clean clamd verdict; infected/scan error/scanner unavailable are recorded, audited as failed, the bytes deleted, and nothing is bound. Closed ticket = 422.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "public"
+              ],
+              "default": "internal"
+            }
+          },
+          {
+            "name": "X-File-Name",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 3060
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Clean and bound",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentUploaded"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/AttachmentTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/AttachmentTypeRefused"
+          },
+          "422": {
+            "$ref": "#/components/responses/AttachmentRejected"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ScanFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/ScannerUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments/{attachment_id}/content": {
+      "get": {
+        "operationId": "downloadTicketAttachment",
+        "summary": "Download a bound clean attachment (D08b)",
+        "description": "ticket.read + attachment.read, checked at request time. Only clean, bound files of this ticket; hash verified before sending. Content-Disposition attachment, CSP sandbox. Audited.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          },
+          {
+            "$ref": "#/components/parameters/AttachmentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File bytes",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/settings": {
+      "get": {
+        "operationId": "getWorkspaceSettings",
+        "summary": "Workspace & company settings (C24)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWorkspaceSettings",
+        "summary": "Update settings (admin.settings grant)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated (auditEventId null when nothing changed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/companies": {
+      "get": {
+        "operationId": "listCompanies",
+        "summary": "All companies (UAT superadmin only)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCompany",
+        "summary": "Create company + workspace (UAT superadmin only; no memberships)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/companies/{company_id}": {
+      "patch": {
+        "operationId": "setCompanyActive",
+        "summary": "Activate/deactivate a company (UAT superadmin only)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyActivationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
+      "get": {
+        "operationId": "listCatalogEntries",
+        "summary": "Catalog editor entries incl. inactive",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/CatalogKind"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogEditor"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createCatalogEntry",
+        "summary": "Add catalog entry (admin.settings; priorities fixed → 422)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/CatalogKind"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogEntryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/catalogs/{kind}/{item_id}": {
+      "patch": {
+        "operationId": "updateCatalogEntry",
+        "summary": "Edit/deactivate catalog entry (no hard delete)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/CatalogKind"
+          },
+          {
+            "$ref": "#/components/parameters/CatalogItemId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated (auditEventId null when nothing changed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogEntryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}": {
+      "patch": {
+        "operationId": "updateWorkspaceMember",
+        "summary": "Change role/active (admin.members; not self; deactivation revokes grants)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/MembershipId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemberPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants": {
+      "post": {
+        "operationId": "addMemberGrant",
+        "summary": "Grant a code the caller holds (admin.members; not self)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/MembershipId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantChangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Granted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/members/{membership_id}/grants/revoke": {
+      "post": {
+        "operationId": "revokeMemberGrant",
+        "summary": "Revoke a live grant (admin.members; not self)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/MembershipId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantChangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations": {
+      "get": {
+        "operationId": "listIntegrations",
+        "summary": "Simulated connections (integration.manage)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connections",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createIntegration",
+        "summary": "Save a simulated connection as draft",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}": {
+      "patch": {
+        "operationId": "updateIntegration",
+        "summary": "Save connection name",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test": {
+      "post": {
+        "operationId": "testIntegration",
+        "summary": "Simulated test (no provider contacted)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/activate": {
+      "post": {
+        "operationId": "activateIntegration",
+        "summary": "Activate a tested connection",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable": {
+      "post": {
+        "operationId": "disableIntegration",
+        "summary": "Disable a connection",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/reports/preview": {
+      "get": {
+        "operationId": "previewReport",
+        "summary": "Operational report preview over the whole scope (D10)",
+        "description": "report.view (CS, Lead CS). Same SQL source as the export. Filter values must belong to this workspace (422 + field).",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "periodStart",
+            "in": "query",
+            "required": true,
+            "description": "First local day (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "periodEnd",
+            "in": "query",
+            "required": true,
+            "description": "Last local day, inclusive; at most 366 days.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "reportType",
+            "in": "query",
+            "required": false,
+            "description": "`operational` (default). `bi_regulator` = 422 regulator_mapping_unavailable.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "operational",
+                "bi_regulator"
+              ]
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "description": "Date basis.",
+            "schema": {
+              "$ref": "#/components/schemas/ReportBasis"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Comma-separated TicketStatusCode values; absent = all.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "owner",
+            "in": "query",
+            "required": false,
+            "description": "Member UUID or `unassigned`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "channel",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "priority",
+            "in": "query",
+            "required": false,
+            "description": "UUID or `none`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "description": "validation_failed (+ field) or regulator_mapping_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs": {
+      "get": {
+        "operationId": "listReportRuns",
+        "summary": "Latest report runs of this workspace (D10)",
+        "description": "report.view. Newest first, at most `limit`.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportRunList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createReportRun",
+        "summary": "Export the operational report as CSV (D10)",
+        "description": "report.view (decision Arka D11, 2 Nov 2026: the scoped OPERATIONAL export keeps report.view from the D01 catalog; no new permission without a contract need; not BI or platform access; the export rows are exactly the preview rows of the same filter in this workspace, never wider). Synchronous: the run is succeeded with a stored artifact, or failed with failureCode row_limit when rows exceed exportMaxRows (never truncated). Audited (report.export).",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ReportIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportExportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Replay (replayed=true)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportExportResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Run created (succeeded or failed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportExportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "422": {
+            "description": "validation_failed (+ field) or regulator_mapping_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/report-runs/{report_run_id}/content": {
+      "get": {
+        "operationId": "downloadReportRun",
+        "summary": "Download the CSV of a succeeded run (D10)",
+        "description": "Membership + report.view re-checked on every request; workspace-scoped; hash verified before sending; expired = 410. UTF-8 with BOM, CRLF, every cell quoted, formula-leading cells prefixed with '. Audited (report.download). Headers: Content-Disposition attachment, X-Content-SHA256, Cache-Control no-store, CSP sandbox.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ReportRunId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV bytes",
+            "headers": {
+              "X-Content-SHA256": {
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "$ref": "#/components/responses/ReportExpired"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }

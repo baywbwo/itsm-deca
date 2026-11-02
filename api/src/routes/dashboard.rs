@@ -730,6 +730,33 @@ fn catalog_options_sql(table: &str) -> String {
     )
 }
 
+/// Owners and catalog values the caller may filter by, all scoped to `wid` (shared by the
+/// dashboard and the reports, D10).
+pub(crate) async fn filter_options(
+    conn: &mut sqlx::PgConnection,
+    wid: Uuid,
+) -> Result<FilterOptions, AppError> {
+    let owners: Vec<FilterOption> = sqlx::query_as(OWNER_OPTIONS_SQL)
+        .bind(wid)
+        .fetch_all(&mut *conn)
+        .await?;
+    let mut catalogs = Vec::with_capacity(3);
+    for table in ["intake_channels", "categories", "priorities"] {
+        let rows: Vec<FilterOption> = sqlx::query_as(&catalog_options_sql(table))
+            .bind(wid)
+            .fetch_all(&mut *conn)
+            .await?;
+        catalogs.push(rows);
+    }
+    let mut catalogs = catalogs.into_iter();
+    Ok(FilterOptions {
+        owners,
+        channels: catalogs.next().unwrap_or_default(),
+        categories: catalogs.next().unwrap_or_default(),
+        priorities: catalogs.next().unwrap_or_default(),
+    })
+}
+
 // ---------- handler ----------
 
 pub async fn get(
@@ -842,26 +869,8 @@ pub async fn load(
     .bind(&attention_codes)
     .fetch_all(&mut *tx)
     .await?;
-    let owners: Vec<FilterOption> = sqlx::query_as(OWNER_OPTIONS_SQL)
-        .bind(wid)
-        .fetch_all(&mut *tx)
-        .await?;
-    let mut catalogs = Vec::with_capacity(3);
-    for table in ["intake_channels", "categories", "priorities"] {
-        let rows: Vec<FilterOption> = sqlx::query_as(&catalog_options_sql(table))
-            .bind(wid)
-            .fetch_all(&mut *tx)
-            .await?;
-        catalogs.push(rows);
-    }
+    let filter_options = filter_options(&mut tx, wid).await?;
     tx.commit().await?;
-    let mut catalogs = catalogs.into_iter();
-    let filter_options = FilterOptions {
-        owners,
-        channels: catalogs.next().unwrap_or_default(),
-        categories: catalogs.next().unwrap_or_default(),
-        priorities: catalogs.next().unwrap_or_default(),
-    };
 
     // Every status code in the table must be known; an unknown one is a server fault.
     if by_status

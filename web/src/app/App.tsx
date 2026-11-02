@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import logoUrl from '../assets/logo-qash.svg';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
@@ -9,12 +9,16 @@ import { Icon } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { ComponentsPage } from '../pages/ComponentsPage';
 import { DashboardPage } from '../pages/DashboardPage';
+import { IntegrationsPage } from '../pages/IntegrationsPage';
+import { ReportsPage } from '../pages/ReportsPage';
 import { PlannedPage } from '../pages/PlannedPage';
+import { SettingsPage } from '../pages/SettingsPage';
 import { TicketsPage } from '../pages/TicketsPage';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
 import { allowedPages, leavesScope, pageDef, parseHash, toHash, type PageDef, type PageId } from './routes';
+import { freshest } from './workspaces';
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
@@ -45,7 +49,7 @@ export function App({ api }: { api: Api }) {
   return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry} />;
 }
 
-function Shell({ api, meta, session, workspaces, onReenter }: {
+function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
   api: Api;
   meta: Meta;
   session: Session;
@@ -61,6 +65,12 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
   // The workspace <select> that started a guarded switch: Cancel returns focus to it.
   const switchOrigin = useRef<HTMLElement | null>(null);
   const pendingNav = usePendingNav();
+  // The switcher list; refreshed after a settings save so a rename or a new company shows
+  // without a reload. A failed refresh keeps the previous list (the save itself succeeded).
+  const [workspaces, setWorkspaces] = useState(bootWorkspaces);
+  const refreshWorkspaces = useCallback(() => {
+    api.listWorkspaces().then(setWorkspaces, () => undefined);
+  }, [api]);
   const first = workspaces[0];
 
   // No workspace in the URL: open the first one the server lists.
@@ -189,9 +199,10 @@ function Shell({ api, meta, session, workspaces, onReenter }: {
             </div>
           )}
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
-            query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null}
-            onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} />
-          <div className="footer">ITSM Qash · kandidat D07r (intake &amp; PIC tiket) · data dummy UAT</div>
+            query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
+            onWorkspacesChanged={refreshWorkspaces}
+            onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
+          <div className="footer">ITSM Qash · kandidat D11 (rilis develop) · data dummy UAT</div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -254,7 +265,7 @@ function Profile({ session }: { session: Session }) {
   );
 }
 
-function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, onRetry, onReenter }: {
+function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, listed, onWorkspacesChanged, onRetry, onReenter, onNotice }: {
   api: Api;
   userId: string;
   scope: ReturnType<typeof useScope>;
@@ -263,8 +274,11 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
   query: string;
   uat: boolean;
   firstWorkspace: Workspace | null;
+  listed: Workspace | null;
+  onWorkspacesChanged: () => void;
   onRetry: () => void;
   onReenter: () => void;
+  onNotice: (text: string) => void;
 }) {
   if (scope.status === 'idle') {
     return <NotFoundState />;
@@ -294,16 +308,28 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
     );
   }
   if (!pages.some((p) => p.id === page.id)) return <ForbiddenState />;
-  return <Page id={page.id} api={api} userId={userId} data={scope.data} query={query} uat={uat} />;
+  const data = { ...scope.data, workspace: freshest(scope.data.workspace, listed) };
+  return <Page id={page.id} api={api} userId={userId} data={data} query={query} uat={uat} onNotice={onNotice}
+    onWorkspacesChanged={onWorkspacesChanged} />;
 }
 
-function Page({ id, api, userId, data, query, uat }: { id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean }) {
+function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged }: {
+  id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
+  onWorkspacesChanged: () => void;
+}) {
   switch (id) {
     case 'dashboard':
       return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
     case 'tickets':
       return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
+    case 'settings':
+      return <SettingsPage api={api} workspace={data.workspace} uat={uat} permissions={data.permissions.permissions} onNotice={onNotice}
+        onWorkspacesChanged={onWorkspacesChanged} />;
+    case 'reports':
+      return <ReportsPage api={api} workspace={data.workspace} uat={uat} query={query} onNotice={onNotice} />;
+    case 'integrations':
+      return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'components':
       return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:

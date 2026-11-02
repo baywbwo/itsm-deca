@@ -1,8 +1,25 @@
 import {
+  isActivityPage,
+  isAttachmentUploaded,
+  isConversationPanel,
+  isNoteCreated,
+  isNotePage,
+  isRelatedWorkCreated,
+  isTicketDetail,
+  isTicketDetailMutation,
   isCatalogs,
   isDashboard,
   isErrorBody,
   isMemberList,
+  isMemberResult,
+  isSettingsBody,
+  isSettingsResult,
+  isCompanyList,
+  isCompanyResult,
+  isCatalogEditor,
+  isCatalogEntryResult,
+  isIntegrationList,
+  isIntegrationResult,
   isEmpty,
   isAssignmentHistory,
   isIntakeDirectory,
@@ -14,14 +31,31 @@ import {
   isSavedView,
   isSavedViewList,
   isSessionIssued,
+  isCsrfIssued,
   isTicketBoard,
   isTicketList,
   isTicketMutationResult,
   isWorkspace,
   isWorkspaceList,
+  isReportPreview,
+  isReportRunList,
+  isReportRun,
+  isReportExportResult,
   isWorkspacePermissions,
 } from './guards';
 import type {
+  ActivityPage,
+  AttachmentUploaded,
+  ConversationPanel,
+  NoteCreateRequest,
+  NoteCreated,
+  NotePage,
+  RelatedWorkCreated,
+  RelatedWorkCompletionRequest,
+  RelatedWorkCreateRequest,
+  TicketDetail,
+  TicketDetailMutation,
+  TicketPropertiesRequest,
   ApiErrorCode,
   AssignmentHistory,
   IntakeDirectory,
@@ -35,6 +69,28 @@ import type {
   Dashboard,
   DashboardPeriodKey,
   Member,
+  MemberList,
+  MemberCreateRequest,
+  MemberPatchRequest,
+  GrantChangeRequest,
+  MemberResult,
+  SettingsBody,
+  SettingsPatchRequest,
+  SettingsResult,
+  CompanyList,
+  CompanyCreateRequest,
+  CompanyActivationRequest,
+  CompanyResult,
+  CatalogKind,
+  CatalogEditor,
+  CatalogCreateRequest,
+  CatalogPatchRequest,
+  CatalogEntryResult,
+  IntegrationList,
+  IntegrationCreateRequest,
+  IntegrationPatchRequest,
+  IntegrationResult,
+  VersionRequest,
   Meta,
   SavedView,
   SavedViewCreateRequest,
@@ -45,6 +101,11 @@ import type {
   TicketList,
   TicketMutationResult,
   TicketTransitionRequest,
+  ReportPreview,
+  ReportRun,
+  ReportRunList,
+  ReportExportRequest,
+  ReportExportResult,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -56,6 +117,8 @@ export interface TransportRequest {
   signal?: AbortSignal | undefined;
   /** JSON request body (sent as application/json). */
   body?: unknown;
+  /** Raw file body (attachment upload, application/octet-stream); excludes `body`. */
+  file?: Blob;
 }
 export interface TransportResponse {
   status: number;
@@ -73,16 +136,29 @@ export class ApiError extends Error {
     readonly requestId: string | null = null,
     /** validation_failed only: the request field to fix. */
     readonly field: string | null = null,
+    /** rate_limited only: seconds until the server accepts the next request (Retry-After). */
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
+/**
+ * 429 copy: when to try again. A rate-limited request was not processed, so the caller keeps the
+ * input and leaves the retry to the person (mutations are never re-sent automatically).
+ */
+export function rateLimitText(e: ApiError): string {
+  const n = e.retryAfterSeconds;
+  return n !== null && n > 0
+    ? `Terlalu banyak permintaan dalam waktu singkat. Coba lagi dalam ${n} detik.`
+    : 'Terlalu banyak permintaan dalam waktu singkat. Coba lagi sebentar lagi.';
+}
+
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 /** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */
-export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload }) => {
+export const fetchTransport: Transport = async ({ method, path, headers, signal, body: payload, file }) => {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -90,9 +166,11 @@ export const fetchTransport: Transport = async ({ method, path, headers, signal,
       headers: {
         Accept: 'application/json',
         ...(payload === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(file === undefined ? {} : { 'Content-Type': 'application/octet-stream' }),
         ...headers,
       },
       ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      ...(file === undefined ? {} : { body: file }),
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal ?? null,
@@ -113,20 +191,71 @@ export const fetchTransport: Transport = async ({ method, path, headers, signal,
   return { status: res.status, body, requestId: res.headers.get('x-request-id') };
 };
 
+/** Rejects with an AbortError as soon as `signal` aborts, without cancelling the shared work. */
+function untilAbort<T>(p: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return p;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new DOMException('Aborted', 'AbortError'));
+    if (signal.aborted) return abort();
+    signal.addEventListener('abort', abort, { once: true });
+    p.then(
+      (v) => { signal.removeEventListener('abort', abort); resolve(v); },
+      (e: unknown) => { signal.removeEventListener('abort', abort); reject(e instanceof Error ? e : new Error(String(e))); },
+    );
+  });
+}
+
 type Guard<T> = (v: unknown) => v is T;
 
 export function createApi(transport: Transport) {
   // CSRF synchronizer token: memory only (never storage), returned once at entry.
+  // D11: a reloaded tab keeps the HttpOnly cookie but not this token; it is re-issued from the
+  // session (same origin, custom header) before the first unsafe request, and once more if the
+  // server refuses it (another tab of the same session rotated it). A CSRF refusal happens before
+  // any handler runs, so the single retry cannot apply a change twice.
+  // A 429 is returned to the caller as is: never re-sent here (a person decides when to retry).
   let csrfToken: string | null = null;
+  let refreshing: Promise<string> | null = null;
+
+  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf']);
+
+  // Shared by concurrent callers; each caller still stops at its own abort or timeout.
+  function refreshCsrf(signal?: AbortSignal): Promise<string> {
+    refreshing ??= (async () => {
+      const res = await transport({
+        method: 'POST', path: '/api/v1/session/csrf', headers: { 'X-ITSM-CSRF-Refresh': '1' },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (res.status !== 200 || !isCsrfIssued(res.body)) {
+        const wait = isErrorBody(res.body) ? (res.body.error as { retryAfterSeconds?: unknown }).retryAfterSeconds : null;
+        throw isErrorBody(res.body)
+          ? new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId, null,
+            typeof wait === 'number' && Number.isFinite(wait) ? wait : null)
+          : new ApiError(res.status, 'internal', 'Terjadi kesalahan pada server.', res.requestId);
+      }
+      csrfToken = res.body.csrfToken;
+      return csrfToken;
+    })().finally(() => { refreshing = null; });
+    return untilAbort(refreshing, signal);
+  }
+
+  async function send(req: TransportRequest): Promise<TransportResponse> {
+    if (req.method === 'GET' || CSRF_EXEMPT.has(req.path)) return transport(req);
+    const withToken = (t: string) => ({ ...req, headers: { ...req.headers, 'X-CSRF-Token': t } });
+    const res = await transport(withToken(csrfToken ?? (await refreshCsrf(req.signal))));
+    const refused = res.status === 403 && isErrorBody(res.body) && res.body.error.code === 'csrf_failed';
+    return refused ? transport(withToken(await refreshCsrf(req.signal))) : res;
+  }
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
-    const res = await transport(req);
+    const res = await send(req);
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
-      const field = (res.body.error as { field?: unknown }).field;
+      const { field, retryAfterSeconds: wait } = res.body.error as { field?: unknown; retryAfterSeconds?: unknown };
       throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
-        typeof field === 'string' ? field : null);
+        typeof field === 'string' ? field : null,
+        typeof wait === 'number' && Number.isFinite(wait) ? wait : null);
     }
     if (okStatus) {
       throw new ApiError(0, 'bad_response', 'Respons server tidak sesuai kontrak.', res.requestId);
@@ -241,6 +370,116 @@ export function createApi(transport: Transport) {
         method: 'POST', path: `${ws(id)}/integration-outbox/${encodeURIComponent(outboxId)}/reconcile`,
         headers: csrf(), body,
       }, isOutboxRecoveryResult),
+    /** D08a: one ticket with its properties, related work, attachment metadata and resolutions. */
+    getTicketDetail: (id: string, ticketId: string, signal?: AbortSignal): Promise<TicketDetail> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/detail`, isTicketDetail, signal),
+    /** Safe activity labels from the audit log, newest first; `cursor` continues the same ticket. */
+    listTicketActivity: (id: string, ticketId: string, cursor: string | null, signal?: AbortSignal): Promise<ActivityPage> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/activity${withParam('', 'cursor', cursor)}`, isActivityPage, signal),
+    /** Only the fields sent change; `null` clears. The version guards a concurrent edit (409). */
+    updateTicketProperties: (id: string, ticketId: string, body: TicketPropertiesRequest): Promise<TicketDetailMutation> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}`, headers: csrf(), body,
+      }, isTicketDetailMutation),
+    /** Idempotent per key: 201 new, 200 replay of the same payload, 409 when the key carried another payload. */
+    createRelatedWork: (id: string, ticketId: string, key: string, body: RelatedWorkCreateRequest): Promise<RelatedWorkCreated> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work`,
+        headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isRelatedWorkCreated, [200, 201]),
+    /** D08b operational follow-up notes, newest first. */
+    listTicketNotes: (id: string, ticketId: string, cursor: string | null, signal?: AbortSignal): Promise<NotePage> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/notes${withParam('', 'cursor', cursor)}`, isNotePage, signal),
+    createTicketNote: (id: string, ticketId: string, key: string, body: NoteCreateRequest): Promise<NoteCreated> =>
+      call({
+        method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/notes`,
+        headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isNoteCreated, [200, 201]),
+    /** Read-only; no omnichannel adapter exists, so nothing can be sent from here. */
+    getTicketConversations: (id: string, ticketId: string, signal?: AbortSignal): Promise<ConversationPanel> =>
+      get(`${ws(id)}/tickets/${encodeURIComponent(ticketId)}/conversations`, isConversationPanel, signal),
+    /** Quarantine -> scan -> bind on the server; only a clean scan binds. Fails closed otherwise. */
+    uploadTicketAttachment: (id: string, ticketId: string, file: File, visibility: 'internal' | 'public'): Promise<AttachmentUploaded> =>
+      call({
+        method: 'POST',
+        path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/attachments?visibility=${visibility}`,
+        headers: { ...csrf(), 'X-File-Name': encodeURIComponent(file.name) }, file,
+      }, isAttachmentUploaded, 201),
+    /** Same-origin link; the server re-checks scope, scan state and integrity on every download. */
+    attachmentContentUrl: (id: string, ticketId: string, attachmentId: string): string =>
+      `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/attachments/${encodeURIComponent(attachmentId)}/content`,
+    /** A person completes related work with summary + evidence; a Jira status never does. */
+    completeRelatedWork: (id: string, ticketId: string, workId: string, body: RelatedWorkCompletionRequest): Promise<TicketDetailMutation> =>
+      call({
+        method: 'POST',
+        path: `${ws(id)}/tickets/${encodeURIComponent(ticketId)}/related-work/${encodeURIComponent(workId)}/completion`,
+        headers: csrf(), body,
+      }, isTicketDetailMutation),
+    /** D10: server-side preview of the whole scope; `query` is the canonical report query (`reportApiQuery`). */
+    previewReport: (id: string, query: string, signal?: AbortSignal): Promise<ReportPreview> =>
+      get(`${ws(id)}/reports/preview?${query}`, isReportPreview, signal),
+    listReportRuns: (id: string, signal?: AbortSignal): Promise<ReportRunList> =>
+      get(`${ws(id)}/report-runs`, isReportRunList, signal),
+    getReportRun: (id: string, runId: string, signal?: AbortSignal): Promise<ReportRun> =>
+      get(`${ws(id)}/report-runs/${encodeURIComponent(runId)}`, isReportRun, signal),
+    /** Idempotent per key: 201 new run, 200 replay of the same spec, 409 when the key carried another spec. */
+    createReportRun: (id: string, key: string, body: ReportExportRequest): Promise<ReportExportResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/report-runs`, headers: { ...csrf(), 'Idempotency-Key': key }, body,
+      }, isReportExportResult, [200, 201]),
+    /** Same-origin link; the server re-checks scope, expiry and the stored hash on every download. */
+    reportContentUrl: (id: string, runId: string): string =>
+      `${ws(id)}/report-runs/${encodeURIComponent(runId)}/content`,
+    /** D09: workspace profile; `canEdit` mirrors admin.settings (the server re-checks every write). */
+    getSettings: (id: string, signal?: AbortSignal): Promise<SettingsBody> =>
+      get(`${ws(id)}/settings`, isSettingsBody, signal),
+    updateSettings: (id: string, body: SettingsPatchRequest): Promise<SettingsResult> =>
+      call({ method: 'PATCH', path: `${ws(id)}/settings`, headers: csrf(), body }, isSettingsResult),
+    /** UAT Superadmin only (403 otherwise): one company = one workspace, created without members. */
+    listCompanies: (signal?: AbortSignal): Promise<CompanyList> => get('/api/v1/companies', isCompanyList, signal),
+    createCompany: (body: CompanyCreateRequest): Promise<CompanyResult> =>
+      call({ method: 'POST', path: '/api/v1/companies', headers: csrf(), body }, isCompanyResult, 201),
+    setCompanyActive: (companyId: string, body: CompanyActivationRequest): Promise<CompanyResult> =>
+      call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}`, headers: csrf(), body }, isCompanyResult),
+    listCatalogEntries: (id: string, kind: CatalogKind, signal?: AbortSignal): Promise<CatalogEditor> =>
+      get(`${ws(id)}/catalogs/${kind}`, isCatalogEditor, signal),
+    createCatalogEntry: (id: string, kind: CatalogKind, body: CatalogCreateRequest): Promise<CatalogEntryResult> =>
+      call({ method: 'POST', path: `${ws(id)}/catalogs/${kind}`, headers: csrf(), body }, isCatalogEntryResult, 201),
+    updateCatalogEntry: (id: string, kind: CatalogKind, itemId: string, body: CatalogPatchRequest): Promise<CatalogEntryResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/catalogs/${kind}/${encodeURIComponent(itemId)}`, headers: csrf(), body,
+      }, isCatalogEntryResult),
+    /** Members with `canManage` and the grants the caller may hand out (only ones it holds). */
+    getMemberList: (id: string, signal?: AbortSignal): Promise<MemberList> =>
+      get(`${ws(id)}/members`, isMemberList, signal),
+    addMember: (id: string, body: MemberCreateRequest): Promise<MemberResult> =>
+      call({ method: 'POST', path: `${ws(id)}/members`, headers: csrf(), body }, isMemberResult, 201),
+    updateMember: (id: string, membershipId: string, body: MemberPatchRequest): Promise<MemberResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}`, headers: csrf(), body,
+      }, isMemberResult),
+    addMemberGrant: (id: string, membershipId: string, body: GrantChangeRequest): Promise<MemberResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants`, headers: csrf(), body,
+      }, isMemberResult, 201),
+    revokeMemberGrant: (id: string, membershipId: string, body: GrantChangeRequest): Promise<MemberResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants/revoke`, headers: csrf(), body,
+      }, isMemberResult),
+    /** Simulated connections only: no provider is contacted and no credential exists. */
+    listIntegrations: (id: string, signal?: AbortSignal): Promise<IntegrationList> =>
+      get(`${ws(id)}/integrations`, isIntegrationList, signal),
+    createIntegration: (id: string, body: IntegrationCreateRequest): Promise<IntegrationResult> =>
+      call({ method: 'POST', path: `${ws(id)}/integrations`, headers: csrf(), body }, isIntegrationResult, 201),
+    updateIntegration: (id: string, connectionId: string, body: IntegrationPatchRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PATCH', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Save → test → activate; disable from any state. */
+    stepIntegration: (id: string, connectionId: string, step: 'test' | 'activate' | 'disable', body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
+      }, isIntegrationResult),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

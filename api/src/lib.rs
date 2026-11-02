@@ -1,10 +1,14 @@
 //! ITSM API (D02a foundation + D02 domain schema + D03 permission foundation).
 
 pub mod authz;
+pub mod clamd;
 pub mod config;
 pub mod db;
+pub mod denied_audit;
 pub mod domain;
 pub mod error;
+pub mod outbox;
+pub mod rate_limit;
 pub mod routes;
 pub mod seed;
 pub mod session;
@@ -27,6 +31,7 @@ use crate::config::Config;
 pub const UAT_BANNER: &str = "Mode uji — Superadmin";
 const BODY_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,20 +41,38 @@ pub struct AppState {
 
 pub fn app(state: AppState) -> Router {
     let request_id = HeaderName::from_static("x-request-id");
-    let api = routes::api_router().layer(axum::middleware::from_fn_with_state(
-        state.clone(),
-        session::session_layer,
+    let session = axum::middleware::from_fn_with_state(state.clone(), session::session_layer);
+    let denied = axum::middleware::from_fn_with_state(state.clone(), denied_audit::layer);
+    // One limiter per router: clones of the returned router share it.
+    let limiter = Arc::new(rate_limit::RateLimiter::new(
+        state.config.rate_limit.clone(),
     ));
-
-    Router::new()
+    let limited = axum::middleware::from_fn_with_state(limiter, rate_limit::layer);
+    let api = routes::api_router()
+        .route_layer(denied.clone())
+        .layer(limited.clone())
+        .layer(session.clone());
+    let bounded = Router::new()
         .merge(routes::health::router())
         .merge(api)
-        .with_state(state)
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             REQUEST_TIMEOUT,
-        ))
+        ));
+    let upload = routes::upload_router()
+        .route_layer(denied)
+        .layer(limited)
+        .layer(session)
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            UPLOAD_TIMEOUT,
+        ));
+
+    Router::new()
+        .merge(bounded)
+        .merge(upload)
+        .with_state(state)
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),

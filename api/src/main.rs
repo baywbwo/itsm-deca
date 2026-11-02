@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use itsm_api::config::Config;
-use itsm_api::{AppState, app, db, seed};
+use itsm_api::{AppState, app, db, outbox, seed};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -72,10 +72,25 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
         config: Arc::new(config),
         pool,
     };
-    axum::serve(listener, app(state))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .map_err(|e| format!("server error: {e}"))
+    let (stop, stopped) = tokio::sync::watch::channel(false);
+    let worker = state
+        .config
+        .outbox_worker
+        .then(|| outbox::spawn(state.clone(), stopped));
+    // Peer address feeds the rate limiter for requests without a session.
+    let served = axum::serve(
+        listener,
+        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .map_err(|e| format!("server error: {e}"));
+    // Let an in-progress tick finish; an unsettled claim is swept to unknown on next start.
+    let _ = stop.send(true);
+    if let Some(worker) = worker {
+        let _ = worker.await;
+    }
+    served
 }

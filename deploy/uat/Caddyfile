@@ -1,0 +1,65 @@
+# ITSM UAT ingress: single origin for web + API. Values come from ingress-guard.sh, which
+# refuses to start Caddy unless the IP allowlist and basic auth are configured.
+{
+	admin off
+	# Ports overridable only for local config tests; the container uses 80/443.
+	http_port {$ITSM_UAT_HTTP_PORT:80}
+	https_port {$ITSM_UAT_HTTPS_PORT:443}
+	# With "tls internal" the operator distributes the Caddy root CA to UAT clients manually.
+	skip_install_trust
+	# Upstream API trusts X-Forwarded-For only from this proxy (ITSM_TRUSTED_PROXIES).
+	# Client-supplied X-Forwarded-For is not trusted here (no trusted_proxies configured).
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$ITSM_UAT_SITE_ADDRESS} {
+	tls {$ITSM_UAT_TLS}
+	# Access log (Caddy redacts Authorization and Cookie by default).
+	log {
+		output stdout
+		format json
+	}
+
+	route {
+		# 1) Network allowlist on the real TCP peer. Everything else: 403, nothing proxied.
+		@outside not remote_ip {$ITSM_UAT_ALLOWED_CIDRS}
+		respond @outside "Forbidden" 403 {
+			close
+		}
+
+		# 2) Ingress login (bcrypt, standard HTTP basic auth over TLS).
+		basic_auth {
+			{$ITSM_UAT_BASIC_AUTH_USER} {$ITSM_UAT_BASIC_AUTH_HASH}
+		}
+
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "same-origin"
+			X-Frame-Options "DENY"
+			-Server
+		}
+
+		# 3) Same origin: /api and /health go to the API, everything else is the SPA.
+		@api path /api/* /health/*
+		handle @api {
+			reverse_proxy {$ITSM_UAT_API_UPSTREAM:api:8080} {
+				header_up -Authorization
+			}
+		}
+		handle {
+			root * {$ITSM_UAT_WEB_ROOT:/srv}
+			try_files {path} /index.html
+			file_server
+		}
+	}
+}
+
+# Container healthcheck only; bound to loopback inside the ingress container.
+http://127.0.0.1:8099 {
+	bind 127.0.0.1
+	respond /ingress-health "ok" 200
+}

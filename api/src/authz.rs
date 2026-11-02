@@ -276,6 +276,7 @@ impl WorkspaceAccess {
                 user_id = %self.user_id,
                 "permission denied"
             );
+            crate::denied_audit::record_permission(p.code());
             Err(AppError::Forbidden)
         }
     }
@@ -336,6 +337,7 @@ pub async fn resolve(
         .iter()
         .filter_map(|c| Permission::from_code(c.as_str()))
         .collect();
+    crate::denied_audit::record_access(row.id, s.user_id);
     Ok(WorkspaceAccess::new(
         row.id, row.code, s.user_id, membership, superadmin, grants,
     ))
@@ -374,6 +376,7 @@ pub fn check_assignment(
         return Ok(AssignmentKind::Reassign);
     }
     tracing::info!(workspace_id = %access.workspace_id, "assignment denied");
+    crate::denied_audit::record_permission(Permission::TicketAssignAny.code());
     Err(AppError::Forbidden)
 }
 

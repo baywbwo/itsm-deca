@@ -1,0 +1,10 @@
+# Build context for deploy/uat/Dockerfile: source only, never secrets or local state.
+**/target
+**/node_modules
+web/dist
+web/dist-review
+.git
+**/.env
+**/.env.*
+deploy/uat/secrets
+*.log

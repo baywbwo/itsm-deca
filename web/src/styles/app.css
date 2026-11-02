@@ -284,3 +284,56 @@ table.tickets td.stack span { display: block; }
 .sync-item > .row { width: 100%; }
 .reconcile { width: 100%; }
 .history { display: grid; gap: 4px; }
+
+/* D08 C13 ticket detail: side peek (640 px, full height) and full page, same content */
+dialog.peek { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: 640px; max-width: 100vw; border-radius: 0; }
+dialog.peek .dialog-body { display: grid; gap: 16px; align-content: start; }
+.detail-page { display: grid; gap: 16px; max-width: 960px; }
+.detail-title { font-size: 22px; margin: 0; overflow-wrap: anywhere; }
+.detail-actions { gap: 8px; flex-wrap: wrap; }
+.detail-tabs { overflow-x: auto; flex-wrap: nowrap; }
+.detail-tabs button { white-space: nowrap; }
+.detail-panel { display: grid; gap: 12px; min-width: 0; }
+.detail-panel h3 { font-size: 14px; margin: 0 0 6px; }
+.banner { background: #f5f3ee; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin: 0; font-size: 13px; }
+.prewrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sectionline { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+.work-card { padding: 16px; display: grid; gap: 6px; }
+.work-card + .work-card { margin-top: 12px; }
+.work-card h4 { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.check { gap: 8px; align-items: center; font-size: 13px; }
+@media (max-width: 640px) {
+  dialog.peek .props { grid-template-columns: 1fr; gap: 2px 0; }
+  dialog.peek .props dd { margin-bottom: 8px; }
+  .detail-page .props { grid-template-columns: 1fr; gap: 2px 0; }
+}
+.column-checks { display: grid; gap: 8px; border: 0; padding: 0; margin: 0 0 12px; }
+.column-checks legend { margin-bottom: 8px; }
+
+/* D09 Pengaturan & Integrasi (prototype v3.2 §settings/integrations). */
+.integration-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.integration-grid > .card, .integration-grid > .card + .card { margin-top: 0; }
+.integration { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: center; }
+.integration h2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.steps { gap: 16px; margin-bottom: 12px; }
+.steps li[aria-current='step'] { color: var(--muted); }
+@media (max-width: 760px) {
+  .integration-grid { grid-template-columns: minmax(0, 1fr); }
+  .integration { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* D10 reports */
+.report-head { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 20px; margin: 8px 0 0; }
+.report-head dt { font-size: 12px; color: var(--muted); }
+.report-head dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
+.report-filters { flex-wrap: wrap; margin-top: 16px; }
+.report-filters .full { flex-basis: 100%; margin: 0; }
+.report-status { border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px 10px; margin: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; flex-basis: 100%; }
+.report-status legend { font-size: 12px; font-weight: 600; padding: 0 4px; }
+.report-status .check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; min-height: 28px; }
+.report-breakdowns > .card { margin-top: 0; }
+@media (max-width: 760px) {
+  .report-head { grid-template-columns: 1fr 1fr; }
+  .report-filters .period { flex: 1 1 140px; }
+}
+.banner.spaced-bottom { margin-bottom: 20px; }
