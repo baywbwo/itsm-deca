@@ -7,6 +7,15 @@ const filled = (over: Partial<IntakeForm> = {}): IntakeForm => ({
 });
 
 describe('D07 intake drafts', () => {
+  it('persists legacy contact fields in chronology without adding unsupported request fields', () => {
+    const body = toRequest(filled({ merchantName: ' Toko Uji ', reporterName: 'PIC Uji', reporterEmail: 'test@example.com', reporterPhone: '08123456789' }), 'UTC');
+    expect(body.chronology).toBe('Merchant: Toko Uji\nPelapor: PIC Uji\nEmail terdaftar: test@example.com\nWhatsApp: 08123456789\n\nKronologi dummy');
+    expect(body).not.toHaveProperty('reporterEmail');
+    expect(body).not.toHaveProperty('jira');
+    expect(validateIntake(filled({ reporterEmail: 'invalid' })).some(e => e.field === 'reporterEmail')).toBe(true);
+    expect(validateIntake(filled({ chronology: 'x'.repeat(20000), merchantName: 'Toko Uji' })).some(e => e.field === 'chronology')).toBe(true);
+  });
+
   it('received time is Jakarta wall time with +07:00', () => {
     expect(wallToRfc3339('2026-11-01T09:30', 'Asia/Jakarta')).toBe('2026-11-01T09:30:00+07:00');
     expect(wallToRfc3339('2026-11-01T00:05', 'UTC')).toBe('2026-11-01T00:05:00+00:00');

@@ -28,6 +28,7 @@ import { instantLabel, tzLabel } from '../app/format';
 import { toHash } from '../app/routes';
 import { Badge, type BadgeTone } from '../components/Badge';
 import { Button } from '../components/Button';
+import { WordingAssistant } from '../components/WordingAssistant';
 import { Dialog } from '../components/Dialog';
 import { statusTone } from './DashboardPage';
 
@@ -270,6 +271,28 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
         <form id={`${id}-form`} className="formgrid" noValidate onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <fieldset className="plain-fieldset full formgrid" disabled={locked}>
             <legend className="sr-only">Data pengaduan</legend>
+            <h3 className="intake-section-title full">Identitas pelapor</h3>
+            <p className="tiny muted full">Lengkapi data merchant dan kontak yang dapat dihubungi. Identitas ini belum diverifikasi melalui CIF.</p>
+            {([
+              ['merchantName', 'Nama merchant / usaha', 'Contoh: Toko Melati', 'text'],
+              ['reporterEmail', 'Email akun terdaftar', 'nama@perusahaan.com', 'email'],
+              ['reporterPhone', 'Nomor WhatsApp', '08xxxxxxxxxx', 'tel'],
+              ['reporterName', 'Nama PIC / pelapor', 'Nama yang dapat dihubungi', 'text'],
+            ] as const).map(([key, label, placeholder, type]) => (
+              <div className="field" key={key}>
+                <label htmlFor={fid(key)}>{label}</label>
+                <input id={fid(key)} type={type} className="field-control" value={f[key]}
+                  maxLength={key === 'reporterPhone' ? 40 : 254} placeholder={placeholder}
+                  autoComplete={key === 'reporterEmail' ? 'email' : key === 'reporterPhone' ? 'tel' : 'off'}
+                  aria-invalid={errorOf(key) ? true : undefined}
+                  aria-describedby={errorOf(key) ? `${fid(key)}-error` : undefined}
+                  onChange={e => set(key, e.target.value)} />
+                {errorOf(key) && <span id={`${fid(key)}-error`} className="field-error">{errorOf(key)}</span>}
+              </div>
+            ))}
+            <h3 className="intake-section-title full">Detail pengaduan</h3>
+            {select('categoryId', 'Kategori', catalog(data.catalogs.categories))}
+            {select('intakeChannelId', 'Kanal penerimaan', catalog(data.catalogs.intakeChannels), { required: true, empty: 'Pilih kanal' })}
             <div className="field full">
               <label htmlFor={fid('subject')}>Judul pengaduan *</label>
               <input id={fid('subject')} className="field-control" value={f.subject} maxLength={300} aria-required
@@ -278,30 +301,6 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                 onChange={(e) => set('subject', e.target.value)} />
               {errorOf('subject') && <span id={`${fid('subject')}-error`} className="field-error">{errorOf('subject')}</span>}
             </div>
-            <div className="field">
-              <label htmlFor={fid('receivedLocal')}>Waktu diterima *</label>
-              <input id={fid('receivedLocal')} type="datetime-local" className="field-control" value={f.receivedLocal}
-                max={wallTime(Date.now() + 5 * 60000, tz)} aria-required
-                aria-invalid={errorOf('receivedLocal') ? true : undefined}
-                aria-describedby={`${fid('receivedLocal')}-hint${errorOf('receivedLocal') ? ` ${fid('receivedLocal')}-error` : ''}`}
-                onChange={(e) => set('receivedLocal', e.target.value)} />
-              <span id={`${fid('receivedLocal')}-hint`} className="field-hint">Waktu {tzLabel(tz)} ({tz}).</span>
-              {errorOf('receivedLocal') && <span id={`${fid('receivedLocal')}-error`} className="field-error">{errorOf('receivedLocal')}</span>}
-            </div>
-            {select('intakeChannelId', 'Kanal penerimaan', catalog(data.catalogs.intakeChannels), { required: true, empty: 'Pilih kanal' })}
-            {select('priorityId', 'Prioritas', catalog(data.catalogs.priorities))}
-            {select('categoryId', 'Kategori', catalog(data.catalogs.categories))}
-            {select('productId', 'Produk/instrumen', catalog(data.catalogs.products))}
-            {select('receivingUnitId', 'Unit penerima', catalog(data.catalogs.receivingUnits))}
-            {select('regionId', 'Wilayah', catalog(data.catalogs.regions))}
-            {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
-              empty: 'Belum ditugaskan',
-              disabled: ownerChoices.length === 0,
-              hint: canAny ? 'Anggota aktif workspace ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
-            })}
-            {select('merchantId', 'Merchant', (data.directory.merchants).map((m) => ({ id: m.id, label: `${m.displayName}${m.reference ? ` · ${m.reference}` : ''} · DUMMY` })), {
-              full: true, hint: 'Data merchant dummy berlabel, bukan hasil CIF. Nomor identitas tidak diminta.',
-            })}
             <div className="field full">
               <label htmlFor={fid('chronology')}>Kronologi *</label>
               <textarea id={fid('chronology')} className="field-control" value={f.chronology} maxLength={20000} aria-required
@@ -311,6 +310,34 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
               <span id={`${fid('chronology')}-hint`} className="field-hint">Dapat memuat data pribadi: tidak disalin ke audit, log, Jira atau Lark.</span>
               {errorOf('chronology') && <span id={`${fid('chronology')}-error`} className="field-error">{errorOf('chronology')}</span>}
             </div>
+            <div className="full"><WordingAssistant key={workspace.id} api={api} workspaceId={workspace.id} text={f.chronology}
+              mode="chronology" disabled={locked} onApply={text => set('chronology', text)} /></div>
+            <details className="intake-operations full" open={errors.some(e => ['receivedLocal', 'intakeChannelId', 'priorityId', 'productId', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'].includes(e.field)) || undefined}>
+              <summary>Data penerimaan & penanganan <span>Waktu, kanal, prioritas, dan petugas</span></summary>
+              <div className="formgrid spaced">            <div className="field">
+              <label htmlFor={fid('receivedLocal')}>Waktu diterima *</label>
+              <input id={fid('receivedLocal')} type="datetime-local" className="field-control" value={f.receivedLocal}
+                max={wallTime(Date.now() + 5 * 60000, tz)} aria-required
+                aria-invalid={errorOf('receivedLocal') ? true : undefined}
+                aria-describedby={`${fid('receivedLocal')}-hint${errorOf('receivedLocal') ? ` ${fid('receivedLocal')}-error` : ''}`}
+                onChange={(e) => set('receivedLocal', e.target.value)} />
+              <span id={`${fid('receivedLocal')}-hint`} className="field-hint">Waktu {tzLabel(tz)} ({tz}).</span>
+              {errorOf('receivedLocal') && <span id={`${fid('receivedLocal')}-error`} className="field-error">{errorOf('receivedLocal')}</span>}
+            </div>
+            {select('priorityId', 'Prioritas', catalog(data.catalogs.priorities))}
+            {select('productId', 'Produk/instrumen', catalog(data.catalogs.products))}
+            {select('receivingUnitId', 'Unit penerima', catalog(data.catalogs.receivingUnits))}
+            {select('regionId', 'Wilayah', catalog(data.catalogs.regions))}
+            {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
+              empty: 'Belum ditugaskan',
+              disabled: ownerChoices.length === 0,
+              hint: canAny ? 'Anggota aktif workspace ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
+            })}
+            {select('merchantId', 'Tautkan merchant dari direktori', (data.directory.merchants).map((m) => ({ id: m.id, label: `${m.displayName}${m.reference ? ` · ${m.reference}` : ''} · DUMMY` })), {
+              full: true, hint: 'Data merchant dummy berlabel, bukan hasil CIF. Nomor identitas tidak diminta.',
+            })}
+              </div>
+            </details>
           </fieldset>
           <fieldset className="assign-box full formgrid" disabled={locked}>
             <legend>Assignment & notifikasi <Badge tone="waiting">SIMULASI</Badge></legend>

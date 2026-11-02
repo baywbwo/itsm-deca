@@ -1,4 +1,5 @@
 pub mod access;
+pub mod ai_suggestions;
 pub mod attachments;
 pub mod catalogs;
 pub mod dashboard;
@@ -25,6 +26,7 @@ use crate::AppState;
 /// All `/api/v1` routes, declared with full paths so the session layer sees them as-is.
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
+    ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
@@ -187,6 +189,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route("/api/v1/meta", get(session::meta))
         .route("/api/v1/uat/session", post(session::uat_enter))
         .route(

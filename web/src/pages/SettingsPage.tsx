@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type {
-  CatalogEditor, CatalogEntry, CatalogKind, CompanyList, GrantCode, Member, MemberList, SettingsBody, Timezone,
+  CompanyList, GrantCode, Member, MemberList, SettingsBody, Timezone,
   Workspace, WorkspaceSettings,
 } from '../api/types';
 import { BRAND_PRESETS } from '../app/brand';
@@ -16,7 +16,7 @@ import {
   ConfirmDialog, GRANT_LABEL, ROLE_LABEL, Tabs, TZ_LABEL, useLoad, WriteAlert, writeError, type WriteError,
 } from './adminKit';
 
-type TabId = 'workspace' | 'members' | 'catalogs' | 'companies';
+type TabId = 'workspace' | 'members' | 'companies';
 
 /**
  * O07/O09 Pengaturan. Every tab reads its own server answer; edit controls appear only when the
@@ -34,7 +34,6 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   const tabs: { id: TabId; label: string }[] = [
     ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
     ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota' }] : []),
-    ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Kategori & data master' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
   ];
   const [tab, setTab] = useState<TabId>(tabs[0]?.id ?? 'workspace');
@@ -43,12 +42,11 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   return (
     <>
       <PageHeader eyebrow={workspace.code} title="Pengaturan"
-        description={`Profil workspace, anggota dan data master ${workspace.code}. Penonaktifan menggantikan penghapusan; histori tetap tersimpan.`} />
+        description={`Kelola profil perusahaan dan anggota ${workspace.code}.`} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Bagian pengaturan" panelId={panelId} />
       <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab-${tab}`}>
         {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
-        {tab === 'catalogs' && <CatalogTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
       </div>
     </>
@@ -342,149 +340,6 @@ function MemberDialog({ api, workspace, list, member, onClose, onChanged, onRelo
           onClose={() => setConfirm(null)}
           onConfirm={() => run('Hak', () => api.revokeMemberGrant(workspace.id, member.membershipId, { grantCode: confirm.code, version: member.version }),
             `${GRANT_LABEL[confirm.code] ?? confirm.code} dicabut dari ${member.displayName}. Tercatat di audit.`)} />
-      )}
-    </>
-  );
-}
-
-// ---------------------------------------------------------------- Catalogs
-
-const KINDS: readonly { id: CatalogKind; label: string }[] = [
-  { id: 'categories', label: 'Kategori' },
-  { id: 'products', label: 'Produk / instrumen' },
-  { id: 'receiving-units', label: 'Unit penerima' },
-  { id: 'regions', label: 'Wilayah' },
-  { id: 'intake-channels', label: 'Kanal penerimaan' },
-  { id: 'priorities', label: 'Prioritas' },
-];
-
-function CatalogTab({ api, workspace, onNotice }: { api: Api; workspace: Workspace; onNotice: (t: string) => void }) {
-  const [kind, setKind] = useState<CatalogKind>('categories');
-  const res = useLoad((s) => api.listCatalogEntries(workspace.id, kind, s), `${workspace.id}:${kind}`);
-  const [editing, setEditing] = useState<CatalogEntry | 'new' | null>(null);
-  const label = KINDS.find((k) => k.id === kind)!.label;
-  const ed = res.data;
-  return (
-    <section aria-labelledby="cat-title">
-      <div className="row between spaced-bottom">
-        <h2 id="cat-title">Kategori & data master</h2>
-        {ed?.canEdit && kind !== 'priorities' && <Button variant="primary" onClick={() => setEditing('new')}>＋ Tambah {label.toLowerCase()}</Button>}
-      </div>
-      <p className="tiny muted spaced-bottom" id="cat-desc">
-        Daftar pilihan yang muncul di formulir dan filter tiket: kategori, produk, prioritas, unit penerima, wilayah dan kanal penerimaan.
-        Entri dinonaktifkan, bukan dihapus, agar tiket lama tetap terbaca.
-      </p>
-      <div className="toolbar row">
-        <SelectField label="Jenis data master" value={kind} onChange={(e) => { setKind(e.target.value as CatalogKind); setEditing(null); }}>
-          {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
-        </SelectField>
-      </div>
-      {res.error ? <LoadFailure error={res.error} what={`Katalog ${label}`} onRetry={res.reload} />
-        : !ed ? <LoadingState label={`Memuat ${label.toLowerCase()}…`} />
-          : (
-            <>
-              {!ed.canEdit && <ReadOnlyBanner what="Katalog" />}
-              {kind === 'priorities' && <p className="tiny muted spaced-bottom">Empat prioritas baku dibuat bersama workspace; label dan urutan dapat diubah, kode tidak ditambah.</p>}
-              <DataTable caption={`${label} di ${workspace.code}`} rows={ed.items} rowKey={(c) => c.id}
-                empty={{ title: `Belum ada ${label.toLowerCase()}`, body: 'Tambahkan entri pertama bila Anda memiliki hak pengaturan.' }}
-                columns={[
-                  { key: 'code', header: 'Kode', cell: (c) => <code>{c.code}</code> },
-                  { key: 'label', header: 'Label', cell: (c) => c.label },
-                  { key: 'order', header: 'Urutan', cell: (c) => c.sortOrder },
-                  { key: 'status', header: 'Status', cell: (c) => <Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge> },
-                  ...(ed.canEdit ? [{
-                    key: 'act', header: 'Aksi',
-                    cell: (c: CatalogEntry) => <Button onClick={() => setEditing(c)} aria-label={`Ubah ${c.label}`}>Ubah</Button>,
-                  }] : []),
-                ]} />
-            </>
-          )}
-      {editing && ed && (
-        <CatalogDialog api={api} workspace={workspace} editor={ed} kindLabel={label} entry={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)} onReload={() => { setEditing(null); res.reload(); }}
-          onSaved={(item, created) => {
-            res.set({ ...ed, items: created ? [...ed.items, item] : ed.items.map((x) => (x.id === item.id ? item : x)) });
-            setEditing(null);
-            onNotice(`${label} "${item.label}" ${created ? 'ditambahkan' : 'diperbarui'}. Tercatat di audit.`);
-          }} />
-      )}
-    </section>
-  );
-}
-
-function CatalogDialog({ api, workspace, editor, kindLabel, entry, onClose, onReload, onSaved }: {
-  api: Api; workspace: Workspace; editor: CatalogEditor; kindLabel: string; entry: CatalogEntry | null;
-  onClose: () => void; onReload: () => void; onSaved: (c: CatalogEntry, created: boolean) => void;
-}) {
-  const [code, setCode] = useState('');
-  const [label, setLabel] = useState(entry?.label ?? '');
-  const [order, setOrder] = useState(String(entry?.sortOrder ?? (editor.items.length + 1) * 10));
-  const [active, setActive] = useState(entry?.active ?? true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<WriteError | null>(null);
-  const [confirmOff, setConfirmOff] = useState(false);
-  const formId = useId();
-  const sortOrder = Number(order);
-  const valid = label.trim() !== '' && Number.isInteger(sortOrder) && sortOrder >= 0 && sortOrder <= 9999 &&
-    (entry !== null || /^[a-z0-9_]{1,40}$/.test(code));
-
-  async function save() {
-    setBusy(true);
-    setError(null);
-    try {
-      const r = entry
-        ? await api.updateCatalogEntry(workspace.id, editor.kind, entry.id, { label: label.trim(), active, sortOrder, version: entry.version })
-        : await api.createCatalogEntry(workspace.id, editor.kind, { code, label: label.trim(), sortOrder });
-      onSaved(r.item, entry === null);
-    } catch (e) {
-      setBusy(false);
-      setConfirmOff(false);
-      setError(writeError(e, kindLabel));
-    }
-  }
-  const submit = () => {
-    if (busy || !valid) return;
-    if (entry?.active && !active) setConfirmOff(true);
-    else void save();
-  };
-  return (
-    <>
-      <Dialog open onClose={busy ? () => undefined : onClose} title={entry ? `Ubah ${kindLabel.toLowerCase()}` : `Tambah ${kindLabel.toLowerCase()}`}
-        initialFocus="input:not([disabled])"
-        footer={(
-          <>
-            <Button onClick={onClose} disabled={busy}>Batal</Button>
-            <Button type="submit" form={formId} variant="primary" disabled={busy || !valid} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan'}</Button>
-          </>
-        )}>
-        {error && <WriteAlert error={error} onReload={onReload} />}
-        <form id={formId} className="formgrid" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-          {entry ? (
-            <TextField label="Kode" value={entry.code} disabled hint="Kode tidak berubah setelah dibuat." />
-          ) : (
-            <TextField label="Kode" required maxLength={40} value={code} disabled={busy}
-              hint="Huruf kecil, angka atau garis bawah; unik per workspace."
-              error={error?.field === 'code' ? 'Kode sudah dipakai atau tidak valid.' : undefined}
-              onChange={(e) => setCode(e.target.value.toLowerCase())} />
-          )}
-          <TextField label="Label" required maxLength={120} value={label} disabled={busy}
-            error={error?.field === 'label' ? 'Periksa label.' : undefined} onChange={(e) => setLabel(e.target.value)} />
-          <TextField label="Urutan" type="number" min={0} max={9999} value={order} disabled={busy}
-            onChange={(e) => setOrder(e.target.value)} />
-          {entry && (
-            <SelectField label="Status" value={active ? 'true' : 'false'} disabled={busy} onChange={(e) => setActive(e.target.value === 'true')}
-              hint="Entri nonaktif tidak bisa dipilih di tiket baru; tiket lama tetap menampilkannya.">
-              <option value="true">Aktif</option>
-              <option value="false">Nonaktif</option>
-            </SelectField>
-          )}
-        </form>
-        <p className="tiny muted spaced">Tidak ada hapus permanen; entri yang tidak dipakai lagi dinonaktifkan.</p>
-      </Dialog>
-      {confirmOff && entry && (
-        <ConfirmDialog title={`Nonaktifkan "${entry.label}"?`} confirmLabel="Nonaktifkan"
-          impact={`Entri ini tidak lagi dapat dipilih saat membuat atau mengubah tiket di ${workspace.code}. Tiket dan laporan yang sudah memakainya tidak berubah.`}
-          onClose={() => setConfirmOff(false)} onConfirm={save} />
       )}
     </>
   );

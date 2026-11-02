@@ -27,6 +27,7 @@ import { newKey } from '../app/drafts';
 import { instantLabel, num } from '../app/format';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
+import { WordingAssistant } from '../components/WordingAssistant';
 import { Dialog } from '../components/Dialog';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { statusTone } from './DashboardPage';
@@ -662,6 +663,8 @@ function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; 
               onChange={(e) => { setText(e.target.value); setFieldErr(null); setNotice(null); }} />
             {fieldErr && <span id={`${id}-note-err`} className="field-error">{fieldErr}</span>}
           </div>
+          <div className="full"><WordingAssistant key={`${workspace.id}:${detail.ticket.id}`} api={api} workspaceId={workspace.id} text={text}
+            mode="reply" disabled={busy} onApply={setText} /></div>
           <div className="full row">
             <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
           </div>

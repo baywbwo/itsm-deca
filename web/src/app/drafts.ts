@@ -6,6 +6,10 @@ import type { TicketCreateRequest } from '../api/types';
  * idempotency key so a resend after a timeout replays instead of creating a second ticket.
  */
 export interface IntakeForm {
+  merchantName: string;
+  reporterName: string;
+  reporterEmail: string;
+  reporterPhone: string;
   subject: string;
   chronology: string;
   /** `YYYY-MM-DDTHH:mm`, wall time in the workspace zone. */
@@ -38,6 +42,7 @@ export interface IntakeDraft {
 }
 
 export const emptyForm = (receivedLocal: string): IntakeForm => ({
+  merchantName: '', reporterName: '', reporterEmail: '', reporterPhone: '',
   subject: '', chronology: '', receivedLocal, intakeChannelId: '', priorityId: '', categoryId: '',
   productId: '', receivingUnitId: '', regionId: '', merchantId: '', ownerUserId: '',
   jiraMode: 'none', jiraTitle: '', jiraIssueKey: '', jiraAssigneeId: '', larkDestinationId: '',
@@ -108,6 +113,14 @@ function offsetMinutes(t: number, timeZone: string): number {
 
 export type IntakeFieldError = { field: keyof IntakeForm; message: string };
 
+/** Contact data follows the legacy intake: stored in the private chronology, never provider payloads. */
+export function intakeChronology(f: IntakeForm): string {
+  const contact = [['Merchant', f.merchantName], ['Pelapor', f.reporterName],
+    ['Email terdaftar', f.reporterEmail], ['WhatsApp', f.reporterPhone]]
+    .filter(([, value]) => value!.trim()).map(([label, value]) => `${label}: ${value!.trim()}`);
+  return contact.length ? `${contact.join('\n')}\n\n${f.chronology.trim()}` : f.chronology.trim();
+}
+
 /** Client checks mirroring the server (the server stays the authority). */
 export function validateIntake(f: IntakeForm): IntakeFieldError[] {
   const errs: IntakeFieldError[] = [];
@@ -119,6 +132,14 @@ export function validateIntake(f: IntakeForm): IntakeFieldError[] {
   else if ([...f.chronology.trim()].length > 20000) errs.push({ field: 'chronology', message: 'Kronologi maksimal 20.000 karakter.' });
   if (f.jiraMode === 'create' && !f.jiraTitle.trim()) errs.push({ field: 'jiraTitle', message: 'Judul issue Jira wajib untuk membuat issue.' });
   if (f.jiraMode === 'link' && !f.jiraIssueKey.trim()) errs.push({ field: 'jiraIssueKey', message: 'Kunci issue wajib untuk menautkan.' });
+  for (const field of ['merchantName', 'reporterName', 'reporterEmail', 'reporterPhone'] as const) {
+    if (/[\r\n]/.test(f[field]) || [...f[field]].length > (field === 'reporterPhone' ? 40 : 254))
+      errs.push({ field, message: 'Isian terlalu panjang atau memuat baris baru.' });
+  }
+  if (f.reporterEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.reporterEmail.trim()))
+    errs.push({ field: 'reporterEmail', message: 'Masukkan alamat email yang valid.' });
+  if ([...intakeChronology(f)].length > 20000 && !errs.some(e => e.field === 'chronology'))
+    errs.push({ field: 'chronology', message: 'Kronologi beserta identitas pelapor maksimal 20.000 karakter.' });
   return errs;
 }
 
@@ -126,7 +147,7 @@ export function validateIntake(f: IntakeForm): IntakeFieldError[] {
 export function toRequest(f: IntakeForm, timeZone: string): TicketCreateRequest {
   const body: TicketCreateRequest = {
     subject: f.subject.trim(),
-    chronology: f.chronology.trim(),
+    chronology: intakeChronology(f),
     receivedAt: wallToRfc3339(f.receivedLocal, timeZone) ?? f.receivedLocal,
     intakeChannelId: f.intakeChannelId,
   };

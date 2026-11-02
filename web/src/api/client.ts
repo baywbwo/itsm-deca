@@ -285,6 +285,10 @@ export function createApi(transport: Transport) {
   const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
 
   return {
+    suggestWording: (workspaceId: string, mode: 'chronology' | 'reply', text: string): Promise<{ suggestion: string; reviewRequired: boolean }> =>
+      call({ method: 'POST', path: `${ws(workspaceId)}/ai-suggestions`, headers: csrf(), body: { mode, text } },
+        (value: unknown): value is { suggestion: string; reviewRequired: boolean } => !!value && typeof value === 'object' &&
+          'suggestion' in value && typeof value.suggestion === 'string' && 'reviewRequired' in value && value.reviewRequired === true),
     hasCsrf: () => csrfToken !== null,
     getMeta: (signal?: AbortSignal): Promise<Meta> => get('/api/v1/meta', isMeta, signal),
     getSession: (signal?: AbortSignal): Promise<Session> => get('/api/v1/session', isSession, signal),
