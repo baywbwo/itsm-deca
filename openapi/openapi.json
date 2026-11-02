@@ -8440,6 +8440,9 @@
           "409": {
             "$ref": "#/components/responses/VersionConflict"
           },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }

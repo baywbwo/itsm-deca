@@ -886,6 +886,10 @@ async fn company_profile_edit_is_superadmin_versioned_and_keeps_tickets(pool: Pg
     let unknown = format!("/api/v1/companies/{}/profile", Uuid::new_v4());
     let r = write(&pool, "PATCH", &unknown, &t, edit(&duma["version"])).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.json);
+    let mut blank = edit(&duma["version"]);
+    blank["companyName"] = json!("  ");
+    let r = write(&pool, "PATCH", &uri, &t, blank).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.json);
     assert_eq!(
         audit_count(&pool, f.a, "company.update").await,
         0,
