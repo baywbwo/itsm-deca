@@ -6,6 +6,7 @@
 //! download header, formula cells are neutralized, idempotent replay / conflict, the BI
 //! regulator type is refused (422) without creating a run, too many rows = failed run (never a
 //! truncated file), expired artifacts answer 410, and every export / download is audited.
+//! D13 adds a real XLSX workbook read back with an independent reader (calamine).
 //! Fixtures are synthetic and labelled dummy.
 
 use std::collections::HashMap;
@@ -937,4 +938,370 @@ async fn export_is_never_wider_than_the_preview_and_stops_on_revoke(pool: PgPool
     assert_eq!(get(&st, &last, &cs).await.status, StatusCode::NOT_FOUND);
     let r = export(&st, f.a, &cs, "d11-wide-revoked", &oct_body("received")).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+// ---------- D13: XLSX export ----------
+
+type Sheet = calamine::Range<calamine::Data>;
+
+/// Opens the artifact with an independent reader (calamine, not the writer crate) and
+/// returns (Data, Ringkasan, formula count over both sheets).
+fn open_xlsx(bytes: &[u8]) -> (Sheet, Sheet, usize) {
+    use calamine::{Reader, Xlsx};
+    let mut wb: Xlsx<_> = ok(Xlsx::new(std::io::Cursor::new(bytes.to_vec())), "xlsx");
+    assert_eq!(wb.sheet_names(), vec!["Data", "Ringkasan"]);
+    let mut formulas = 0;
+    for name in ["Data", "Ringkasan"] {
+        let f = ok(wb.worksheet_formula(name), "formulas");
+        formulas += f.used_cells().filter(|(_, _, v)| !v.is_empty()).count();
+    }
+    let data = ok(wb.worksheet_range("Data"), "Data");
+    let sum = ok(wb.worksheet_range("Ringkasan"), "Ringkasan");
+    (data, sum, formulas)
+}
+
+fn cell(r: &Sheet, row: usize, col: usize) -> calamine::Data {
+    r.get((row, col)).cloned().unwrap_or(calamine::Data::Empty)
+}
+
+fn text(r: &Sheet, row: usize, col: usize) -> String {
+    match cell(r, row, col) {
+        calamine::Data::String(v) => v,
+        other => panic!("({row},{col}) is not a string cell: {other:?}"),
+    }
+}
+
+/// Date cell rendered as `YYYY-MM-DD` / `YYYY-MM-DD HH:MM` (pattern gives the length).
+fn when(r: &Sheet, row: usize, col: usize, fmt: &str) -> String {
+    match cell(r, row, col) {
+        calamine::Data::DateTime(d) => {
+            assert!(d.is_datetime(), "({row},{col}) not a date format");
+            d.as_datetime()
+                .unwrap_or_else(|| panic!("({row},{col}) date"))
+                .to_string()
+                .chars()
+                .take(fmt.len())
+                .collect()
+        }
+        other => panic!("({row},{col}) is not a date cell: {other:?}"),
+    }
+}
+
+fn number(r: &Sheet, row: usize, col: usize) -> f64 {
+    match cell(r, row, col) {
+        calamine::Data::Float(v) => v,
+        #[allow(clippy::cast_precision_loss)]
+        calamine::Data::Int(v) => v as f64,
+        other => panic!("({row},{col}) is not a number cell: {other:?}"),
+    }
+}
+
+/// Value next to a label in the Ringkasan sheet.
+fn summary_row(r: &Sheet, label: &str) -> usize {
+    (0..r.height())
+        .find(|&i| matches!(cell(r, i, 0), calamine::Data::String(ref v) if v == label))
+        .unwrap_or_else(|| panic!("summary row {label}"))
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn as_f64(v: &Value) -> f64 {
+    v.as_i64().unwrap_or_else(|| panic!("int: {v}")) as f64
+}
+
+/// The workbook is real Office Open XML with the preview's rows, filters and totals, typed
+/// date/number cells, user strings that never become formulas, and the same ACL /
+/// idempotency / audit / hash / expiry rules as the CSV export.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn xlsx_export_matches_preview_typed_and_safe(pool: PgPool) {
+    let f = fixture(&pool).await;
+    data(&pool, &f).await;
+    let st = state(&pool, None);
+    let cs = tok(&pool, f.cs).await;
+    let xlsx = |extra: Value| {
+        let mut b = oct_body("received");
+        b["format"] = json!("xlsx");
+        if let (Some(b), Some(e)) = (b.as_object_mut(), extra.as_object()) {
+            b.extend(e.clone());
+        }
+        b
+    };
+
+    // Unknown format = 422 on the field, without a run.
+    let mut bad = oct_body("received");
+    bad["format"] = json!("xls");
+    let r = export(&st, f.a, &cs, "d13-bad-000001", &bad).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.json);
+    assert_eq!(r.json["error"]["field"], "format");
+    let runs: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM report_runs")
+            .fetch_one(&pool)
+            .await,
+        "runs",
+    );
+    assert_eq!(runs, 0);
+
+    let r = export(&st, f.a, &cs, "d13-xlsx-00001", &xlsx(json!({}))).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    let run = r.json["run"].clone();
+    assert_eq!(run["format"], "xlsx");
+    assert_eq!(run["state"], "succeeded");
+    assert_eq!(run["rowCount"], 3);
+    let name = s(&run["fileName"]);
+    assert!(name.ends_with(".xlsx"), "{name}");
+    let id = s(&run["id"]);
+
+    // Replay = same run; same key with CSV (other fingerprint) = 409.
+    let r2 = export(&st, f.a, &cs, "d13-xlsx-00001", &xlsx(json!({}))).await;
+    assert_eq!(
+        (r2.status, r2.json["replayed"].clone()),
+        (StatusCode::OK, json!(true))
+    );
+    assert_eq!(r2.json["run"]["id"], json!(id));
+    let r3 = export(&st, f.a, &cs, "d13-xlsx-00001", &oct_body("received")).await;
+    assert_eq!(r3.status, StatusCode::CONFLICT);
+
+    let uri = format!("/api/v1/workspaces/{}/report-runs/{id}/content", f.a);
+    let dl = get(&st, &uri, &cs).await;
+    assert_eq!(dl.status, StatusCode::OK);
+    let h = |k: &str| {
+        dl.headers
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(
+        h("content-type"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    assert!(h("content-disposition").contains(&name));
+    assert_eq!(h("cache-control"), "no-store");
+    assert!(dl.bytes.starts_with(b"PK\x03\x04"), "zip container");
+    let sha = hex(&Sha256::digest(&dl.bytes));
+    assert_eq!(h("x-content-sha256"), sha);
+    assert_eq!(run["artifactSha256"], json!(sha));
+    assert_eq!(run["artifactBytes"], json!(dl.bytes.len()));
+
+    // Independent reader: rows = preview rows (same order), typed cells, no formulas.
+    let (sheet, sum, formulas) = open_xlsx(&dl.bytes);
+    assert_eq!(formulas, 0);
+    assert_eq!(text(&sheet, 0, 0), "jenis_laporan");
+    assert_eq!(text(&sheet, 0, 17), "resolusi_terakhir_dalam_periode_lokal");
+    let preview = get(&st, &preview_uri(f.a, OCT), &cs).await;
+    let rows: Vec<Value> = preview.json["rows"].as_array().cloned().unwrap_or_default();
+    assert_eq!(sheet.height(), rows.len() + 1);
+    for (i, row) in rows.iter().enumerate() {
+        let r = i + 1;
+        assert_eq!(
+            text(&sheet, r, 0),
+            "Rekap operasional (bukan format regulator BI)"
+        );
+        assert_eq!(text(&sheet, r, 1), "DUMA");
+        assert_eq!(when(&sheet, r, 4, "YYYY-MM-DD"), "2026-10-01");
+        assert_eq!(when(&sheet, r, 5, "YYYY-MM-DD"), "2026-10-31");
+        assert_eq!(text(&sheet, r, 7), "Asia/Jakarta");
+        assert_eq!(text(&sheet, r, 8), s(&row["displayNumber"]));
+        assert_eq!(text(&sheet, r, 9), s(&row["subject"]));
+        assert_eq!(text(&sheet, r, 10), s(&row["status"]["label"]));
+        let owner = row["owner"].as_str().unwrap_or("Belum ditugaskan");
+        assert_eq!(text(&sheet, r, 14), owner);
+        assert_eq!(
+            when(&sheet, r, 15, "YYYY-MM-DD HH:MM"),
+            s(&row["receivedLocal"])
+        );
+        assert!((number(&sheet, r, 16) - as_f64(&row["resolutionCycles"])).abs() < f64::EPSILON);
+        match row["lastResolvedLocal"].as_str() {
+            Some(v) => assert_eq!(when(&sheet, r, 17, "YYYY-MM-DD HH:MM"), v),
+            None => assert_eq!(cell(&sheet, r, 17), calamine::Data::Empty),
+        }
+    }
+    // Formula-like subjects are plain text, verbatim (no `'` added to the value).
+    assert_eq!(
+        text(&sheet, 1, 9),
+        "=HYPERLINK(\"http://contoh.invalid\",\"klik\") (dummy)"
+    );
+    assert_eq!(text(&sheet, 3, 9), "@SUM(A1) detik terakhir (dummy)");
+    assert!(!dl.bytes.windows(15).any(|w| w == b"Workspace B (du"));
+
+    // Same tickets as the CSV export of the same request, same order.
+    let c = export(&st, f.a, &cs, "d13-csv-000001", &oct_body("received")).await;
+    let cid = s(&c.json["run"]["id"]);
+    let cdl = get(
+        &st,
+        &format!("/api/v1/workspaces/{}/report-runs/{cid}/content", f.a),
+        &cs,
+    )
+    .await;
+    let lines = csv_lines(&cdl.bytes);
+    assert_eq!(lines.len(), rows.len());
+    for (i, line) in lines.iter().enumerate() {
+        assert!(
+            line.contains(&format!("\"{}\"", text(&sheet, i + 1, 8))),
+            "{line}"
+        );
+    }
+
+    // Summary: header, filters "Semua", typed period and totals = preview totals.
+    let v = |label: &str| text(&sum, summary_row(&sum, label), 1);
+    assert_eq!(v("Kode perusahaan"), "DUMA");
+    assert_eq!(v("Workspace"), "DUMA");
+    assert_eq!(v("Zona waktu"), "Asia/Jakarta");
+    assert_eq!(v("Filter status"), "Semua");
+    assert_eq!(v("Filter PIC"), "Semua");
+    let p = summary_row(&sum, "Periode mulai");
+    assert_eq!(when(&sum, p, 1, "YYYY-MM-DD"), "2026-10-01");
+    let totals = &preview.json["totals"];
+    for (label, key) in [
+        ("Total tiket", "tickets"),
+        ("Siklus resolusi dalam periode", "resolutionCycles"),
+        ("Tiket diselesaikan dalam periode", "resolvedTickets"),
+        ("Tanpa PIC", "unassigned"),
+        ("Tanpa kanal", "missingChannel"),
+        ("Tanpa kategori", "missingCategory"),
+        ("Tanpa prioritas", "missingPriority"),
+    ] {
+        let n = number(&sum, summary_row(&sum, label), 1);
+        assert!((n - as_f64(&totals[key])).abs() < f64::EPSILON, "{label}");
+    }
+
+    // A filtered workbook: rows, labels and totals follow the filter like the preview.
+    let q = format!("{OCT}&owner={}&status=new", f.cs);
+    let fp = get(&st, &preview_uri(f.a, &q), &cs).await;
+    let r = export(
+        &st,
+        f.a,
+        &cs,
+        "d13-xlsx-00002",
+        &xlsx(json!({"owner": f.cs, "status": ["new"]})),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    let fid = s(&r.json["run"]["id"]);
+    let fdl = get(
+        &st,
+        &format!("/api/v1/workspaces/{}/report-runs/{fid}/content", f.a),
+        &cs,
+    )
+    .await;
+    let (fs, fsum, _) = open_xlsx(&fdl.bytes);
+    let want: Vec<String> = fp.json["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| s(&r["displayNumber"]))
+        .collect();
+    let got: Vec<String> = (1..fs.height()).map(|i| text(&fs, i, 8)).collect();
+    assert_eq!(got, want);
+    assert!(!want.is_empty());
+    let fv = |label: &str| text(&fsum, summary_row(&fsum, label), 1);
+    assert_eq!(fv("Filter PIC"), "CS Alfa (dummy)");
+    assert_eq!(fv("Filter status"), "Baru");
+    let n = number(&fsum, summary_row(&fsum, "Total tiket"), 1);
+    assert!((n - as_f64(&fp.json["totals"]["tickets"])).abs() < f64::EPSILON);
+
+    // Audit records the format; Lead may download; foreign / non-member = 404.
+    let n_exp: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE entity_id = $1::uuid \
+               AND action = 'report.export' AND safe_change->>'format' = 'xlsx' \
+               AND safe_change->>'sha256' = $2",
+        )
+        .bind(&id)
+        .bind(&sha)
+        .fetch_one(&pool)
+        .await,
+        "audit",
+    );
+    assert_eq!(n_exp, 1);
+    let lead = tok(&pool, f.lead).await;
+    assert_eq!(get(&st, &uri, &lead).await.status, StatusCode::OK);
+    let bravo = tok(&pool, f.bravo).await;
+    assert_eq!(get(&st, &uri, &bravo).await.status, StatusCode::NOT_FOUND);
+    let wrong = format!("/api/v1/workspaces/{}/report-runs/{id}/content", f.b);
+    assert_eq!(get(&st, &wrong, &cs).await.status, StatusCode::NOT_FOUND);
+    let n_dl: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM audit_events WHERE entity_id = $1::uuid \
+               AND action = 'report.download' AND outcome = 'success'",
+        )
+        .bind(&id)
+        .fetch_one(&pool)
+        .await,
+        "audit dl",
+    );
+    assert_eq!(n_dl, 2);
+
+    // Tampered = 500; expired = 410.
+    ok(
+        sqlx::query(
+            "UPDATE report_artifacts SET content = content || 'x'::bytea WHERE run_id = $1::uuid",
+        )
+        .bind(&fid)
+        .execute(&pool)
+        .await,
+        "tamper",
+    );
+    let furi = format!("/api/v1/workspaces/{}/report-runs/{fid}/content", f.a);
+    assert_eq!(
+        get(&st, &furi, &cs).await.status,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    ok(
+        sqlx::query(
+            "UPDATE report_runs SET expires_at = now() - interval '1 second' WHERE id = $1::uuid",
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await,
+        "expire",
+    );
+    assert_eq!(get(&st, &uri, &cs).await.status, StatusCode::GONE);
+}
+
+/// 0012 is additive: undo expires XLSX artifacts (an older binary would serve them as CSV),
+/// drops the column, keeps every run; reapply restores XLSX exports.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0012_rolls_back_and_reapplies(pool: PgPool) {
+    let f = fixture(&pool).await;
+    data(&pool, &f).await;
+    let st = state(&pool, None);
+    let cs = tok(&pool, f.cs).await;
+    let mut b = oct_body("received");
+    b["format"] = json!("xlsx");
+    let x = export(&st, f.a, &cs, "d13-mig-000001", &b).await;
+    let c = export(&st, f.a, &cs, "d13-mig-000002", &oct_body("received")).await;
+    assert_eq!(
+        (x.status, c.status),
+        (StatusCode::CREATED, StatusCode::CREATED)
+    );
+    let (xid, cid) = (s(&x.json["run"]["id"]), s(&c.json["run"]["id"]));
+
+    ok(db::MIGRATOR.undo(&pool, 11).await, "undo to 0011");
+    let (col, runs, x_live, c_live): (i64, i64, bool, bool) = ok(
+        sqlx::query_as(
+            "SELECT (SELECT count(*) FROM information_schema.columns \
+                       WHERE table_name = 'report_runs' AND column_name = 'format'), \
+                    (SELECT count(*) FROM report_runs), \
+                    (SELECT expires_at > now() FROM report_runs WHERE id = $1::uuid), \
+                    (SELECT expires_at > now() FROM report_runs WHERE id = $2::uuid)",
+        )
+        .bind(&xid)
+        .bind(&cid)
+        .fetch_one(&pool)
+        .await,
+        "after undo",
+    );
+    assert_eq!((col, runs, x_live, c_live), (0, 2, false, true));
+
+    ok(db::MIGRATOR.run(&pool).await, "reapply");
+    let r = export(&st, f.a, &cs, "d13-mig-000003", &b).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    assert_eq!(r.json["run"]["format"], "xlsx");
+    let old = get(
+        &st,
+        &format!("/api/v1/workspaces/{}/report-runs/{cid}", f.a),
+        &cs,
+    )
+    .await;
+    assert_eq!(old.json["format"], "csv");
 }

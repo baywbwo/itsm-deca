@@ -1287,7 +1287,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed. */
+        /** @description Operational report run (D10: synchronous CSV/XLSX export). Official BI export is held. The artifact reference is not exposed. */
         ReportRun: {
             /** Format: uuid */
             id: string;
@@ -1307,7 +1307,7 @@ export interface components {
             createdAt: string;
             basis: components["schemas"]["ReportBasis"];
             filters: components["schemas"]["ReportRunFilters"];
-            /** @description True while the stored CSV can be downloaded (D10 artifact, not expired). */
+            /** @description True while the stored artifact (CSV or XLSX) can be downloaded (not expired). */
             downloadable: boolean;
             requestedBy: components["schemas"]["PersonRef"];
             rowCount: number | null;
@@ -1320,6 +1320,11 @@ export interface components {
             /** @enum {string|null} */
             failureCode: "row_limit" | "internal" | null;
             fileName: string | null;
+            /**
+             * @description Artifact format (D13). Runs before D13 are csv.
+             * @enum {string}
+             */
+            format: "csv" | "xlsx";
         };
         UatNotice: {
             /** @example Mode uji — Superadmin */
@@ -2386,8 +2391,11 @@ export interface components {
             category?: string;
             /** @description UUID or `none`. */
             priority?: string;
-            /** @enum {string} */
-            format?: "csv";
+            /**
+             * @description Default csv. xlsx = real Office Open XML workbook (sheet Data = CSV columns with typed date/number cells, sheet Ringkasan = header, filters, totals). User strings are always string cells, never formulas. The format is part of the idempotency fingerprint.
+             * @enum {string}
+             */
+            format?: "csv" | "xlsx";
         };
         /** @description Validated filters of the run (null = not filtered). Empty object for runs created before D10. */
         ReportRunFilters: {
@@ -4764,7 +4772,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description CSV bytes */
+            /** @description Artifact bytes; media type follows the run format */
             200: {
                 headers: {
                     "X-Content-SHA256"?: string;
@@ -4772,6 +4780,7 @@ export interface operations {
                 };
                 content: {
                     "text/csv": string;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

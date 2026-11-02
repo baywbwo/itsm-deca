@@ -1286,7 +1286,7 @@
       },
       "ReportRun": {
         "type": "object",
-        "description": "Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed.",
+        "description": "Operational report run (D10: synchronous CSV/XLSX export). Official BI export is held. The artifact reference is not exposed.",
         "required": [
           "id",
           "reportType",
@@ -1306,7 +1306,8 @@
           "expiresAt",
           "expired",
           "failureCode",
-          "fileName"
+          "fileName",
+          "format"
         ],
         "properties": {
           "id": {
@@ -1359,7 +1360,7 @@
           },
           "downloadable": {
             "type": "boolean",
-            "description": "True while the stored CSV can be downloaded (D10 artifact, not expired)."
+            "description": "True while the stored artifact (CSV or XLSX) can be downloaded (not expired)."
           },
           "requestedBy": {
             "$ref": "#/components/schemas/PersonRef"
@@ -1410,6 +1411,14 @@
               "string",
               "null"
             ]
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "xlsx"
+            ],
+            "description": "Artifact format (D13). Runs before D13 are csv."
           }
         }
       },
@@ -5344,8 +5353,10 @@
           "format": {
             "type": "string",
             "enum": [
-              "csv"
-            ]
+              "csv",
+              "xlsx"
+            ],
+            "description": "Default csv. xlsx = real Office Open XML workbook (sheet Data = CSV columns with typed date/number cells, sheet Ringkasan = header, filters, totals). User strings are always string cells, never formulas. The format is part of the idempotency fingerprint."
           }
         }
       },
@@ -9347,7 +9358,7 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV bytes",
+            "description": "Artifact bytes; media type follows the run format",
             "headers": {
               "X-Content-SHA256": {
                 "schema": {
@@ -9358,6 +9369,12 @@
             },
             "content": {
               "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
                 "schema": {
                   "type": "string",
                   "format": "binary"

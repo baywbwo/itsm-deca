@@ -22,6 +22,13 @@
 //!   the stored hash, refuses expired artifacts (410) and is audited.
 //! - CSV cells that a spreadsheet could read as a formula (leading `=`, `+`, `-`, `@`, tab, CR)
 //!   are prefixed with `'`; every cell is quoted (RFC 4180, CRLF, UTF-8 with BOM).
+//! - XLSX (D13): a real Office Open XML workbook (rust_xlsxwriter), never CSV renamed. Sheet
+//!   "Data" has the CSV columns and rows (same SQL, same snapshot); sheet "Ringkasan" has the
+//!   header, applied filters and the preview totals. Dates and times are typed date cells,
+//!   counts are numbers. User text is only ever written as a string cell (never a formula) and
+//!   carries Excel's quote prefix, so editing the cell cannot turn it into one either. Same
+//!   idempotency, row limit, hash, expiry, ACL and audit as CSV; the format is part of the
+//!   idempotency hash and is stored on the run.
 
 use axum::Json;
 use axum::body::Body;
@@ -70,6 +77,37 @@ macro_rules! utc {
 }
 
 // ---------- request ----------
+
+/// Artifact format of an export run (`report_runs.format`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Csv,
+    Xlsx,
+}
+
+impl Format {
+    fn parse(raw: Option<&str>) -> Option<Format> {
+        match raw {
+            None | Some("csv") => Some(Format::Csv),
+            Some("xlsx") => Some(Format::Xlsx),
+            Some(_) => None,
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Format::Csv => "csv",
+            Format::Xlsx => "xlsx",
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Format::Csv => "text/csv; charset=utf-8",
+            Format::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,7 +169,7 @@ pub struct ExportBody {
     channel: Option<String>,
     category: Option<String>,
     priority: Option<String>,
-    /// Only `csv` today.
+    /// `csv` (default) or `xlsx`.
     format: Option<String>,
 }
 
@@ -269,11 +307,12 @@ impl PreviewQuery {
 }
 
 impl ExportBody {
+    fn format(&self) -> Result<Format, AppError> {
+        Format::parse(self.format.as_deref()).ok_or(AppError::Validation("format"))
+    }
+
     fn spec(&self) -> Result<Spec, AppError> {
         report_type(Some(&self.report_type))?;
-        if !matches!(self.format.as_deref(), None | Some("csv")) {
-            return Err(AppError::Validation("format"));
-        }
         spec(
             Some(&self.period_start),
             Some(&self.period_end),
@@ -907,6 +946,230 @@ fn build_csv(h: &HeaderRow, s: &Spec, rows: &[RowDb]) -> Result<Vec<u8>, AppErro
     Ok(out.into_bytes())
 }
 
+// ---------- XLSX ----------
+
+/// Human labels of the applied filters for the "Ringkasan" sheet ("Semua" = not filtered).
+struct FilterLabels {
+    status: String,
+    owner: String,
+    channel: String,
+    category: String,
+    priority: String,
+}
+
+const ALL: &str = "Semua";
+
+async fn filter_labels(
+    conn: &mut PgConnection,
+    ws: Uuid,
+    s: &Spec,
+) -> Result<FilterLabels, AppError> {
+    let (owner, channel, category, priority): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT (SELECT u.display_name FROM users u JOIN workspace_memberships m \
+                   ON m.user_id = u.id AND m.workspace_id = $1 WHERE u.id = $2), \
+                (SELECT label FROM intake_channels WHERE workspace_id = $1 AND id = $3), \
+                (SELECT label FROM categories WHERE workspace_id = $1 AND id = $4), \
+                (SELECT label FROM priorities WHERE workspace_id = $1 AND id = $5)",
+    )
+    .bind(ws)
+    .bind(s.filters.owner.id())
+    .bind(s.filters.channel.id())
+    .bind(s.filters.category.id())
+    .bind(s.filters.priority.id())
+    .fetch_one(&mut *conn)
+    .await?;
+    let pick = |wire: &Option<String>, unset: &str, label: Option<String>, none: &str| match wire {
+        None => ALL.to_owned(),
+        Some(w) if w == unset => none.to_owned(),
+        Some(_) => label.unwrap_or_default(),
+    };
+    let status = match &s.status {
+        None => ALL.to_owned(),
+        Some(codes) => codes
+            .iter()
+            .filter_map(|c| TicketStatus::from_code(c))
+            .map(TicketStatus::label)
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    Ok(FilterLabels {
+        status,
+        owner: pick(&s.owner, UNASSIGNED, owner, NO_PIC),
+        channel: pick(&s.channel, NONE, channel, NOT_SET),
+        category: pick(&s.category, NONE, category, NOT_SET),
+        priority: pick(&s.priority, NONE, priority, NOT_SET),
+    })
+}
+
+/// `YYYY-MM-DD` (already validated) → Excel date.
+fn xl_date(s: &str) -> Result<rust_xlsxwriter::ExcelDateTime, AppError> {
+    let n = |r: std::ops::Range<usize>| s.get(r).and_then(|p| p.parse::<u16>().ok());
+    match (n(0..4), n(5..7), n(8..10)) {
+        (Some(y), Some(m), Some(d)) => rust_xlsxwriter::ExcelDateTime::from_ymd(
+            y,
+            u8::try_from(m).map_err(AppError::internal)?,
+            u8::try_from(d).map_err(AppError::internal)?,
+        )
+        .map_err(AppError::internal),
+        _ => Err(AppError::internal(BadLocalTime)),
+    }
+}
+
+/// `YYYY-MM-DD HH:MM` (from SQL `to_char`) → Excel date-time, no time zone shift.
+fn xl_datetime(s: &str) -> Result<rust_xlsxwriter::ExcelDateTime, AppError> {
+    if s.len() != 16 || s.as_bytes()[10] != b' ' {
+        return Err(AppError::internal(BadLocalTime));
+    }
+    let n = |r: std::ops::Range<usize>| s.get(r).and_then(|p| p.parse::<u16>().ok());
+    let (Some(h), Some(mi)) = (n(11..13), n(14..16)) else {
+        return Err(AppError::internal(BadLocalTime));
+    };
+    xl_date(&s[..10])?
+        .and_hms(h, u8::try_from(mi).map_err(AppError::internal)?, 0)
+        .map_err(AppError::internal)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("unexpected local time format from database")]
+struct BadLocalTime;
+
+fn build_xlsx(
+    h: &HeaderRow,
+    s: &Spec,
+    rows: &[RowDb],
+    t: &Totals,
+    f: &FilterLabels,
+) -> Result<Vec<u8>, AppError> {
+    use rust_xlsxwriter::{Format as Xf, Workbook};
+    let e = AppError::internal;
+    let head = Xf::new().set_bold();
+    // Quote prefix: the cell stays text even when a user edits it in Excel.
+    let text = Xf::new().set_quote_prefix();
+    let date = Xf::new().set_num_format("yyyy-mm-dd");
+    let datetime = Xf::new().set_num_format("yyyy-mm-dd hh:mm");
+    let int = Xf::new().set_num_format("0");
+
+    let mut wb = Workbook::new();
+    let data = wb.add_worksheet();
+    data.set_name("Data").map_err(e)?;
+    for (c, name) in (0u16..).zip(CSV_COLUMNS) {
+        data.write_string_with_format(0, c, name, &head)
+            .map_err(e)?;
+    }
+    let reporter = h.reporter_code.as_deref().unwrap_or("");
+    let (start, end) = (xl_date(&s.period_start)?, xl_date(&s.period_end)?);
+    for (r, row) in (1u32..).zip(rows) {
+        let status = TicketStatus::from_code(&row.workflow_status)
+            .ok_or_else(|| AppError::internal(UnknownStatus))?;
+        let number = format!("{}-{}", h.workspace_code, row.number);
+        let texts: [(u16, &str); 13] = [
+            (0, KIND_LABEL),
+            (1, &h.company_code),
+            (2, &h.company_name),
+            (3, reporter),
+            (6, s.basis.label()),
+            (7, &h.tz),
+            (8, &number),
+            (9, &row.subject),
+            (10, status.label()),
+            (11, row.priority.as_deref().unwrap_or(NOT_SET)),
+            (12, row.category.as_deref().unwrap_or(NOT_SET)),
+            (13, row.channel.as_deref().unwrap_or(NOT_SET)),
+            (14, row.owner.as_deref().unwrap_or(NO_PIC)),
+        ];
+        for (c, v) in texts {
+            if !v.is_empty() {
+                data.write_string_with_format(r, c, v, &text).map_err(e)?;
+            }
+        }
+        data.write_datetime_with_format(r, 4, &start, &date)
+            .map_err(e)?;
+        data.write_datetime_with_format(r, 5, &end, &date)
+            .map_err(e)?;
+        data.write_datetime_with_format(r, 15, &xl_datetime(&row.received_local)?, &datetime)
+            .map_err(e)?;
+        #[allow(clippy::cast_precision_loss)]
+        data.write_number_with_format(r, 16, row.resolution_cycles as f64, &int)
+            .map_err(e)?;
+        if let Some(v) = row.last_resolved_local.as_deref() {
+            data.write_datetime_with_format(r, 17, &xl_datetime(v)?, &datetime)
+                .map_err(e)?;
+        }
+    }
+    let last = u32::try_from(rows.len()).map_err(AppError::internal)?;
+    data.autofilter(0, 0, last, 17).map_err(e)?;
+    data.set_freeze_panes(1, 0).map_err(e)?;
+    for (c, w) in [
+        (0u16, 24.0),
+        (2, 22.0),
+        (8, 12.0),
+        (9, 40.0),
+        (14, 20.0),
+        (15, 17.0),
+        (17, 17.0),
+    ] {
+        data.set_column_width(c, w).map_err(e)?;
+    }
+
+    let sum = wb.add_worksheet();
+    sum.set_name("Ringkasan").map_err(e)?;
+    sum.set_column_width(0, 34.0).map_err(e)?;
+    sum.set_column_width(1, 48.0).map_err(e)?;
+    let mut r = 0u32;
+    let mut kv = |k: &str, v: &str| -> Result<(), AppError> {
+        sum.write_string_with_format(r, 0, k, &head).map_err(e)?;
+        if !v.is_empty() {
+            sum.write_string_with_format(r, 1, v, &text).map_err(e)?;
+        }
+        r += 1;
+        Ok(())
+    };
+    kv("Jenis laporan", KIND_LABEL)?;
+    kv("Catatan", NOTICE)?;
+    kv("Perusahaan", &h.company_name)?;
+    kv("Kode perusahaan", &h.company_code)?;
+    kv(
+        "Kode pelapor",
+        h.reporter_code.as_deref().unwrap_or("Belum dikonfigurasi"),
+    )?;
+    kv("Workspace", &h.workspace_code)?;
+    kv("Zona waktu", &h.tz)?;
+    kv("Basis tanggal", s.basis.label())?;
+    kv("Filter status", &f.status)?;
+    kv("Filter PIC", &f.owner)?;
+    kv("Filter kanal", &f.channel)?;
+    kv("Filter kategori", &f.category)?;
+    kv("Filter prioritas", &f.priority)?;
+    kv("Data per (UTC)", &h.as_of)?;
+    for (k, d) in [("Periode mulai", &start), ("Periode selesai", &end)] {
+        sum.write_string_with_format(r, 0, k, &head).map_err(e)?;
+        sum.write_datetime_with_format(r, 1, d, &date).map_err(e)?;
+        r += 1;
+    }
+    r += 1;
+    for (k, n) in [
+        ("Total tiket", t.tickets),
+        ("Siklus resolusi dalam periode", t.resolution_cycles),
+        ("Tiket diselesaikan dalam periode", t.resolved_tickets),
+        ("Tanpa PIC", t.unassigned),
+        ("Tanpa kanal", t.missing_channel),
+        ("Tanpa kategori", t.missing_category),
+        ("Tanpa prioritas", t.missing_priority),
+    ] {
+        sum.write_string_with_format(r, 0, k, &head).map_err(e)?;
+        #[allow(clippy::cast_precision_loss)]
+        sum.write_number_with_format(r, 1, n as f64, &int)
+            .map_err(e)?;
+        r += 1;
+    }
+    wb.save_to_buffer().map_err(e)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::with_capacity(64), |mut s, b| {
@@ -944,6 +1207,7 @@ struct RunRow {
     expired: bool,
     failure_code: Option<String>,
     workspace_code: String,
+    format: String,
 }
 
 #[derive(Serialize)]
@@ -965,13 +1229,15 @@ pub struct ReportRunView {
     created_at: String,
     requested_by: PersonRef,
     row_count: Option<i32>,
-    /// Lowercase hex SHA-256 of the exact CSV bytes served by the download.
+    /// Lowercase hex SHA-256 of the exact artifact bytes served by the download.
     artifact_sha256: Option<String>,
     artifact_bytes: Option<i32>,
     expires_at: Option<String>,
     expired: bool,
     failure_code: Option<String>,
     file_name: Option<String>,
+    /// `csv` or `xlsx`.
+    format: String,
 }
 
 const RUN_SELECT: &str = concat!(
@@ -984,7 +1250,7 @@ const RUN_SELECT: &str = concat!(
        r.artifact_sha256, r.artifact_bytes, ",
     utc!("r.expires_at"),
     " AS expires_at, (r.expires_at IS NOT NULL AND r.expires_at <= now()) AS expired, \
-       r.failure_code, w.code AS workspace_code \
+       r.failure_code, w.code AS workspace_code, r.format \
      FROM report_runs r JOIN users u ON u.id = r.requested_by \
      JOIN workspaces w ON w.id = r.workspace_id \
      WHERE r.workspace_id = $1"
@@ -993,9 +1259,18 @@ const RUN_SELECT: &str = concat!(
 fn file_name(r: &RunRow) -> String {
     let short: String = r.id.to_string().chars().take(8).collect();
     format!(
-        "{}-rekap-operasional-NON-REGULATOR-{}_sd_{}-{}-{short}.csv",
-        r.workspace_code, r.period_start, r.period_end, r.basis
+        "{}-rekap-operasional-NON-REGULATOR-{}_sd_{}-{}-{short}.{}",
+        r.workspace_code,
+        r.period_start,
+        r.period_end,
+        r.basis,
+        run_format(r).code()
     )
+}
+
+/// `report_runs.format` is constrained to csv/xlsx by its CHECK; 'csv' is the column default.
+fn run_format(r: &RunRow) -> Format {
+    Format::parse(Some(&r.format)).unwrap_or(Format::Csv)
 }
 
 fn run_view(r: RunRow) -> ReportRunView {
@@ -1023,6 +1298,7 @@ fn run_view(r: RunRow) -> ReportRunView {
         expires_at: r.expires_at,
         expired: r.expired,
         failure_code: r.failure_code,
+        format: r.format,
     }
 }
 
@@ -1123,6 +1399,7 @@ pub async fn create_run(
     let key = idempotency_key(&headers)?;
     let b = body(payload)?;
     let spec = b.spec()?;
+    let fmt = b.format()?;
     let filters = serde_json::json!({
         "status": spec.status,
         "owner": spec.owner,
@@ -1131,7 +1408,7 @@ pub async fn create_run(
         "priority": spec.priority,
     });
     let hash: [u8; 32] = Sha256::digest(
-        serde_json::to_vec(&(OPERATIONAL, "csv", &spec)).map_err(AppError::internal)?,
+        serde_json::to_vec(&(OPERATIONAL, fmt.code(), &spec)).map_err(AppError::internal)?,
     )
     .into();
     let ws = access.workspace_id;
@@ -1175,7 +1452,7 @@ pub async fn create_run(
     let id = Uuid::new_v4();
     let base_change = serde_json::json!({
         "reportType": OPERATIONAL,
-        "format": "csv",
+        "format": fmt.code(),
         "periodStart": spec.period_start,
         "periodEnd": spec.period_end,
         "basis": spec.basis.code(),
@@ -1185,8 +1462,8 @@ pub async fn create_run(
     if i64::try_from(data.len()).unwrap_or(i64::MAX) > max_rows {
         sqlx::query(
             "INSERT INTO report_runs (id, workspace_id, requested_by, report_type, period_start, \
-               period_end, basis, filters, state, idempotency_key, request_hash, failure_code) \
-             VALUES ($1, $2, $3, 'operational', $4::date, $5::date, $6, $7, 'failed', $8, $9, 'row_limit')",
+               period_end, basis, filters, state, idempotency_key, request_hash, failure_code, format) \
+             VALUES ($1, $2, $3, 'operational', $4::date, $5::date, $6, $7, 'failed', $8, $9, 'row_limit', $10)",
         )
         .bind(id)
         .bind(ws)
@@ -1197,6 +1474,7 @@ pub async fn create_run(
         .bind(&filters)
         .bind(&key)
         .bind(hash.as_slice())
+        .bind(fmt.code())
         .execute(&mut *tx)
         .await?;
         let mut change = base_change;
@@ -1213,17 +1491,26 @@ pub async fn create_run(
         )
         .await?;
     } else {
-        let csv = build_csv(&h, &spec, &data)?;
+        let csv = match fmt {
+            Format::Csv => build_csv(&h, &spec, &data)?,
+            Format::Xlsx => {
+                let totals: Totals = bind_base!(sqlx::query_as(TOTALS_SQL), ws, &spec)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let labels = filter_labels(&mut tx, ws, &spec).await?;
+                build_xlsx(&h, &spec, &data, &totals, &labels)?
+            }
+        };
         let sha: [u8; 32] = Sha256::digest(&csv).into();
         let n_rows = i32::try_from(data.len()).map_err(AppError::internal)?;
         let n_bytes = i32::try_from(csv.len()).map_err(AppError::internal)?;
         sqlx::query(
             "INSERT INTO report_runs (id, workspace_id, requested_by, report_type, period_start, \
                period_end, basis, filters, state, generated_at, artifact_ref, idempotency_key, \
-               request_hash, row_count, artifact_sha256, artifact_bytes, expires_at) \
+               request_hash, row_count, artifact_sha256, artifact_bytes, expires_at, format) \
              VALUES ($1, $2, $3, 'operational', $4::date, $5::date, $6, $7, 'succeeded', now(), \
                'db:report_artifacts/' || $1::text, $8, $9, $10, $11, $12, \
-               now() + make_interval(hours => $13::int))",
+               now() + make_interval(hours => $13::int), $14)",
         )
         .bind(id)
         .bind(ws)
@@ -1238,6 +1525,7 @@ pub async fn create_run(
         .bind(sha.as_slice())
         .bind(n_bytes)
         .bind(i32::try_from(ARTIFACT_TTL_HOURS).map_err(AppError::internal)?)
+        .bind(fmt.code())
         .execute(&mut *tx)
         .await?;
         sqlx::query(
@@ -1325,6 +1613,10 @@ pub async fn download(
     if a.sha256 != digest || run.artifact_sha256.as_deref() != Some(digest.as_slice()) {
         return Err(AppError::internal(ArtifactMismatch));
     }
+    // An XLSX run must hold a ZIP container (never CSV bytes under an .xlsx name).
+    if run_format(&run) == Format::Xlsx && !a.content.starts_with(b"PK\x03\x04") {
+        return Err(AppError::internal(ArtifactMismatch));
+    }
     audit(
         &mut tx,
         &access,
@@ -1344,7 +1636,7 @@ pub async fn download(
     let hd = resp.headers_mut();
     hd.insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_static("text/csv; charset=utf-8"),
+        HeaderValue::from_static(run_format(&run).content_type()),
     );
     hd.insert(header::CONTENT_DISPOSITION, disp);
     hd.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
