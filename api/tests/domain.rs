@@ -270,21 +270,83 @@ async fn concurrent_inserts_get_unique_numbers(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn workspace_code_is_frozen_after_first_number(pool: PgPool) {
+async fn workspace_code_rename_keeps_old_numbers_and_reserves_codes(pool: PgPool) {
     let f = fixture(&pool).await;
-    // Before any ticket the code may still change.
-    let early = sqlx::query("UPDATE workspaces SET code = 'DUMX' WHERE id = $1")
-        .bind(f.b)
-        .execute(&pool)
-        .await;
-    assert!(early.is_ok());
+    let prefix = |id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            ok(
+                sqlx::query_scalar::<_, String>("SELECT number_prefix FROM tickets WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await,
+                "prefix",
+            )
+        }
+    };
+    let rename = |ws: Uuid, code: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query("UPDATE workspaces SET code = $2 WHERE id = $1")
+                .bind(ws)
+                .bind(code)
+                .execute(&pool)
+                .await
+                .map(|_| ())
+        }
+    };
 
-    ticket(&pool, f.a, f.admin).await;
-    let late = sqlx::query("UPDATE workspaces SET code = 'DUMY' WHERE id = $1")
+    let (old, n1) = ticket(&pool, f.a, f.admin).await;
+    assert_eq!((prefix(old).await.as_str(), n1), ("DUMA", 1));
+
+    // D17: the business code may change after numbers exist; old tickets keep theirs.
+    assert!(rename(f.a, "DUMY").await.is_ok());
+    assert_eq!(prefix(old).await, "DUMA", "history is never renumbered");
+    let (new, n2) = ticket(&pool, f.a, f.admin).await;
+    assert_eq!(
+        (prefix(new).await.as_str(), n2),
+        ("DUMY", 2),
+        "counter continues"
+    );
+
+    // Neither the current nor a historical code can move to another workspace.
+    for code in ["DUMA", "DUMY"] {
+        let r = rename(f.b, code).await;
+        assert_eq!(sqlstate(&r).as_deref(), Some("23505"), "{code} reserved");
+    }
+    // The owner may return to its own earlier code; numbering still continues.
+    assert!(rename(f.a, "DUMA").await.is_ok());
+    let (back, n3) = ticket(&pool, f.a, f.admin).await;
+    assert_eq!((prefix(back).await.as_str(), n3), ("DUMA", 3));
+    let codes: Vec<String> = ok(
+        sqlx::query_scalar(
+            "SELECT code FROM workspace_code_history WHERE workspace_id = $1 ORDER BY code",
+        )
         .bind(f.a)
-        .execute(&pool)
-        .await;
-    assert_eq!(sqlstate(&late).as_deref(), Some(RULE));
+        .fetch_all(&pool)
+        .await,
+        "history",
+    );
+    assert_eq!(codes, ["DUMA", "DUMY"]);
+
+    // Format is still enforced by the database.
+    assert!(rename(f.a, "du-ma").await.is_err());
+
+    // The stamped prefix and the reservation history are immutable.
+    let r = sqlx::query(
+        "UPDATE tickets SET number_prefix = 'DUMY', version = version + 1 WHERE id = $1",
+    )
+    .bind(old)
+    .execute(&pool)
+    .await;
+    assert_eq!(sqlstate(&r).as_deref(), Some(RULE));
+    for sql in [
+        "DELETE FROM workspace_code_history WHERE code = 'DUMY'",
+        "UPDATE workspace_code_history SET workspace_id = workspace_id WHERE code = 'DUMY'",
+    ] {
+        let r = sqlx::query(sql).execute(&pool).await;
+        assert_eq!(sqlstate(&r).as_deref(), Some(RULE), "{sql}");
+    }
 
     // Company and workspace names stay editable.
     let rename =
@@ -301,6 +363,74 @@ async fn workspace_code_is_frozen_after_first_number(pool: PgPool) {
     .execute(&pool)
     .await;
     assert!(company.is_ok());
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn concurrent_code_changes_serialise(pool: PgPool) {
+    let f = fixture(&pool).await;
+
+    // Two workspaces racing for the same new code: exactly one wins.
+    let mut ta = ok(pool.begin().await, "begin a");
+    ok(
+        sqlx::query("UPDATE workspaces SET code = 'RACE' WHERE id = $1")
+            .bind(f.a)
+            .execute(&mut *ta)
+            .await,
+        "a takes RACE",
+    );
+    let p = pool.clone();
+    let b = f.b;
+    let other = tokio::spawn(async move {
+        sqlx::query("UPDATE workspaces SET code = 'RACE' WHERE id = $1")
+            .bind(b)
+            .execute(&p)
+            .await
+            .map(|_| ())
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!other.is_finished(), "second rename waits for the first");
+    ok(ta.commit().await, "commit a");
+    let r = ok(other.await, "join");
+    assert_eq!(sqlstate(&r).as_deref(), Some("23505"));
+
+    // A ticket created while a rename is in flight waits and gets the committed code;
+    // the counter neither resets nor duplicates.
+    let (_, n1) = ticket(&pool, f.a, f.admin).await;
+    let mut tr = ok(pool.begin().await, "begin rename");
+    ok(
+        sqlx::query("UPDATE workspaces SET code = 'RACF' WHERE id = $1")
+            .bind(f.a)
+            .execute(&mut *tr)
+            .await,
+        "rename in tx",
+    );
+    let p = pool.clone();
+    let (a, admin) = (f.a, f.admin);
+    let insert = tokio::spawn(async move {
+        let (id, n) = try_ticket(&p, a, admin, None).await?;
+        let pre: String = sqlx::query_scalar("SELECT number_prefix FROM tickets WHERE id = $1")
+            .bind(id)
+            .fetch_one(&p)
+            .await?;
+        Ok::<_, sqlx::Error>((pre, n))
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!insert.is_finished(), "insert waits for the rename");
+    ok(tr.commit().await, "commit rename");
+    let (pre, n2) = ok(ok(insert.await, "join"), "insert");
+    assert_eq!(pre, "RACF");
+    assert_eq!(n2, n1 + 1);
+    let dupes: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM (SELECT number FROM tickets WHERE workspace_id = $1 \
+             GROUP BY number HAVING count(*) > 1) d",
+        )
+        .bind(f.a)
+        .fetch_one(&pool)
+        .await,
+        "dupes",
+    );
+    assert_eq!(dupes, 0);
 }
 
 // ---------- isolation ----------

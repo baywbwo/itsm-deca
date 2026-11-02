@@ -284,6 +284,18 @@ impl TicketQuery {
         digits.parse::<i64>().ok().filter(|n| *n > 0)
     }
 
+    /// Prefix of a searched ticket number ("duma-12" → DUMA). A ticket keeps the prefix it was
+    /// issued with, so after a code change "DUMA-12" finds only the old ticket 12 and the new
+    /// code's "DECA-12" does not match it. Bare numbers ("12", "#12") match any prefix.
+    fn number_prefix(&self) -> Option<String> {
+        let (prefix, _) = self.q.as_deref()?.rsplit_once('-')?;
+        let p = prefix.trim().to_ascii_uppercase();
+        let code = (2..=10).contains(&p.len())
+            && p.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+        code.then_some(p)
+    }
+
     fn like(&self) -> Option<String> {
         let q = self.q.as_deref()?;
         let mut out = String::with_capacity(q.len() + 2);
@@ -507,7 +519,11 @@ fn push_scope(b: &mut QueryBuilder<'_, Postgres>, ws: Uuid, f: &TicketQuery, wit
             .push_bind(like)
             .push(" ESCAPE '\\'");
         if let Some(n) = f.number() {
-            b.push(" OR t.number = ").push_bind(n);
+            b.push(" OR (t.number = ").push_bind(n);
+            if let Some(p) = f.number_prefix() {
+                b.push(" AND t.number_prefix = ").push_bind(p);
+            }
+            b.push(")");
         }
         b.push(")");
     }
@@ -527,7 +543,7 @@ fn push_event_range(b: &mut QueryBuilder<'_, Postgres>, f: &TicketQuery) {
 }
 
 const ITEM_COLUMNS: &str = concat!(
-    "SELECT t.id, t.number, t.subject, t.workflow_status, t.cycle_no, t.version, ",
+    "SELECT t.id, t.number, t.number_prefix, t.subject, t.workflow_status, t.cycle_no, t.version, ",
     utc!("t.received_at"),
     " AS received_at, ",
     utc!("t.updated_at"),
@@ -553,6 +569,7 @@ const ITEM_FROM: &str = " FROM tickets t \
 struct ItemRow {
     id: Uuid,
     number: i64,
+    number_prefix: String,
     subject: String,
     workflow_status: String,
     cycle_no: i32,
@@ -782,7 +799,7 @@ fn item(access: &WorkspaceAccess, r: ItemRow) -> Result<(TicketListItem, String)
     let item = TicketListItem {
         id: r.id,
         number: r.number,
-        display_number: format!("{}-{}", access.workspace_code, r.number),
+        display_number: format!("{}-{}", r.number_prefix, r.number),
         subject: r.subject,
         status: status.into(),
         cycle_no: r.cycle_no,
@@ -1447,6 +1464,11 @@ mod tests {
     fn search_number_and_like_escape() {
         let f = parse(&[("q", "DUMA-12")]).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(f.number(), Some(12));
+        assert_eq!(f.number_prefix().as_deref(), Some("DUMA"));
+        let f = parse(&[("q", "duma-12")]).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(f.number_prefix().as_deref(), Some("DUMA"));
+        let f = parse(&[("q", "%2312")]).unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!((f.number(), f.number_prefix()), (Some(12), None));
         let f = parse(&[("q", "50%25_off")]).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(f.like().as_deref(), Some("%50\\%\\_off%"));
         assert_eq!(f.number(), None);

@@ -348,7 +348,8 @@ macro_rules! base {
            WHERE e.workspace_id = $1 AND e.action = 'resolve' \
              AND e.occurred_at >= p.start_at AND e.occurred_at < p.end_at GROUP BY 1), \
          rt AS ( \
-           SELECT t.id, t.number, t.subject, t.workflow_status, t.received_at, t.owner_user_id, \
+           SELECT t.id, t.number, t.number_prefix, t.subject, t.workflow_status, t.received_at, \
+             t.owner_user_id, \
              t.intake_channel_id, t.category_id, t.priority_id, \
              COALESCE(ev.cycles, 0) AS cycles, ev.last_resolved_at \
            FROM tickets t CROSS JOIN p LEFT JOIN ev ON ev.ticket_id = t.id \
@@ -440,7 +441,7 @@ const OWNER_SQL: &str = concat!(
 /// `$14` = row limit (NULL = all). Stable order: received, then number.
 const ROWS_SQL: &str = concat!(
     base!(),
-    "SELECT rt.id, rt.number, rt.subject, rt.workflow_status, \
+    "SELECT rt.id, rt.number, rt.number_prefix, rt.subject, rt.workflow_status, \
        pr.label AS priority, cat.label AS category, ic.label AS channel, u.display_name AS owner, \
        to_char(rt.received_at AT TIME ZONE p.tz, 'YYYY-MM-DD HH24:MI') AS received_local, \
        rt.cycles AS resolution_cycles, \
@@ -487,6 +488,8 @@ pub struct Totals {
 struct RowDb {
     id: Uuid,
     number: i64,
+    /// Prefix the ticket was issued with (kept after a workspace code change).
+    number_prefix: String,
     subject: String,
     workflow_status: String,
     priority: Option<String>,
@@ -631,12 +634,12 @@ fn report_types() -> Vec<ReportTypeOption> {
     ]
 }
 
-fn row_view(r: RowDb, workspace_code: &str) -> Result<ReportRow, AppError> {
+fn row_view(r: RowDb) -> Result<ReportRow, AppError> {
     let status = TicketStatus::from_code(&r.workflow_status)
         .ok_or_else(|| AppError::internal(UnknownStatus))?;
     Ok(ReportRow {
         ticket_id: r.id,
-        display_number: format!("{workspace_code}-{}", r.number),
+        display_number: format!("{}-{}", r.number_prefix, r.number),
         subject: r.subject,
         status: status.into(),
         priority: r.priority,
@@ -766,7 +769,7 @@ pub async fn preview(
         .collect();
     let rows = sample
         .into_iter()
-        .map(|r| row_view(r, &h.workspace_code))
+        .map(row_view)
         .collect::<Result<Vec<_>, _>>()?;
     let validation = validation(&h, &totals, max_rows);
     let exportable = totals.tickets <= max_rows;
@@ -917,7 +920,7 @@ fn build_csv(h: &HeaderRow, s: &Spec, rows: &[RowDb]) -> Result<Vec<u8>, AppErro
     for r in rows {
         let status = TicketStatus::from_code(&r.workflow_status)
             .ok_or_else(|| AppError::internal(UnknownStatus))?;
-        let number = format!("{}-{}", h.workspace_code, r.number);
+        let number = format!("{}-{}", r.number_prefix, r.number);
         let cycles = r.resolution_cycles.to_string();
         csv_line(
             &mut out,
@@ -1066,7 +1069,7 @@ fn build_xlsx(
     for (r, row) in (1u32..).zip(rows) {
         let status = TicketStatus::from_code(&row.workflow_status)
             .ok_or_else(|| AppError::internal(UnknownStatus))?;
-        let number = format!("{}-{}", h.workspace_code, row.number);
+        let number = format!("{}-{}", row.number_prefix, row.number);
         let texts: [(u16, &str); 13] = [
             (0, KIND_LABEL),
             (1, &h.company_code),
@@ -1250,9 +1253,8 @@ const RUN_SELECT: &str = concat!(
        r.artifact_sha256, r.artifact_bytes, ",
     utc!("r.expires_at"),
     " AS expires_at, (r.expires_at IS NOT NULL AND r.expires_at <= now()) AS expired, \
-       r.failure_code, w.code AS workspace_code, r.format \
+       r.failure_code, r.workspace_code, r.format \
      FROM report_runs r JOIN users u ON u.id = r.requested_by \
-     JOIN workspaces w ON w.id = r.workspace_id \
      WHERE r.workspace_id = $1"
 );
 
