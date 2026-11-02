@@ -25,7 +25,7 @@ import type {
   SettingsBody,
   SettingsResult,
   CompanyList,
-  CompanyResult,
+  CompanyResult, CompanyUpdateResult,
   CatalogEditor,
   CatalogEntry,
   CatalogEntryResult,
@@ -337,6 +337,8 @@ export const isSettingsResult = (v: unknown): v is SettingsResult =>
 export const isCompanyList = (v: unknown): v is CompanyList => isObj(v) && isArr(v.items, isWorkspaceSettings);
 export const isCompanyResult = (v: unknown): v is CompanyResult =>
   isObj(v) && isWorkspaceSettings(v.item) && isStr(v.auditEventId);
+export const isCompanyUpdateResult = (v: unknown): v is CompanyUpdateResult =>
+  isObj(v) && isWorkspaceSettings(v.item) && isStrOrNull(v.auditEventId);
 const CATALOG_KINDS = ['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'];
 const isCatalogEntry = (v: unknown): v is CatalogEntry =>
   isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.label) && typeof v.active === 'boolean' &&

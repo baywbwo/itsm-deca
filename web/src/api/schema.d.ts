@@ -754,6 +754,23 @@ export interface paths {
         patch: operations["setCompanyActive"];
         trace?: never;
     };
+    "/api/v1/companies/{company_id}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed. */
+        patch: operations["updateCompany"];
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
         parameters: {
             query?: never;
@@ -2128,6 +2145,11 @@ export interface components {
             item: components["schemas"]["WorkspaceSettings"];
             /** Format: uuid */
             auditEventId: string;
+        };
+        CompanyUpdateResult: {
+            item: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string | null;
         };
         CatalogEntry: {
             /** Format: uuid */
@@ -4213,6 +4235,38 @@ export interface operations {
             404: components["responses"]["NotFound"];
             409: components["responses"]["VersionConflict"];
             422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingsPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyUpdateResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
             429: components["responses"]["RateLimited"];
         };
     };

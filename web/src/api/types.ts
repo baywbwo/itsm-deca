@@ -80,6 +80,7 @@ export type CompanyList = S['CompanyList'];
 export type CompanyCreateRequest = S['CompanyCreateRequest'];
 export type CompanyActivationRequest = S['CompanyActivationRequest'];
 export type CompanyResult = S['CompanyResult'];
+export type CompanyUpdateResult = S['CompanyUpdateResult'];
 export type CatalogKind = S['CatalogKind'];
 export type CatalogEntry = S['CatalogEntry'];
 export type CatalogEditor = S['CatalogEditor'];
