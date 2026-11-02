@@ -20,7 +20,7 @@ pub struct WorkspaceView {
     timezone: String,
     company_id: Uuid,
     version: i32,
-    /// Company branding preset (`deca` | `ajr`); `null` = not configured (neutral look).
+    /// Company branding preset (`deca` | `ajr` | `bmt`); `null` = not configured (neutral look).
     brand_key: Option<String>,
     /// Name shown next to the logo: the branding display name, else the company name.
     brand_name: String,

@@ -14,6 +14,8 @@ describe('D15 company branding', () => {
   it('resolves the preset of the listed workspace, neutral without one', () => {
     expect(activeBrand(ws)).toMatchObject({ key: 'deca', name: 'PT Dummy Alfa (uji)', preset: { logoAlt: 'Qash' } });
     expect(activeBrand({ ...ws, brandKey: 'ajr' }).preset?.logoAlt).toBe('AJR');
+    expect(activeBrand({ ...ws, brandKey: 'bmt' }).preset?.logoAlt).toBe('BMT');
+    expect(activeBrand({ ...ws, brandKey: 'bmt' }).key).toBe('bmt');
     expect(activeBrand({ ...ws, brandKey: null })).toMatchObject({ key: null, preset: null, name: 'PT Dummy Alfa (uji)' });
     expect(activeBrand(null)).toEqual({ key: null, name: '', preset: null });
     expect(pageTitle(activeBrand(ws))).toBe('PT Dummy Alfa (uji) · ITSM');
@@ -23,6 +25,7 @@ describe('D15 company branding', () => {
   it('accepts only the bundled preset keys from the server', () => {
     expect(isWorkspace(ws)).toBe(true);
     expect(isWorkspace({ ...ws, brandKey: null })).toBe(true);
+    expect(isWorkspace({ ...ws, brandKey: 'bmt' })).toBe(true);
     for (const bad of ['https://example.com/logo.png', '../logo', 'DECA', 'qash', '', undefined]) {
       expect(isWorkspace({ ...ws, brandKey: bad })).toBe(false);
     }
@@ -39,7 +42,7 @@ describe('D15 company branding', () => {
       expect(contrast(t.navInk, t.navCurrent)).toBeGreaterThanOrEqual(4.5);
       expect(contrast('#ffffff', t.kpi)).toBeGreaterThanOrEqual(7);
     }
-    for (const bg of ['#ffffff', CANVAS]) {
+    for (const bg of ['#ffffff', CANVAS, '#faf7f1']) {
       expect(contrast(INK, bg)).toBeGreaterThanOrEqual(7);
       expect(contrast(MUTED, bg)).toBeGreaterThanOrEqual(4.5);
       expect(contrast('#63726c', bg)).toBeGreaterThanOrEqual(4.5); // idle nav text
@@ -48,6 +51,8 @@ describe('D15 company branding', () => {
 
   it('the stylesheet carries the same preset colours as the registry', () => {
     const css = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8').toLowerCase();
+    const overrides = readFileSync(new URL('../styles/workspace.css', import.meta.url), 'utf8');
+    expect(overrides).not.toMatch(/--(?:accent|accent-hover|nav-current|nav-ink|kpi)\s*:/);
     for (const p of Object.values(BRAND_PRESETS)) {
       const block = css.slice(css.indexOf(`:root[data-brand='${p.key}']`));
       const rule = block.slice(0, block.indexOf('}'));

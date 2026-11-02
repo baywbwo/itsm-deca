@@ -1396,3 +1396,38 @@ async fn migration_0013_rolls_back_and_reapplies(pool: PgPool) {
         "the CHECK keeps the preset allowlist in the database too"
     );
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn bmt_branding_is_scoped_and_survives_reads(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let t = tok(&pool, f.admin).await;
+    let a = get(&pool, &ws_uri(f.a, "settings"), &t).await.json["settings"].clone();
+    let b_before = get(&pool, &ws_uri(f.b, "settings"), &t).await.json["settings"].clone();
+    let uri = format!("/api/v1/companies/{}/profile", s(&a["companyId"]));
+    let body = json!({"code": a["workspaceCode"], "workspaceName": a["workspaceName"],
+        "companyName": a["companyName"], "timezone": a["timezone"],
+        "reporterCode": a["reporterCode"], "brandKey": "bmt", "brandName": "BMT Uji", "version": a["version"]});
+    let denied = write(&pool, "PATCH", &uri, &tok(&pool, f.cs).await, body.clone()).await;
+    assert_eq!(denied.status, StatusCode::FORBIDDEN);
+    let saved = write(&pool, "PATCH", &uri, &t, body).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.json);
+    let current = get(&pool, &format!("/api/v1/workspaces/{}", f.a), &t).await;
+    assert_eq!(current.json["brandKey"], "bmt");
+    assert_eq!(current.json["brandName"], "BMT Uji");
+    let b_after = get(&pool, &ws_uri(f.b, "settings"), &t).await.json["settings"].clone();
+    assert_eq!(b_before, b_after, "branding must not change another company");
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn bmt_migration_downgrade_refuses_to_discard_branding(pool: PgPool) {
+    let _f = fixture(&pool).await;
+    ok(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await, "set BMT");
+    assert!(db::MIGRATOR.undo(&pool, 14).await.is_err());
+    let count: i64 = ok(sqlx::query_scalar("SELECT count(*) FROM companies WHERE brand_key = 'bmt'").fetch_one(&pool).await, "preserved BMT");
+    assert!(count > 0);
+    ok(sqlx::query("UPDATE companies SET brand_key = NULL").execute(&pool).await, "clear preset explicitly");
+    ok(db::MIGRATOR.undo(&pool, 14).await, "downgrade");
+    assert!(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await.is_err());
+    ok(db::MIGRATOR.run(&pool).await, "upgrade");
+    ok(sqlx::query("UPDATE companies SET brand_key = 'bmt'").execute(&pool).await, "BMT accepted again");
+}

@@ -1,10 +1,11 @@
+import bmtLogo from '../assets/logo-bmt.svg';
 import ajrLogo from '../assets/logo-ajr.png';
 import decaLogo from '../assets/logo-qash.svg';
 import type { BrandKey, Workspace } from '../api/types';
 
 /**
  * Company branding presets bundled with the app (D15). The server stores only the preset key
- * (`deca` | `ajr` | null), never a URL or file, so a logo can only be one of these assets. The
+ * (`deca` | `ajr` | `bmt` | null), never a URL or file, so a logo can only be one of these assets. The
  * colours live in app.css under `[data-brand=…]`; the values here are kept in step for the
  * contrast test.
  */
@@ -25,9 +26,14 @@ export interface BrandPreset {
 
 export const BRAND_PRESETS: Record<Exclude<BrandKey, null>, BrandPreset> = {
   deca: {
-    key: 'deca', label: 'DECA (logo Qash, hijau)', logo: decaLogo, logoAlt: 'Qash',
-    accent: '#245c31', accentHover: '#16482f', soft: '#e8f1e5',
-    navCurrent: '#eafbe5', navInk: '#174b2b', kpi: '#003571',
+    key: 'deca', label: 'DOB / DECA (QASH, hijau–navy)', logo: decaLogo, logoAlt: 'Qash',
+    accent: '#244f37', accentHover: '#183c27', soft: '#edf7e8',
+    navCurrent: '#edf8e7', navInk: '#254f31', kpi: '#163961',
+  },
+  bmt: {
+    key: 'bmt', label: 'BMT (coklat–gold)', logo: bmtLogo, logoAlt: 'BMT',
+    accent: '#65432a', accentHover: '#4b301f', soft: '#f6eddd',
+    navCurrent: '#f4ead7', navInk: '#5a3a23', kpi: '#4b3325',
   },
   ajr: {
     key: 'ajr', label: 'AJR (ungu)', logo: ajrLogo, logoAlt: 'AJR',
@@ -42,9 +48,9 @@ export const NEUTRAL = {
 } as const;
 
 /** Body text and secondary text on the white cards and the canvas (app.css `--ink`, `--muted`). */
-export const INK = '#152b3a';
-export const MUTED = '#5f6d74';
-export const CANVAS = '#f7f9f7';
+export const INK = '#20313b';
+export const MUTED = '#626f68';
+export const CANVAS = '#f5f7f6';
 
 export interface ActiveBrand {
   key: BrandKey;

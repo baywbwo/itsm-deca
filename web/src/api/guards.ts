@@ -94,7 +94,7 @@ export const isSessionIssued = (v: unknown): v is SessionIssued =>
   isSession(v) && isStr((v as Obj).csrfToken) && ((v as Obj).csrfToken as string).length > 0;
 
 /** Only the bundled presets (or none): never a URL or a path. */
-export const isBrandKey = (v: unknown): v is BrandKey => v === null || v === 'deca' || v === 'ajr';
+export const isBrandKey = (v: unknown): v is BrandKey => v === null || v === 'deca' || v === 'ajr' || v === 'bmt';
 
 export function isWorkspace(v: unknown): v is Workspace {
   return (

@@ -2463,7 +2463,7 @@ export interface components {
          * @description Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted.
          * @enum {string|null}
          */
-        BrandKey: "deca" | "ajr" | null;
+        BrandKey: "deca" | "ajr" | "bmt" | null;
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
