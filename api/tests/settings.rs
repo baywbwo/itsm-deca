@@ -1459,3 +1459,57 @@ async fn bmt_migration_downgrade_refuses_to_discard_branding(pool: PgPool) {
         "BMT accepted again",
     );
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn ai_suggestions_enforce_scope_csrf_and_input_before_provider(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let t = tok(&pool, f.cs).await;
+    let uri = ws_uri(f.a, "ai-suggestions");
+    let invalid = json!({"mode":"unsupported","text":"Synthetic text"});
+    assert_eq!(
+        send(&pool, "POST", &uri, &t, false, Some(&invalid))
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        write(
+            &pool,
+            "POST",
+            &ws_uri(f.b, "ai-suggestions"),
+            &t,
+            invalid.clone()
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        write(&pool, "POST", &uri, &t, invalid).await.status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        write(
+            &pool,
+            "POST",
+            &uri,
+            &t,
+            json!({"mode":"reply","text":"x".repeat(6001)})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        write(
+            &pool,
+            "POST",
+            &uri,
+            &t,
+            json!({"mode":"reply","text":"   "})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}

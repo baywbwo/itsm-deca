@@ -873,3 +873,21 @@ table .subject {
 .cif-flow li { padding-left: 6px; font-size: 12px; }
 .cif-flow li > span { display: block; color: var(--muted); margin-top: 4px; }
 @media (max-width: 1100px) { .connection-guide { align-items: start; flex-direction: column; gap: 16px; } .connection-guide ol { gap: 30px; } }
+
+/* Shared operational blue: company logos and brand palettes retain their identity. */
+:root { --action-blue: #075bc7; --action-blue-hover: #06499f; }
+.btn-primary { background: var(--action-blue); border-color: var(--action-blue); box-shadow: 0 2px 4px #075bc726; }
+.btn-primary:hover { background: var(--action-blue-hover); border-color: var(--action-blue-hover); }
+.field-control:focus-visible { outline: 2px solid #176fe0; border-color: #176fe0; }
+.field-control { background: #fff; border-color: #b7c5d8; }
+.topbar { border-bottom-color: #cad7e8; }
+.card, .table-wrap { border-color: #d3ddea; }
+.intake-section-title { margin: 18px 0 0; padding-top: 16px; border-top: 1px solid #d6e1ef; color: #123a70; font-size: 16px; }
+.intake-operations { border: 1px solid #c6d9f3; border-radius: 10px; padding: 14px; background: #f3f7ff; }
+.intake-operations summary { cursor: pointer; color: #134c93; font-weight: 700; }
+.intake-operations summary span { display: block; font-size: 11px; color: #526884; font-weight: 400; margin: 5px 0 0 16px; }
+.wording-assistant { background: #eff5ff; border: 1px solid #bad1f4; border-left: 3px solid #0865d6; border-radius: 9px; padding: 14px; margin-top: 10px; }
+.wording-assistant strong { color: #134b91; font-size: 13px; }
+.wording-assistant > p { margin: 9px 0 0; }
+.wording-result { background: #fff; border: 1px solid #c7d9f2; padding: 14px; border-radius: 7px; margin-top: 12px; }
+.wording-result > p:first-child { white-space: pre-wrap; line-height: 1.6; }

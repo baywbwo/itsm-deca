@@ -1007,6 +1007,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/ai-suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate a reviewed CS wording draft with GPT
+         * @description Requires ticket.create. Sends only supplied text, with common email/number masking, to OpenAI. No ticket lookup or message delivery. Unavailable until OPENAI_API_KEY and ITSM_OPENAI_MODEL are configured.
+         */
+        post: operations["suggestWording"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2464,6 +2484,16 @@ export interface components {
          * @enum {string|null}
          */
         BrandKey: "deca" | "ajr" | "bmt" | null;
+        WordingRequest: {
+            /** @enum {string} */
+            mode: "chronology" | "reply";
+            text: string;
+        };
+        WordingSuggestion: {
+            suggestion: string;
+            /** @constant */
+            reviewRequired: true;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -4869,6 +4899,46 @@ export interface operations {
             404: components["responses"]["NotFound"];
             410: components["responses"]["ReportExpired"];
             429: components["responses"]["RateLimited"];
+        };
+    };
+    suggestWording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WordingRequest"];
+            };
+        };
+        responses: {
+            /** @description Draft requiring human review */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WordingSuggestion"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            /** @description GPT not configured or provider unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }
