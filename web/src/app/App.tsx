@@ -1,4 +1,4 @@
-import { Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import logoUrl from '../assets/logo-qash.svg';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
@@ -67,7 +67,8 @@ function BrandBlock({ brand }: { brand: ActiveBrand }) {
   return (
     <div className="brand">
       <BrandMark brand={brand} />
-      {brand.key === 'ajr' && <span className="brand-stripe" aria-hidden="true" />}
+      {(brand.key === 'ajr' || brand.key === 'bmt') && <span className="brand-stripe" aria-hidden="true" />}
+      <span className="brand-product">SERVICE DESK</span>
       {brand.name && <span className="tiny muted brand-name">{brand.name}</span>}
     </div>
   );
@@ -189,16 +190,20 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
 
   const nav = (onPick?: () => void) => (
     <nav className="nav" aria-label="Navigasi utama">
+      <div className="nav-caption">Ruang kerja</div>
       {data && route.workspaceId
         ? pages.map((p) => (
+          <Fragment key={p.id}>
+          {p.id === 'settings' && <div className="nav-caption nav-caption-secondary">Administrasi</div>}
           <a key={p.id} href={toHash({ workspaceId: route.workspaceId!, page: p.id })}
             aria-current={p.id === route.page ? 'page' : undefined} onClick={(e) => {
               if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
               e.preventDefault();
               if (navigate(e.currentTarget.getAttribute('href') ?? '')) onPick?.();
             }}>
-            <Icon name={p.id} /> {p.label}
+            <Icon name={p.id} /><span>{p.label}</span><span className="nav-indicator" aria-hidden="true">›</span>
           </a>
+          </Fragment>
         ))
         : <div className="nav-skeleton" role="status"><span className="sr-only">Memuat navigasi…</span>
           <div className="skeleton" aria-hidden="true" /><div className="skeleton" aria-hidden="true" /></div>}
@@ -213,6 +218,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
       <div className="shell">
         <aside className="sidebar" aria-label="Sidebar">
           <BrandBlock brand={brand} />
+          <div className="workspace-label">Service workspace</div>
           {switcher}
           {nav()}
           <Profile session={session} />
@@ -223,7 +229,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
               <Button className="mobile-only" iconOnly aria-label="Buka navigasi"
                 aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></Button>
               <BrandMark brand={brand} className="top-brand" />
-              <span className="breadcrumb">{listed ? <>{listed.code} / <b>{current.label}</b></> : <b>{current.label}</b>}</span>
+              <span className="breadcrumb">{listed ? <>{listed.name}<span className="breadcrumb-divider">/</span><b>{current.label}</b></> : <b>{current.label}</b>}</span>
             </div>
             <div className="top-right">
               {/* Not on Tiket itself: that page has its own search box for the same filter. */}
@@ -239,15 +245,15 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
           <div className="content">
           {meta.uat && (
             <div className="uat-banner" role="note" aria-label="Mode uji">
-              <strong>{meta.uat.banner}</strong> · Data dummy · Tanpa SSO/koneksi produksi. Akses Superadmin bukan
-              bukti izin CS/Lead CS.
+              <span className="uat-dot" aria-hidden="true" /><strong>{meta.uat.banner}</strong><span>Data dummy · lingkungan UAT</span>
+              <details className="uat-details"><summary>Detail lingkungan</summary><p>Tanpa SSO atau koneksi produksi. Akses Superadmin bukan bukti izin CS/Lead CS.</p></details>
             </div>
           )}
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">{brand.name ? `${brand.name} · ` : ''}ITSM · kandidat D16 (rilis develop) · data dummy UAT</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Service operations · lingkungan UAT</div>
           </div>
         </main>
       </div>
@@ -312,7 +318,7 @@ function TicketSearch({ onSearch }: { onSearch: (q: string) => void }) {
       input.value = '';
     }}>
       <Icon name="search" size={16} />
-      <input name="q" type="search" aria-label="Pencarian cepat tiket" placeholder="Cari tiket…" maxLength={100} />
+      <input name="q" type="search" aria-label="Pencarian cepat tiket" placeholder="Cari nomor atau judul tiket…" maxLength={100} />
     </form>
   );
 }

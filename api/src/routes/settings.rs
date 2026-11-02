@@ -62,7 +62,7 @@ fn timezone(raw: &str) -> Result<&'static str, AppError> {
 
 /// Branding presets bundled with the web app (logo + palette). Nothing else is accepted: a
 /// company never points at a free URL or an uploaded file.
-pub const BRAND_KEYS: [&str; 2] = ["deca", "ajr"];
+pub const BRAND_KEYS: [&str; 3] = ["deca", "ajr", "bmt"];
 
 fn brand_key(raw: Option<&str>) -> Result<Option<&'static str>, AppError> {
     raw.map(|k| {
@@ -112,7 +112,7 @@ pub struct WorkspaceSettings {
     company_code: String,
     company_name: String,
     reporter_code: Option<String>,
-    /// Branding preset (`deca` | `ajr`); `None` = not configured (neutral look).
+    /// Branding preset (`deca` | `ajr` | `bmt`); `None` = not configured (neutral look).
     brand_key: Option<String>,
     /// Display name override; `None` = the company name.
     brand_name: Option<String>,

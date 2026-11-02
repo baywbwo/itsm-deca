@@ -6,6 +6,7 @@ import { Badge, type BadgeTone } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { TextField } from '../components/Field';
+import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { ConfirmDialog, useLoad, WriteAlert, writeError, type WriteError } from './adminKit';
@@ -36,7 +37,6 @@ const UNAVAILABLE: readonly { name: string; body: string }[] = [
   { name: 'WhatsApp', body: 'Adapter kanal belum dibangun; percakapan hanya tampil baca saja di detail tiket dan tidak ada pengiriman.' },
   { name: 'Email', body: 'Adapter kanal belum dibangun; tidak ada pengiriman atau penerimaan email dari aplikasi ini.' },
   { name: 'Website', body: 'Adapter formulir/website belum dibangun; tiket masuk lewat intake manual.' },
-  { name: 'CIF', body: 'Ditunda. Data nasabah memakai dummy dan tidak dianggap terverifikasi.' },
 ];
 
 /**
@@ -49,7 +49,7 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
   const [creating, setCreating] = useState<ProviderCode | null>(null);
   const header = (
     <PageHeader eyebrow={workspace.code} title="Integrasi"
-      description={`Koneksi ${workspace.code} ke sistem lain. Semua koneksi di kandidat ini SIMULASI: tidak ada request ke penyedia nyata.`} />
+      description={`Kelola koneksi, kanal layanan, dan sumber data nasabah untuk ${workspace.name}.`} />
   );
   if (res.error) {
     if (res.error instanceof ApiError && res.error.status === 403) return <>{header}<ForbiddenState /></>;
@@ -72,6 +72,11 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
         Mode simulasi · kredensial dan mapping penyedia belum tersedia (menunggu endpoint, akun dan kode terverifikasi dari kantor).
         Uji simulasi tidak membuktikan koneksi kantor.
       </p>
+      <section className="connection-guide" aria-label="Tahapan koneksi">
+        <div><span className="eyebrow">Alur koneksi</span><h2>Konfigurasi sekali. Pantau setiap proses.</h2><p className="tiny muted">Koneksi dan tujuan mengikuti perusahaan yang sedang aktif.</p></div>
+        <ol><li><span>01</span>Simpan draft</li><li><span>02</span>Uji simulasi</li><li><span>03</span>Aktifkan</li></ol>
+      </section>
+      <div className="section-heading"><h2>Kolaborasi tim</h2><span className="tiny muted">Jira &amp; Lark</span></div>
       <div className="integration-grid">
         {list.items.map((c) => (
           <article key={c.id} className="card integration" aria-labelledby={`int-${c.id}`}>
@@ -95,10 +100,19 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
             <Button onClick={() => setCreating(p)}>Buat koneksi simulasi</Button>
           </article>
         ))}
+      </div>
+      <section className="card cif-overview spaced" aria-labelledby="cif-title">
+        <div className="cif-heading"><span className="connector-icon"><Icon name="user" size={24} /></span><div><span className="eyebrow">Data nasabah</span><h2 id="cif-title">Customer Information File <Badge>Belum terhubung</Badge></h2></div></div>
+        <p className="muted">Satu referensi nasabah untuk penanganan tiket yang lebih tepat.</p>
+        <p className="tiny">Adapter CIF belum tersedia. Referensi nasabah saat ini adalah data dummy; identitasnya belum diverifikasi ke sistem CIF.</p>
+        <details><summary>Rancangan alur CIF &amp; batas akses</summary><ol className="cif-flow"><li><strong>Cari dalam perusahaan aktif</strong><span>Gunakan referensi CIF atau pencarian terbatas; hasil dari perusahaan lain tidak ditampilkan.</span></li><li><strong>Cocokkan nasabah</strong><span>Petugas memeriksa identitas tersamarkan sebelum memilih. Hindari menyalin data sensitif ke judul atau percakapan tiket.</span></li><li><strong>Tautkan referensi ke tiket</strong><span>Simpan ID sumber dan waktu verifikasi. Jika CIF tidak tersedia, tandai belum terverifikasi; jangan membuat identitas baru otomatis.</span></li></ol><p className="tiny muted">Alur ini belum menghubungi CIF. Aktivasi memerlukan kontrak API, pemetaan akses per perusahaan, dan pengujian isolasi data.</p></details>
+      </section>
+      <div className="section-heading spaced"><h2>Kanal layanan</h2><span className="tiny muted">Kesiapan adapter</span></div>
+      <div className="integration-grid">
         {UNAVAILABLE.map((u) => (
           <article key={u.name} className="card integration" aria-labelledby={`int-na-${u.name}`}>
             <div>
-              <h2 id={`int-na-${u.name}`}>{u.name} <Badge>{u.name === 'CIF' ? 'Ditunda' : 'Belum tersedia'}</Badge></h2>
+              <h2 id={`int-na-${u.name}`}>{u.name} <Badge>Belum tersedia</Badge></h2>
               <p className="tiny muted">{u.body}</p>
             </div>
           </article>

@@ -5560,6 +5560,7 @@
         "enum": [
           "deca",
           "ajr",
+          "bmt",
           null
         ],
         "description": "Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted."

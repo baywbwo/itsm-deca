@@ -1,6 +1,12 @@
 // One internal icon set (18px, 1.75 stroke) so the shell does not pull a new dependency.
 // Decorative by default (aria-hidden); icon-only buttons must carry their own label.
 const PATHS = {
+  filter: 'M4 7h16M7 12h10M10 17h4',
+  chevron: 'm8 10 4 4 4-4',
+  arrow: 'M5 12h14m-5-5 5 5-5 5',
+  user: 'M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM4 21v-2a8 8 0 0 1 16 0v2',
+  clock: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zM12 7v5l3 2',
+  check: 'm5 12 4 4L19 6',
   menu: 'M4 6h16M4 12h16M4 18h16',
   close: 'M6 6l12 12M18 6L6 18',
   dashboard: 'M4 4h7v7H4zM13 4h7v4h-7zM13 10h7v10h-7zM4 13h7v7H4z',

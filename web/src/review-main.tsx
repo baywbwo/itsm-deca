@@ -4,6 +4,7 @@ import { createApi } from './api/client';
 import { App } from './app/App';
 import { replayTransport, SCENARIOS, type Fixtures, type Scenario } from './review/replayTransport';
 import './styles/app.css';
+import './styles/workspace.css';
 
 // Recorded responses come from the inert JSON block the review build puts in review.html (G14).
 const block = document.getElementById('itsm-review-fixtures')?.textContent;

@@ -60,6 +60,7 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
   const params = parseDashboardQuery(query);
   const [attempt, setAttempt] = useState(0);
   const periodRef = useRef<HTMLSelectElement>(null);
+  const filterSummaryRef = useRef<HTMLElement>(null);
   const state = useDashboard(api, workspace.id, params, attempt);
   const d = state.status === 'success' ? state.data : null;
   const tz = d?.period.timezone ?? workspace.timezone;
@@ -79,11 +80,13 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
 
   return (
     <>
-      <PageHeader eyebrow="Operations overview" title="Dashboard"
-        description={`Ringkasan penanganan pengaduan untuk perusahaan ${workspace.name}.`}
+      <PageHeader eyebrow="Service operations" title="Ringkasan operasional"
+        description={`Pantau antrean, beban tim, dan progres layanan ${workspace.name}.`}
         action={canReports
-          ? <a className="btn" href={toHash({ workspaceId: workspace.id, page: 'reports' })}>Lihat laporan ↗</a>
+          ? <a className="btn" href={toHash({ workspaceId: workspace.id, page: 'reports' })}><Icon name="reports" size={16} /> Lihat laporan</a>
           : undefined} />
+      <details className="dashboard-filter-panel" open={filtered || undefined}>
+        <summary ref={filterSummaryRef}><span className="filter-heading"><Icon name="filter" size={16} /> Periode &amp; filter</span><span className="filter-summary">{PERIOD_LABELS[params.period]}{filtered ? " · Filter aktif" : " · Semua tiket"}<Icon name="chevron" size={14} /></span></summary>
       <div className="toolbar row filterbar dash-filters" role="group" aria-label="Periode dan filter dashboard">
         <label className="period">
           Periode
@@ -119,14 +122,15 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
         <span className="muted tiny">Waktu {tzLabel(tz)} · basis tiap angka tertulis pada kartunya</span>
         {d && !d.slaConfigured && <Badge>SLA belum dikonfigurasi</Badge>}
       </div>
+      </details>
       <p className="sr-only" role="status">
         {d ? `Dashboard ${PERIOD_LABELS[d.period.key]}${filtered ? ' dengan filter' : ''} dimuat.` : ''}
       </p>
       {state.status === 'loading' && <DashboardSkeleton />}
       {state.status === 'error' && (
         <DashboardError error={state.error} onReset={filtered ? reset : null} onRetry={() => {
-          // The retry button unmounts while loading; keep keyboard focus on a stable control.
-          periodRef.current?.focus();
+          // Retry removes the error button; the filter summary remains visible when collapsed.
+          filterSummaryRef.current?.focus();
           setAttempt((n) => n + 1);
         }} />
       )}
@@ -188,7 +192,7 @@ export function statusTone(s: Pick<TicketStatus, 'code'>): BadgeTone {
 /** Shortcuts to screens the user can already open here (D16); no new route or filter. */
 function QuickActions({ workspaceId, canReports }: { workspaceId: string; canReports: boolean }) {
   const items: { label: string; icon: IconName; href: string }[] = [
-    { label: 'Daftar tiket', icon: 'tickets', href: toHash({ workspaceId, page: 'tickets' }) },
+    { label: 'Buka antrean tiket', icon: 'tickets', href: toHash({ workspaceId, page: 'tickets' }) },
     { label: 'Board status tiket', icon: 'board', href: toHash({ workspaceId, page: 'tickets', query: 'view=board' }) },
     ...(canReports ? [{ label: 'Laporan operasional', icon: 'reports' as const, href: toHash({ workspaceId, page: 'reports' }) }] : []),
   ];
@@ -216,11 +220,11 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
   const drill = (f: TicketFilter | null) => (f ? drilldownHash(ws, f) : null);
   const scope = filtered ? `${d.workspaceCode} (terfilter)` : d.workspaceCode;
   const kpis = [
-    { label: 'Tiket aktif', value: t.active, hint: 'Saat ini · semua status nonterminal', href: drill(d.drilldown.active) },
-    { label: 'Belum ditugaskan', value: t.unassigned, hint: 'Saat ini · aktif tanpa PIC', href: drill(d.drilldown.unassigned) },
-    { label: 'Menunggu pelanggan', value: t.pendingCustomer, hint: 'Saat ini · status menunggu pelanggan', href: drill(d.drilldown.pendingCustomer) },
+    { label: 'Tiket aktif', icon: 'tickets' as const, value: t.active, hint: 'Saat ini · semua status nonterminal', href: drill(d.drilldown.active) },
+    { label: 'Belum ditugaskan', icon: 'user' as const, value: t.unassigned, hint: 'Saat ini · aktif tanpa PIC', href: drill(d.drilldown.unassigned) },
+    { label: 'Menunggu pelanggan', icon: 'clock' as const, value: t.pendingCustomer, hint: 'Saat ini · status menunggu pelanggan', href: drill(d.drilldown.pendingCustomer) },
     {
-      label: 'Terselesaikan',
+      label: 'Terselesaikan', icon: 'check' as const,
       value: t.resolvedInPeriod,
       hint: `Peristiwa penyelesaian ${periodText.toLowerCase()} · ${num(t.resolvedTicketsInPeriod)} tiket unik`,
       href: drill(d.drilldown.resolvedInPeriod),
@@ -229,16 +233,22 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
 
   return (
     <>
+      <section className="operations-brief" aria-label="Fokus operasional">
+        <div className="brief-symbol"><Icon name="dashboard" size={24} /></div>
+        <div className="brief-copy"><span className="eyebrow">Fokus layanan</span><h2>{t.unassigned > 0 ? `${num(t.unassigned)} tiket menunggu PIC` : t.active > 0 ? `${num(t.active)} tiket sedang ditangani` : 'Antrean layanan terkendali'}</h2><p>{t.unassigned > 0 ? 'Prioritaskan penugasan agar setiap tiket mendapat tindak lanjut.' : 'Pantau progres tim dan tindak lanjut tiket dari satu workspace.'}</p></div>
+        {d.drilldown.unassigned && t.unassigned > 0 && <a className="btn" href={drilldownHash(ws, d.drilldown.unassigned)}>Tinjau antrean <Icon name="arrow" size={16} /></a>}
+      </section>
+      <div className="section-heading"><h2>Ringkasan layanan</h2><span className="tiny muted">{scope} · {periodText}</span></div>
       <div className="kpis">
         {kpis.map((k, i) => k.href ? (
           <a className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label} href={k.href}>
-            <span className="muted">{k.label}</span>
+            <div className="kpi-heading"><span>{k.label}</span><span className="kpi-icon"><Icon name={k.icon} size={18} /></span></div>
             <strong>{num(k.value)}</strong>
             <small>{k.hint} <span aria-hidden="true">↗</span></small>
           </a>
         ) : (
           <div className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label}>
-            <span className="muted">{k.label}</span>
+            <div className="kpi-heading"><span>{k.label}</span><span className="kpi-icon"><Icon name={k.icon} size={18} /></span></div>
             <strong>{num(k.value)}</strong>
             <small>{k.hint} · tidak berlaku untuk filter PIC</small>
           </div>
@@ -257,7 +267,7 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
         <>
           <div className="grid2">
             <section className="card" aria-labelledby="dash-status">
-              <h2 id="dash-status">Di mana tiket sedang berada?</h2>
+              <h2 id="dash-status">Distribusi status</h2>
               <p className="muted tiny">Status saat ini · seluruh {num(t.tickets)} tiket {scope} · tidak dibatasi periode</p>
               <BarList label="Distribusi tiket menurut status" total={t.tickets}
                 items={d.statusDistribution.map((s) => ({ key: s.status.code, label: s.status.label, value: s.count }))} />
@@ -294,7 +304,7 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
           </div>
 
           <section className="card spaced" aria-labelledby="dash-trend">
-            <h2 id="dash-trend">Bagaimana volume pengaduan berubah?</h2>
+            <h2 id="dash-trend">Tren penanganan tiket</h2>
             <p className="tiny muted">
               {periodText} · {rangeLabel(d.period.startDate, d.period.endDate)} · tiket diterima (per tanggal diterima)
               dibandingkan peristiwa penyelesaian (per tanggal selesai)
@@ -320,7 +330,7 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
           </section>
 
           <div className="grid3 spaced">
-            <DimensionCard id="dash-channel" title="Dari kanal mana tiket masuk?" none="Tanpa kanal"
+            <DimensionCard id="dash-channel" title="Kanal masuk" none="Tanpa kanal"
               rows={d.channels} received={t.receivedInPeriod} periodText={periodText} ws={ws} />
             <DimensionCard id="dash-category" title="Kategori tiket" none="Tanpa kategori"
               rows={d.categories} received={t.receivedInPeriod} periodText={periodText} ws={ws} />

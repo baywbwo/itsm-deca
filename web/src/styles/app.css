@@ -5,9 +5,9 @@
 :root {
   color-scheme: light;
   /* D16 visual refresh: light grey-green canvas, white sidebar/header/cards, 14px card radius. */
-  --bg: #fff; --canvas: #f7f9f7; --side: #fff; --column: #eef2ef;
-  --ink: #152b3a; --muted: #5f6d74; --nav-ink-idle: #63726c; --line: #e6ece9; --input-line: #c9cfcb;
-  --radius-card: 14px; --radius-control: 9px;
+  --bg: #fff; --canvas: #f5f7f6; --side: #fff; --column: #eef2ef;
+  --ink: #20313b; --muted: #626f68; --nav-ink-idle: #63726c; --line: #e6ece9; --input-line: #d7dfd9;
+  --radius-card: 16px; --radius-control: 9px;
   /* Neutral until the company has a branding preset (D15); presets below, kept in step with app/brand.ts. */
   --accent: #3f4a56; --accent-hover: #2e3640; --soft: #eef0f3; --brand-stripe: none;
   --nav-current: #eef0f3; --nav-ink: #152b3a; --kpi: #2e3640;
@@ -17,8 +17,8 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
 }
 :root[data-brand='deca'] {
-  --accent: #245c31; --accent-hover: #16482f; --soft: #e8f1e5;
-  --nav-current: #eafbe5; --nav-ink: #174b2b; --kpi: #003571;
+  --accent: #244f37; --accent-hover: #183c27; --soft: #edf7e8;
+  --nav-current: #edf8e7; --nav-ink: #254f31; --kpi: #163961;
 }
 /* AJR: purple carries text and buttons; magenta and yellow are decoration only (never text). */
 :root[data-brand='ajr'] {
@@ -398,3 +398,10 @@ dialog.peek .dialog-body { display: grid; gap: 16px; align-content: start; }
   .report-filters .period { flex: 1 1 140px; }
 }
 .banner.spaced-bottom { margin-bottom: 20px; }
+
+:root[data-brand='bmt'] {
+  --accent: #65432a; --accent-hover: #4b301f; --soft: #f6eddd;
+  --nav-current: #f4ead7; --nav-ink: #5a3a23; --kpi: #4b3325;
+  --canvas: #faf7f1; --side: #fffdf8; --line: #e9e0d2;
+  --brand-stripe: linear-gradient(90deg, #65432a 0 65%, #c59a48 65%);
+}
