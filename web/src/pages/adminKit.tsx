@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ApiError, rateLimitText } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText } from '../api/client';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 
@@ -14,6 +14,7 @@ export interface WriteError {
 }
 
 export function writeError(e: unknown, what: string): WriteError {
+  if (isSessionReloadNeeded(e)) return { title: SESSION_RELOAD_TITLE, body: sessionReloadText(e.requestId), conflict: false, field: null };
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {

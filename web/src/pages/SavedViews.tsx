@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ApiError, isAbort, type Api } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, isAbort, sessionReloadText, type Api } from '../api/client';
 import type { SavedView } from '../api/types';
 import {
   COLUMN_LABELS, paramsFromSavedView, sameFilterScope, sameSavedScope, savedViewQuery, type TicketParams,
@@ -18,6 +18,7 @@ const taken = (items: SavedView[], name: string, except?: string) =>
   items.some((v) => v.id !== except && v.name.toLocaleLowerCase('id') === name.toLocaleLowerCase('id'));
 
 function failure(e: unknown): string {
+  if (isSessionReloadNeeded(e)) return `${SESSION_RELOAD_TITLE}. ${sessionReloadText(e.requestId)}`;
   if (e instanceof ApiError) {
     if (e.code === 'version_conflict') return 'View ini sudah diubah di tab lain. Daftar dimuat ulang; coba lagi.';
     if (e.code === 'rule_violation') return 'Nama sudah dipakai atau batas 50 view tercapai.';

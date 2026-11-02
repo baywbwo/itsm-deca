@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Component, Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import logoUrl from '../assets/logo-qash.svg';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
@@ -7,18 +7,21 @@ import { Dialog } from '../components/Dialog';
 import { SelectField } from '../components/Field';
 import { Icon } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
-import { ComponentsPage } from '../pages/ComponentsPage';
-import { DashboardPage } from '../pages/DashboardPage';
-import { IntegrationsPage } from '../pages/IntegrationsPage';
-import { ReportsPage } from '../pages/ReportsPage';
 import { PlannedPage } from '../pages/PlannedPage';
-import { SettingsPage } from '../pages/SettingsPage';
-import { TicketsPage } from '../pages/TicketsPage';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
 import { allowedPages, leavesScope, pageDef, parseHash, toHash, type PageDef, type PageId } from './routes';
 import { freshest } from './workspaces';
+
+// G14: one chunk per page, fetched on first visit (same origin, hashed file names). The shell,
+// the API client and the planned-page placeholder stay in the entry chunk.
+const DashboardPage = lazy(() => import('../pages/DashboardPage').then((m) => ({ default: m.DashboardPage })));
+const TicketsPage = lazy(() => import('../pages/TicketsPage').then((m) => ({ default: m.TicketsPage })));
+const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const ReportsPage = lazy(() => import('../pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
+const IntegrationsPage = lazy(() => import('../pages/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
+const ComponentsPage = lazy(() => import('../pages/ComponentsPage').then((m) => ({ default: m.ComponentsPage })));
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
@@ -309,8 +312,33 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
   }
   if (!pages.some((p) => p.id === page.id)) return <ForbiddenState />;
   const data = { ...scope.data, workspace: freshest(scope.data.workspace, listed) };
-  return <Page id={page.id} api={api} userId={userId} data={data} query={query} uat={uat} onNotice={onNotice}
-    onWorkspacesChanged={onWorkspacesChanged} />;
+  return (
+    <PageChunkBoundary key={page.id}>
+      <Suspense fallback={<LoadingState label="Memuat halaman…" />}>
+        <Page id={page.id} api={api} userId={userId} data={data} query={query} uat={uat} onNotice={onNotice}
+          onWorkspacesChanged={onWorkspacesChanged} />
+      </Suspense>
+    </PageChunkBoundary>
+  );
+}
+
+/**
+ * A page chunk that cannot be fetched (network drop, or a redeploy replaced the hashed files)
+ * shows a reload instead of a blank shell. React.lazy keeps a failed import, so only a reload
+ * fetches it again; the draft guard still asks before unsaved input is lost.
+ */
+class PageChunkBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  override state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+  override render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <ErrorState title="Halaman belum dapat dimuat" body="Bagian aplikasi untuk halaman ini gagal diambil dari server. Muat ulang halaman."
+        retryLabel="Muat ulang" onRetry={() => location.reload()} />
+    );
+  }
 }
 
 function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged }: {

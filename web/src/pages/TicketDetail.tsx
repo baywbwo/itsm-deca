@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
   AttachmentMeta,
@@ -910,6 +910,7 @@ function History({ api, workspace, detail }: { api: Api; workspace: Workspace; d
 }
 
 function saveError(e: unknown, what: string): SaveError {
+  if (isSessionReloadNeeded(e)) return { title: SESSION_RELOAD_TITLE, body: sessionReloadText(e.requestId), conflict: false };
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {

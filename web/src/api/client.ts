@@ -155,6 +155,19 @@ export function rateLimitText(e: ApiError): string {
     : 'Terlalu banyak permintaan dalam waktu singkat. Coba lagi sebentar lagi.';
 }
 
+/**
+ * 403 csrf_failed that is still refused after the single token refresh in `send`: the session's
+ * CSRF token could not be renewed in this tab. Not a permission refusal; the request was refused
+ * before any handler ran, so nothing changed and the caller keeps the input.
+ */
+export const isSessionReloadNeeded = (e: unknown): e is ApiError & { code: 'csrf_failed' } =>
+  e instanceof ApiError && e.status === 403 && e.code === 'csrf_failed';
+export const SESSION_RELOAD_TITLE = 'Sesi perlu dimuat ulang';
+export function sessionReloadText(requestId: string | null): string {
+  const rid = requestId ? ` (ID permintaan ${requestId})` : '';
+  return `Token keamanan sesi di tab ini tidak dapat diperbarui otomatis. Permintaan belum diproses dan isian Anda tetap di sini. Muat ulang halaman (salin isian dulu bila perlu), lalu kirim lagi.${rid}`;
+}
+
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 /** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */

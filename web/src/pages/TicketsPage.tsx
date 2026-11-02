@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
-import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   CatalogItem,
   TicketAllowedAction,
@@ -915,6 +915,7 @@ function TransitionDialog({ api, workspace, ticket, initialTo, onClose, onDone, 
 }
 
 function transitionError(e: unknown): { title: string; body: string; conflict: boolean } {
+  if (isSessionReloadNeeded(e)) return { title: SESSION_RELOAD_TITLE, body: sessionReloadText(e.requestId), conflict: false };
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {

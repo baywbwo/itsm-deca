@@ -2,11 +2,13 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createApi } from './api/client';
 import { App } from './app/App';
-import fixtures from './review/fixtures.json';
 import { replayTransport, SCENARIOS, type Fixtures, type Scenario } from './review/replayTransport';
 import './styles/app.css';
 
-const f = fixtures as Fixtures;
+// Recorded responses come from the inert JSON block the review build puts in review.html (G14).
+const block = document.getElementById('itsm-review-fixtures')?.textContent;
+if (!block) throw new Error('review fixtures block missing');
+const f = JSON.parse(block) as Fixtures;
 const asked = new URLSearchParams(location.search).get('scenario') ?? 'none';
 const scenario: Scenario = (SCENARIOS as readonly string[]).includes(asked) ? (asked as Scenario) : 'none';
 const api = createApi(replayTransport(f, 250, scenario));

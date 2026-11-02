@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   Catalogs,
   CatalogItem,
@@ -389,6 +389,7 @@ function classify(e: unknown): Outcome {
   if (e.code === 'timeout' || e.code === 'network' || e.status >= 500 || e.status === 0) {
     return { kind: 'unknown', message: `Server belum memberi jawaban pasti; tiket mungkin sudah tersimpan. Kirim ulang memakai kunci yang sama tidak membuat duplikat.${rid}` };
   }
+  if (isSessionReloadNeeded(e)) return { kind: 'definite', title: SESSION_RELOAD_TITLE, message: sessionReloadText(e.requestId) };
   switch (e.status) {
     case 429:
       return { kind: 'definite', title: 'Terlalu banyak permintaan', message: `${rateLimitText(e)} Tiket belum dibuat; isian Anda tetap di sini dan kirim ulang memakai kunci yang sama.${rid}` };
@@ -621,6 +622,7 @@ function ReconcileForm({ api, workspaceId, item, onDone, onError, onCancel }: {
 
 function recoveryError(e: unknown): string {
   if (e instanceof ApiError) {
+    if (isSessionReloadNeeded(e)) return `${SESSION_RELOAD_TITLE}. ${sessionReloadText(e.requestId)}`;
     if (e.status === 429) return `${rateLimitText(e)} Aksi pemulihan belum dikirim.`;
     if (e.status === 409) return 'Status integrasi sudah berubah oleh pihak lain. Status terbaru dimuat ulang.';
     if (e.status === 422) return 'Aksi ini tidak berlaku untuk status integrasi sekarang.';
