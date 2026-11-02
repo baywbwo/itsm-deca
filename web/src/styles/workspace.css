@@ -891,3 +891,10 @@ table .subject {
 .wording-assistant > p { margin: 9px 0 0; }
 .wording-result { background: #fff; border: 1px solid #c7d9f2; padding: 14px; border-radius: 7px; margin-top: 12px; }
 .wording-result > p:first-child { white-space: pre-wrap; line-height: 1.6; }
+
+.password-login { min-height:100vh; display:grid; place-items:center; padding:30px 18px; background:linear-gradient(145deg,#eaf1ff,#f6f8fc 55%,#e3ecfb); }
+.login-card { width:100%; max-width:450px; background:white; border:1px solid #cad7e9; border-radius:18px; padding:35px; box-shadow:0 18px 50px #12376814; }
+.login-card h1 { font-size:25px; color:#11376c; }.login-card .eyebrow { margin-top:24px; }
+.login-card form { display:grid; gap:10px; margin-top:24px; }.login-card label { font-size:13px; font-weight:700; }.login-card form .btn { margin-top:12px; }
+.deployment-picker { display:grid; gap:6px; padding:12px; border:1px solid #cbdcf5; border-radius:9px; background:#f1f6ff; margin-bottom:15px; }
+.deployment-picker label { font-size:11px; font-weight:700; color:#194c91; }.deployment-picker select { width:100%; padding:8px; border:1px solid #bdcde3; border-radius:6px; background:white; font:inherit; font-size:12px; }.deployment-picker small { font-size:10px; color:#536c8c; }

@@ -289,6 +289,15 @@ export function createApi(transport: Transport) {
       call({ method: 'POST', path: `${ws(workspaceId)}/ai-suggestions`, headers: csrf(), body: { mode, text } },
         (value: unknown): value is { suggestion: string; reviewRequired: boolean } => !!value && typeof value === 'object' &&
           'suggestion' in value && typeof value.suggestion === 'string' && 'reviewRequired' in value && value.reviewRequired === true),
+    async login(username: string, password: string): Promise<Session> {
+      const issued = await call({ method: 'POST', path: '/api/v1/login', headers: { 'X-ITSM-Login': '1' }, body: { username, password } }, isSessionIssued, 201);
+      csrfToken = issued.csrfToken;
+      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+    },
+    async logout(): Promise<void> {
+      await call({ method: 'DELETE', path: '/api/v1/session', headers: csrf() }, isEmpty, 204);
+      csrfToken = null;
+    },
     hasCsrf: () => csrfToken !== null,
     getMeta: (signal?: AbortSignal): Promise<Meta> => get('/api/v1/meta', isMeta, signal),
     getSession: (signal?: AbortSignal): Promise<Session> => get('/api/v1/session', isSession, signal),

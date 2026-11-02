@@ -42,7 +42,7 @@ fn uat_notice() -> UatNotice {
 }
 
 pub async fn meta(State(state): State<AppState>) -> Json<Meta> {
-    let uat = state.config.access_mode == AccessMode::UatSuperadmin;
+    let uat = state.config.environment == Environment::Uat;
     Json(Meta {
         environment: match state.config.environment {
             Environment::Uat => "uat",

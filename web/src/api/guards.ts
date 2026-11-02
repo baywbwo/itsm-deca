@@ -69,7 +69,7 @@ export const isPermissionCode = (v: unknown): v is PermissionCode =>
 export function isMeta(v: unknown): v is Meta {
   if (!isObj(v)) return false;
   if (v.environment !== 'uat' && v.environment !== 'production') return false;
-  if (v.accessMode !== 'uat_superadmin' && v.accessMode !== 'sso') return false;
+  if (v.accessMode !== 'uat_superadmin' && v.accessMode !== 'sso' && v.accessMode !== 'password') return false;
   if (!isStrOrNull(v.banner)) return false;
   const uat = v.uat;
   if (uat === undefined || uat === null) return true;

@@ -16,6 +16,7 @@ pub enum Environment {
 pub enum AccessMode {
     /// Limited UAT: direct Superadmin entry with a persistent banner, dummy data only.
     UatSuperadmin,
+    Password,
     /// Office SSO. Not implemented yet, so it can never start.
     Sso,
 }
@@ -25,6 +26,7 @@ impl AccessMode {
         match self {
             AccessMode::UatSuperadmin => "uat_superadmin",
             AccessMode::Sso => "sso",
+            AccessMode::Password => "password",
         }
     }
 }
@@ -143,6 +145,7 @@ impl Config {
         let access_mode = match get("ITSM_ACCESS_MODE")? {
             "uat_superadmin" => AccessMode::UatSuperadmin,
             "sso" => AccessMode::Sso,
+            "password" => AccessMode::Password,
             _ => {
                 return Err(ConfigError::Invalid {
                     name: "ITSM_ACCESS_MODE",
@@ -154,7 +157,7 @@ impl Config {
                 return Err(ConfigError::UatInProduction);
             }
             (_, AccessMode::Sso) => return Err(ConfigError::SsoUnavailable),
-            (Environment::Uat, AccessMode::UatSuperadmin) => {}
+            (Environment::Uat, AccessMode::UatSuperadmin) | (_, AccessMode::Password) => {}
         }
 
         let database_url = DatabaseUrl(get("DATABASE_URL")?.to_owned());
@@ -174,6 +177,11 @@ impl Config {
             }
         };
 
+        if access_mode == AccessMode::Password && !cookie_secure {
+            return Err(ConfigError::Invalid {
+                name: "ITSM_COOKIE_SECURE",
+            });
+        }
         let optional = |name: &str| {
             vars.get(name)
                 .map(|v| v.trim().to_owned())
