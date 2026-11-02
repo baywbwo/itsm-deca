@@ -1,15 +1,20 @@
 # Paket deploy UAT terbatas (DB dummy saja)
 
 Stack: `ingress` (Caddy 2.11.7: TLS, allowlist IP, basic auth, web statis, proxy `/api` + `/health`)
-→ `api` (itsm-api, migrate lalu serve) → `postgres` 18.4, plus `clamav` 1.5.4 (clamd) di jaringan privat.
-Hanya `ingress` yang mem-publish port. `api`, `postgres` dan `clamav` tidak bisa dijangkau dari luar.
+→ `api` (itsm-api, migrate lalu serve) → `postgres` 18.4 di jaringan privat.
+Hanya `ingress` yang mem-publish port. `api` dan `postgres` tidak bisa dijangkau dari luar.
+
+**Lampiran di luar scope (keputusan owner, D13).** UI lampiran tidak ada dan `clamav` **tidak** dijalankan
+secara default (compose profile `attachments`). `ITSM_CLAMD_ADDR` kosong, jadi setiap unggahan lewat API
+ditolak gagal-tutup (503 `scanner_unavailable`, tidak ada berkas yang ditandai bersih). clamd bukan
+dependensi start dan bukan gerbang rilis. Data/skema lampiran historis dan kontrol backend tetap ada.
 
 **Bukan produksi.** `ITSM_ENV=uat` + `uat_superadmin` di-hardcode di `compose.yaml`; API menolak
 `serve` bila DB tidak bertanda dummy. Jangan arahkan ke DB berisi data nyata.
 
 **Status verifikasi:** paket ini belum pernah dijalankan dengan Docker (host build tidak punya Docker).
 Yang sudah diuji native: guard, Caddyfile di depan API UAT live, entrypoint, dan cek statis compose.
-Lihat bukti kandidat. Image belum di-build, container belum dijalankan, clamd runtime belum diuji.
+Lihat bukti kandidat. Image belum di-build, container belum dijalankan, compose belum dijalankan.
 
 ## Pembatasan akses (wajib, gagal tutup)
 Entri Superadmin UAT tidak boleh terbuka ke publik. Ada dua lapis, dan keduanya wajib:
@@ -60,10 +65,10 @@ git checkout <SHA>; docker compose -f deploy/uat/compose.yaml build
 
 ## 3. Start pertama (DB dummy baru)
 ```sh
-docker compose -f deploy/uat/compose.yaml up -d postgres clamav
+docker compose -f deploy/uat/compose.yaml up -d postgres
 docker compose -f deploy/uat/compose.yaml run --rm -e ITSM_SEED_CONFIRM_DB=itsm_uat_dummy api seed-uat   # migrate + tandai dummy + tiket dummy
 docker compose -f deploy/uat/compose.yaml up -d
-docker compose -f deploy/uat/compose.yaml ps        # semua healthy; clamav bisa butuh ≤15 menit (unduh signature)
+docker compose -f deploy/uat/compose.yaml ps        # postgres, api, ingress healthy (clamav tidak ikut: profile attachments)
 ```
 - Urutan start: `api` menjalankan `migrate` lalu `serve`. Sebelum seed, `serve` menolak start karena DB belum bertanda. Itu disengaja, karena tidak ada auto-seed.
 - `ingress` menunggu `api` healthy (`/health/ready`).
@@ -76,8 +81,8 @@ docker compose -f deploy/uat/compose.yaml ps        # semua healthy; clamav bisa
 | dengan kredensial | 200, SPA |
 | `https://<site>/health/ready` | 200 `ready` |
 | dari IP di luar allowlist | 403 (tanpa prompt login) |
-| `docker compose exec api sh -c 'exec 3<>/dev/tcp/clamav/3310; printf "zPING\0" >&3; head -c 5 <&3'` | `PONG` |
-| unggah lampiran dummy | `clean`; dengan file uji EICAR: `infected` (ditolak) |
+| `docker compose ps` | tidak ada service `clamav` (profile `attachments` mati) |
+| unggah lampiran lewat API (tidak ada di UI) | 503 `scanner_unavailable` (gagal-tutup) |
 
 ## 5. Upgrade ke SHA baru
 1. Backup DB dulu (§6), lalu `git checkout <SHA-baru>`.
@@ -90,7 +95,7 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_dump -U itsm -d it
 docker compose -f deploy/uat/compose.yaml exec -T postgres createdb -U itsm <db-dummy-baru>
 docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d <db-dummy-baru> --no-owner < backup-YYYY-MM-DD.dump
 ```
-- Lampiran ada di volume `attachments`. Backup-kan bersama dump.
+- Lampiran historis (bila ada) ada di volume `attachments`. Backup-kan bersama dump.
 - Penanda dummy terikat ke nama DB. DB hasil restore dengan nama lain ditolak `serve` sampai
   ditandai ulang lewat `seed-uat`, dan itu hanya boleh untuk DB dummy.
 - File dump berisi data UAT dummy. Simpan dengan akses terbatas.
@@ -105,15 +110,18 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d
     docker compose -f deploy/uat/compose.yaml exec -T postgres psql -U itsm -d itsm_uat_dummy -v ON_ERROR_STOP=1 \
       -c "DELETE FROM _sqlx_migrations WHERE version = 11"
     ```
+  - Contoh di atas untuk `0011`. Dari D13 ke D12, jalankan dulu `0012_d13_report_format.down.sql` lalu hapus version 12.
+  - `0012` down meng-expire artefak XLSX (binary lama tidak mengenal format) lalu menghapus kolom `format`. Run CSV tetap.
   - `0011` down **menghapus** audit penolakan platform. Backup dulu.
 - **Deploy pertama gagal:** `docker compose down` (tanpa `-v`) menghentikan stack dan volume tetap ada.
   - `down -v` menghapus DB dummy, lampiran dan signature. Jangan dijalankan kecuali memang reset total.
 - **Akses darurat:** mematikan `ingress` (`docker compose stop ingress`) menutup semua akses luar seketika.
 
 ## 8. Batas yang diketahui
-- **clamd** didefinisikan (image resmi dipin digest, healthcheck `clamdcheck.sh`, volume signature, jaringan privat plus jaringan update untuk freshclam). Runtime clamd belum pernah diuji di sini.
-  - Tanpa clamd yang sehat, unggahan fail-closed: 503 `scanner_unavailable` dan tidak ditandai selesai.
-  - Batas ukuran unggah API: default 10 MiB, maksimum 25 MiB. Pastikan `StreamMaxLength` clamd di image
-    tidak lebih kecil (belum diperiksa di runtime). Stream yang ditolak clamd menjadi status error, jadi tetap fail-closed.
+- **Lampiran/clamd: di luar scope (D13).** Service `clamav` tetap didefinisikan (image resmi dipin digest,
+  healthcheck `clamdcheck.sh`) tetapi hanya di profile `attachments`, mati secara default. Runtime clamd belum pernah diuji.
+  - Tanpa `ITSM_CLAMD_ADDR`, unggahan gagal-tutup: 503 `scanner_unavailable`, tidak ada bypass scanner.
+  - Mengaktifkan lagi fitur lampiran butuh scope baru: UI, `ITSM_CLAMD_ADDR=tcp://clamav:3310`,
+    `--profile attachments`, lalu uji runtime (PONG, EICAR, timeout, `StreamMaxLength` ≥ batas unggah API 10–25 MiB).
 - **Rate limit per proses** (satu replika). Jangan scale-out `api` tanpa shared store.
 - **Basic auth** adalah gerbang ingress, bukan identitas pengguna. Semua tester tetap masuk sebagai Superadmin UAT, dan itu tidak membuktikan RBAC.
