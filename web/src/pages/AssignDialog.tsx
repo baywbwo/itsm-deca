@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from 'react';
-import { ApiError, rateLimitText, isAbort, type Api } from '../api/client';
+import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type { AssignmentEvent, Member, TicketListItem, Workspace, WorkspacePermissions } from '../api/types';
 import { instantLabel } from '../app/format';
 import { Button } from '../components/Button';
@@ -152,6 +152,7 @@ export function AssignDialog({ api, workspace, userId, permissions, ticket, onCl
 }
 
 function assignError(e: unknown): { title: string; body: string; conflict: boolean } {
+  if (isSessionReloadNeeded(e)) return { title: SESSION_RELOAD_TITLE, body: sessionReloadText(e.requestId), conflict: false };
   if (e instanceof ApiError) {
     const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
     switch (e.status) {

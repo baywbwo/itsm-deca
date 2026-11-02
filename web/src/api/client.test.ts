@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ApiError, createApi, rateLimitText, type TransportRequest, type TransportResponse } from './client';
+import { ApiError, SESSION_RELOAD_TITLE, createApi, isSessionReloadNeeded, rateLimitText, sessionReloadText, type TransportRequest, type TransportResponse } from './client';
 import { writeError } from '../pages/adminKit';
 
 function fake(responses: Record<string, TransportResponse>) {
@@ -217,6 +217,32 @@ describe('D11 CSRF re-issue after a reload', () => {
     const { api, seen } = scripted([issued('t1'), () => err('forbidden')]);
     await expect(api.createSavedView('w1', view as never)).rejects.toMatchObject({ code: 'forbidden' });
     expect(seen).toHaveLength(2);
+  });
+
+  it('G12: csrf_failed after the one refresh reads as "session needs a reload", not as a permission refusal', async () => {
+    const { api } = scripted([issued('t1'), () => err('csrf_failed'), issued('t2'), () => err('csrf_failed')]);
+    const e = await api.createSavedView('w1', view as never).catch((x: unknown) => x);
+    expect(isSessionReloadNeeded(e)).toBe(true);
+    const w = writeError(e, 'Kategori');
+    expect(w).toMatchObject({ title: SESSION_RELOAD_TITLE, conflict: false, field: null });
+    expect(SESSION_RELOAD_TITLE).toBe('Sesi perlu dimuat ulang');
+    expect(w.body).toContain('isian Anda tetap di sini');
+    expect(w.body).toContain('Muat ulang halaman');
+    expect(w.body).not.toContain('Hak Anda');
+  });
+
+  it('G12: a plain 403 forbidden keeps the permission copy', async () => {
+    const { api } = scripted([issued('t1'), () => err('forbidden')]);
+    const e = await api.createSavedView('w1', view as never).catch((x: unknown) => x);
+    expect(isSessionReloadNeeded(e)).toBe(false);
+    expect(writeError(e, 'Kategori').title).toBe('Tidak diizinkan');
+    expect(isSessionReloadNeeded(new ApiError(401, 'csrf_failed', 'x'))).toBe(false);
+    expect(isSessionReloadNeeded('csrf_failed')).toBe(false);
+  });
+
+  it('G12: the request id is appended when present', () => {
+    expect(sessionReloadText('r-9')).toMatch(/\(ID permintaan r-9\)$/);
+    expect(sessionReloadText(null)).not.toContain('ID permintaan');
   });
 
   it('concurrent unsafe requests share one refresh', async () => {
