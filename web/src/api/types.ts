@@ -101,6 +101,7 @@ export type ReportRow = S['ReportRow'];
 export type ReportBreakdown = S['ReportBreakdown'];
 export type ReportValidationItem = S['ReportValidationItem'];
 export type ReportRun = S['ReportRun'];
+export type ReportFormat = ReportRun['format'];
 export type ReportRunList = S['ReportRunList'];
 export type ReportExportRequest = S['ReportExportRequest'];
 export type ReportExportResult = S['ReportExportResult'];

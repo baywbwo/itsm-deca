@@ -34,7 +34,7 @@ const run = {
   generatedAt: '2026-11-02T01:00:00Z', hasArtifact: true, createdAt: '2026-11-02T01:00:00Z', basis: 'received',
   filters: { status: null }, downloadable: true, requestedBy: { id: 'u1', label: 'Superadmin' }, rowCount: 3,
   artifactSha256: 'a'.repeat(64), artifactBytes: 512, expiresAt: '2026-11-03T01:00:00Z', expired: false,
-  failureCode: null, fileName: 'DUMA-rekap-operasional-NON-REGULATOR-2026-10-01_sd_2026-10-31-received-r1.csv',
+  failureCode: null, fileName: 'DUMA-rekap-operasional-NON-REGULATOR-2026-10-01_sd_2026-10-31-received-r1.csv', format: 'csv',
 };
 
 describe('D10 report query', () => {
@@ -54,6 +54,8 @@ describe('D10 report query', () => {
     expect(p).toMatchObject({ periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', status: [] });
     expect(reportExportBody({ ...p, status: ['resolved'], filters: { owner: null, channel: 'none', category: null, priority: null } }))
       .toEqual({ reportType: 'operational', format: 'csv', periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', status: ['resolved'], channel: 'none' });
+    expect(reportExportBody({ ...p, status: [], filters: { owner: 'unassigned', channel: null, category: null, priority: null } }, 'xlsx'))
+      .toEqual({ reportType: 'operational', format: 'xlsx', periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', owner: 'unassigned' });
   });
 });
 
@@ -64,6 +66,10 @@ describe('D10 report guards and client', () => {
     expect(isReportPreview({ ...preview, reportType: 'bi_regulator' })).toBe(false);
     expect(isReportRun(run)).toBe(true);
     expect(isReportRun({ ...run, state: 'done' })).toBe(false);
+    expect(isReportRun({ ...run, format: 'xlsx', fileName: 'r1.xlsx' })).toBe(true);
+    expect(isReportRun({ ...run, format: 'xls' })).toBe(false);
+    const { format: _f, ...noFormat } = run;
+    expect(isReportRun(noFormat)).toBe(false);
   });
 
   it('sends the idempotency key and CSRF token and accepts a 200 replay', async () => {

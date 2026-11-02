@@ -21,7 +21,6 @@ const TicketsPage = lazy(() => import('../pages/TicketsPage').then((m) => ({ def
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const ReportsPage = lazy(() => import('../pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const IntegrationsPage = lazy(() => import('../pages/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
-const ComponentsPage = lazy(() => import('../pages/ComponentsPage').then((m) => ({ default: m.ComponentsPage })));
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
@@ -358,8 +357,6 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
       return <ReportsPage api={api} workspace={data.workspace} uat={uat} query={query} onNotice={onNotice} />;
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
-    case 'components':
-      return uat ? <ComponentsPage /> : <ForbiddenState />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }

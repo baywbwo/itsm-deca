@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
-import type { ReportBreakdown, ReportPreview, ReportRow, ReportRun, Workspace } from '../api/types';
+import type { ReportBreakdown, ReportFormat, ReportPreview, ReportRow, ReportRun, Workspace } from '../api/types';
 import { instantLabel, num, rangeLabel, tzLabel } from '../app/format';
 import { navigate } from '../app/hooks';
 import {
@@ -21,6 +21,8 @@ import { DataTable, type Column } from '../components/DataTable';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { statusTone } from './DashboardPage';
+
+const FORMAT_LABELS: Record<ReportFormat, string> = { csv: 'CSV', xlsx: 'Excel' };
 
 const STATUS_LABELS: Record<ReportStatus, string> = {
   new: 'Baru', open: 'Ditangani', pending_customer: 'Menunggu pelanggan',
@@ -57,7 +59,7 @@ const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math
 
 /**
  * C21/C22 operational report: company header from the server, Jakarta-time period, whole-scope
- * preview and a real CSV export of exactly the previewed spec. The spec lives in the URL so reload
+ * preview and a real CSV or Excel (.xlsx) export of exactly the previewed spec. The spec lives in the URL so reload
  * and shared links show the same numbers. Official BI export is held (no mapping is invented).
  */
 export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
@@ -95,33 +97,35 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
 
   // Idempotency: a retry of the same spec after an unknown outcome reuses its key; a new spec or a
   // finished attempt gets a fresh key, so a later click is a new export rather than a silent replay.
+  // The format is part of the spec: Excel and CSV of the same preview are separate runs.
   const pending = useRef<{ spec: string; key: string } | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [exportError, setExportError] = useState<{ title: string; body: string; requestId: string | null } | null>(null);
   const [lastRun, setLastRun] = useState<ReportRun | null>(null);
   const exportStatus = useRef<HTMLParagraphElement>(null);
   const spec = `${workspace.id}|${q}`;
   useEffect(() => { setExportError(null); setLastRun(null); }, [spec]);
 
-  async function exportCsv() {
-    if (pending.current?.spec !== spec) pending.current = { spec, key: newKey() };
+  async function exportFile(format: ReportFormat) {
+    const want = `${spec}|${format}`;
+    if (pending.current?.spec !== want) pending.current = { spec: want, key: newKey() };
     const key = pending.current.key;
-    setExporting(true);
+    setExporting(format);
     setExportError(null);
     try {
-      const r = await api.createReportRun(workspace.id, key, reportExportBody(params));
+      const r = await api.createReportRun(workspace.id, key, reportExportBody(params, format));
       pending.current = null;
       setLastRun(r.run);
       setRunsAttempt((n) => n + 1);
       onNotice(r.run.state === 'succeeded'
-        ? `Ekspor CSV siap: ${num(r.run.rowCount ?? 0)} baris.`
+        ? `Ekspor ${FORMAT_LABELS[r.run.format]} siap: ${num(r.run.rowCount ?? 0)} baris.`
         : 'Ekspor gagal; tidak ada file yang dibuat.');
     } catch (e) {
       // Only a definite rejection frees the key; network/5xx may have committed, so retry replays.
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) pending.current = null;
       setExportError(exportErrorText(e));
     } finally {
-      setExporting(false);
+      setExporting(null);
       exportStatus.current?.focus();
     }
   }
@@ -221,7 +225,7 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
         <PreviewError error={preview.error} onRetry={() => setAttempt((n) => n + 1)} onReset={reset} />
       )}
       {p && (
-        <PreviewBody p={p} uat={uat} filtered={filtered} exporting={exporting} onExport={exportCsv}
+        <PreviewBody p={p} uat={uat} filtered={filtered} exporting={exporting} onExport={exportFile}
           exportError={exportError} lastRun={lastRun} statusRef={exportStatus} contentUrl={(id) => api.reportContentUrl(workspace.id, id)} />
       )}
 
@@ -239,7 +243,7 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
         {runs.status === 'success' && (
           <DataTable caption="Riwayat ekspor laporan" columns={runColumns(tz, (id) => api.reportContentUrl(workspace.id, id))}
             rows={runs.data.items} rowKey={(r) => r.id}
-            empty={{ title: 'Belum ada ekspor', body: 'Ekspor operasional CSV yang dibuat di workspace ini muncul di sini.' }} />
+            empty={{ title: 'Belum ada ekspor', body: 'Ekspor operasional Excel / CSV yang dibuat di workspace ini muncul di sini.' }} />
         )}
       </section>
     </>
@@ -284,8 +288,8 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
   p: ReportPreview;
   uat: boolean;
   filtered: boolean;
-  exporting: boolean;
-  onExport: () => void;
+  exporting: ReportFormat | null;
+  onExport: (format: ReportFormat) => void;
   exportError: { title: string; body: string; requestId: string | null } | null;
   lastRun: ReportRun | null;
   statusRef: RefObject<HTMLParagraphElement | null>;
@@ -297,7 +301,7 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
   return (
     <>
       <div className="kpis">
-        <div className="kpi"><span className="muted">Tiket unik</span><strong>{num(t.tickets)}</strong><small>{p.header.basisLabel} · = baris CSV</small></div>
+        <div className="kpi"><span className="muted">Tiket unik</span><strong>{num(t.tickets)}</strong><small>{p.header.basisLabel} · = baris ekspor</small></div>
         <div className="kpi"><span className="muted">Siklus penyelesaian</span><strong>{num(t.resolutionCycles)}</strong><small>Peristiwa selesai dalam periode · bukan jumlah tiket</small></div>
         <div className="kpi"><span className="muted">Tiket terselesaikan</span><strong>{num(t.resolvedTickets)}</strong><small>Tiket unik dengan ≥1 penyelesaian dalam periode</small></div>
         <div className="kpi"><span className="muted">Belum ditugaskan</span><strong>{num(t.unassigned)}</strong><small>Tanpa PIC saat ini</small></div>
@@ -320,12 +324,16 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
       <section className="card spaced" aria-labelledby="rep-export">
         <h2 id="rep-export">Ekspor</h2>
         <p className="tiny muted">
-          CSV memuat seluruh {num(t.tickets)} tiket sesuai parameter di atas (bukan hanya pratinjau), sel diawali =, +, -, @
-          dinetralkan, berlabel OPERASIONAL / NON-REGULATOR. Maksimal {num(p.exportMaxRows)} baris; melebihi batas = gagal, tidak dipotong.
+          File memuat seluruh {num(t.tickets)} tiket sesuai parameter di atas (bukan hanya pratinjau), berlabel OPERASIONAL / NON-REGULATOR.
+          Excel (.xlsx): sheet Data dengan tanggal dan angka bertipe, sheet Ringkasan berisi filter dan total; teks tidak pernah dijalankan
+          sebagai rumus. CSV: sel diawali =, +, -, @ dinetralkan. Maksimal {num(p.exportMaxRows)} baris; melebihi batas = gagal, tidak dipotong.
         </p>
         <div className="row">
-          <Button variant="primary" onClick={onExport} disabled={exporting || !p.exportable} aria-describedby="rep-export-state">
-            {exporting ? 'Menyiapkan CSV…' : 'Ekspor operasional CSV'}
+          <Button variant="primary" onClick={() => onExport('xlsx')} disabled={exporting !== null || !p.exportable} aria-describedby="rep-export-state">
+            {exporting === 'xlsx' ? 'Menyiapkan Excel…' : 'Ekspor Excel (.xlsx)'}
+          </Button>
+          <Button onClick={() => onExport('csv')} disabled={exporting !== null || !p.exportable} aria-describedby="rep-export-state">
+            {exporting === 'csv' ? 'Menyiapkan CSV…' : 'Ekspor CSV'}
           </Button>
           <Button disabled title="Pemetaan regulator belum tersedia">Kirim ke BI (belum tersedia)</Button>
         </div>
@@ -427,6 +435,7 @@ function runColumns(tz: string, url: (id: string) => string): readonly Column<Re
     { key: 'created', header: 'Dibuat', cell: (r) => `${instantLabel(r.createdAt, tz)} · ${r.requestedBy.label}` },
     { key: 'period', header: 'Periode', cell: (r) => `${rangeLabel(r.periodStart, r.periodEnd)} · ${r.basis === 'resolved' ? 'diselesaikan' : 'diterima'}` },
     { key: 'state', header: 'Status', cell: (r) => { const s = runState(r); return <Badge tone={s.tone}>{s.label}</Badge>; } },
+    { key: 'format', header: 'Format', cell: (r) => FORMAT_LABELS[r.format] },
     { key: 'rows', header: 'Baris', cell: (r) => (r.rowCount === null ? '—' : num(r.rowCount)) },
     {
       key: 'sha', header: 'SHA-256',
@@ -436,7 +445,7 @@ function runColumns(tz: string, url: (id: string) => string): readonly Column<Re
     {
       key: 'download', header: 'File',
       cell: (r) => (r.downloadable
-        ? <a href={url(r.id)} download={r.fileName ?? undefined} aria-label={`Unduh ${r.fileName ?? 'CSV'}`}>Unduh CSV</a>
+        ? <a href={url(r.id)} download={r.fileName ?? undefined} aria-label={`Unduh ${r.fileName ?? FORMAT_LABELS[r.format]}`}>Unduh {FORMAT_LABELS[r.format]}</a>
         : <span className="muted">{r.expired ? 'Kedaluwarsa' : 'Tidak tersedia'}</span>),
     },
   ];

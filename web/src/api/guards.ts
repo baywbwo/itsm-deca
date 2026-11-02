@@ -401,7 +401,8 @@ export function isReportRun(v: unknown): v is ReportRun {
     typeof v.hasArtifact === 'boolean' && typeof v.expired === 'boolean' &&
     isObj(v.requestedBy) && isStr(v.requestedBy.id) && isStr(v.requestedBy.label) &&
     isNumOrNull(v.rowCount) && isStrOrNull(v.artifactSha256) && isNumOrNull(v.artifactBytes) &&
-    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName)
+    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName) &&
+    (v.format === 'csv' || v.format === 'xlsx')
   );
 }
 
