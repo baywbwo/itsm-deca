@@ -22,7 +22,7 @@ const W = '/api/v1/workspaces/w1';
 const settings = {
   workspaceId: 'w1', workspaceCode: 'DUMA', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta', companyId: 'c1',
   companyCode: 'DUMA', companyName: 'PT Dummy A', reporterCode: null, active: true, version: 3, memberCount: 2,
-  brandKey: null, brandName: null,
+  brandKey: null, brandName: null, previousCodes: [],
 };
 const member = {
   membershipId: 'm1', userId: 'u1', displayName: 'CS Alfa (dummy)', role: 'cs', active: true, version: 1, grants: [],
@@ -81,18 +81,18 @@ describe('D09 api client', () => {
     expect(seen.map((s) => s.path)).toEqual([`${W}/integrations/i1/activate`, `${W}/members/m1/grants`]);
   });
 
-  it('D14 edits a company profile on its own path, without the code', async () => {
+  it('D14/D17 edits a company profile on its own path, with the (editable) code', async () => {
     const { api, seen } = fake({
       'PATCH /api/v1/companies/c1/profile': {
         status: 200, requestId: null, body: { item: { ...settings, companyName: 'PT Baru', version: 4 }, auditEventId: 'a1' },
       },
     });
-    const body = { companyName: 'PT Baru', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
+    const body = { code: 'DUMA', companyName: 'PT Baru', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
       brandKey: null, brandName: null, version: 3 };
     const r = await api.updateCompany('c1', body);
     expect(r.item).toMatchObject({ companyName: 'PT Baru', workspaceCode: 'DUMA', version: 4 });
     expect(seen[0]).toMatchObject({ method: 'PATCH', path: '/api/v1/companies/c1/profile', body });
-    expect(seen[0]?.body).not.toHaveProperty('code');
+    expect(seen[0]?.body).toHaveProperty('code', 'DUMA');
   });
 
   it('D15 sends the branding preset with the profile and rejects anything but a preset', async () => {
@@ -104,7 +104,7 @@ describe('D09 api client', () => {
         status: 200, requestId: null, body: { item: { ...settings, brandKey: 'https://example.com/x.png' }, auditEventId: 'a2' },
       },
     });
-    const body = { companyName: 'PT Dummy A', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
+    const body = { code: 'DUMA', companyName: 'PT Dummy A', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
       brandKey: 'ajr' as const, brandName: 'Bravo uji', version: 3 };
     expect((await api.updateCompany('c1', body)).item).toMatchObject({ brandKey: 'ajr', brandName: 'Bravo uji' });
     expect(seen[0]?.body).toMatchObject({ brandKey: 'ajr', brandName: 'Bravo uji' });
@@ -118,11 +118,35 @@ describe('D09 api client', () => {
         status: 409, requestId: 'r1', body: { error: { code: 'version_conflict', message: 'Data sudah berubah.' } },
       },
     });
-    const body = { companyName: 'PT Dummy A', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
+    const body = { code: 'DUMA', companyName: 'PT Dummy A', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const, reporterCode: null,
       brandKey: null, brandName: null, version: 3 };
     expect((await api.updateCompany('c1', body)).auditEventId).toBeNull();
     const e = await api.updateCompany('c2', body).catch((x: unknown) => x);
     expect(writeError(e, 'Perusahaan')).toMatchObject({ conflict: true, title: 'Data sudah diubah pihak lain' });
+  });
+
+  it('D17 renames the code, lists earlier codes and rejects a settings body without them', async () => {
+    const { api, seen } = fake({
+      'PATCH /api/v1/companies/c1/profile': {
+        status: 200, requestId: null,
+        body: { item: { ...settings, workspaceCode: 'DECA', companyCode: 'DECA', previousCodes: ['DUMA'], version: 4 }, auditEventId: 'a1' },
+      },
+      'PATCH /api/v1/companies/c2/profile': {
+        status: 200, requestId: null, body: { item: { ...settings, previousCodes: undefined }, auditEventId: 'a2' },
+      },
+      'PATCH /api/v1/companies/c3/profile': {
+        status: 422, requestId: null,
+        body: { error: { code: 'validation_failed', message: 'Kode sudah dipakai.', field: 'code' } },
+      },
+    });
+    const body = { code: 'DECA', companyName: 'PT Dummy A', workspaceName: 'Dummy A', timezone: 'Asia/Jakarta' as const,
+      reporterCode: null, brandKey: null, brandName: null, version: 3 };
+    const r = await api.updateCompany('c1', body);
+    expect(r.item).toMatchObject({ workspaceCode: 'DECA', previousCodes: ['DUMA'], reporterCode: null });
+    expect(seen[0]?.body).toMatchObject({ code: 'DECA', reporterCode: null });
+    await expect(api.updateCompany('c2', body)).rejects.toBeInstanceOf(Error);
+    const e = await api.updateCompany('c3', body).catch((x: unknown) => x);
+    expect(writeError(e, 'Perusahaan')).toMatchObject({ field: 'code', conflict: false });
   });
 
   it('403 on companies stays a forbidden error (no silent empty list)', async () => {

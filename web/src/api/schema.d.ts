@@ -2109,6 +2109,8 @@ export interface components {
             brandKey: components["schemas"]["BrandKey"];
             /** @description Display name override; null = the company name. */
             brandName: string | null;
+            /** @description Codes this workspace used before, oldest first. Tickets issued under them keep their numbers (e.g. DUMA-5) and the codes stay reserved for this workspace. */
+            previousCodes: string[];
             active: boolean;
             /** Format: int32 */
             version: number;
@@ -2128,8 +2130,10 @@ export interface components {
             /** Format: int32 */
             version: number;
         };
-        /** @description Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable. */
+        /** @description Company administration (UAT Superadmin): profile, business code and branding. code is required; brandKey and brandName are required and may be null, so omitting them never clears the branding. Internal ids never change; the reporter code is separate from the workspace code. */
         CompanyProfilePatchRequest: {
+            /** @description Business code of the company and its workspace: prefix of NEW ticket numbers. Changing it never renumbers existing tickets. A code used (now or before) by another workspace is refused with 422 field code. */
+            code: string;
             workspaceName: string;
             companyName: string;
             timezone: components["schemas"]["Timezone"];

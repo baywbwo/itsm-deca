@@ -119,6 +119,7 @@ function WorkspaceForm({ api, body, onReload, onSaved }: {
   const props: [string, string][] = [
     ['Kode workspace', s.workspaceCode],
     ['Kode perusahaan', s.companyCode],
+    ...(s.previousCodes.length > 0 ? [['Kode sebelumnya', s.previousCodes.join(', ')] as [string, string]] : []),
     ['Status', s.active ? 'Aktif' : 'Nonaktif'],
     ['Anggota aktif', String(s.memberCount)],
   ];
@@ -573,9 +574,11 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
 }
 
 /**
- * Edits an existing company + its workspace, prefilled with the listed values. The code stays
- * locked: it prefixes every ticket number already issued. A 409 keeps the input; reloading
- * fetches the latest version so the same input can be saved again.
+ * Edits an existing company + its workspace, prefilled with the listed values. The business
+ * code is editable (D17): new tickets use the new code, tickets already issued keep their
+ * number, and every earlier code stays reserved for this company. The server and database
+ * validate format and uniqueness; uppercasing here is only a convenience. A 409 keeps the
+ * input; reloading fetches the latest version so the same input can be saved again.
  */
 function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
   api: Api;
@@ -585,6 +588,7 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
   onRefreshed: (list: CompanyList) => void;
 }) {
   const [form, setForm] = useState({
+    code: company.workspaceCode,
     companyName: company.companyName, workspaceName: company.workspaceName,
     timezone: company.timezone as Timezone, reporterCode: company.reporterCode ?? '',
     brandKey: company.brandKey ?? '', brandName: company.brandName ?? '',
@@ -594,13 +598,16 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
   const [error, setError] = useState<WriteError | null>(null);
   const [refreshed, setRefreshed] = useState(false);
   const formId = useId();
-  const valid = form.companyName.trim() !== '' && form.workspaceName.trim() !== '';
+  const codeOk = CODE_PATTERN.test(form.code);
+  const codeChanged = form.code !== company.workspaceCode;
+  const valid = form.companyName.trim() !== '' && form.workspaceName.trim() !== '' && codeOk;
   async function submit() {
     if (busy || !valid) return;
     setBusy(true);
     setError(null);
     try {
       const r = await api.updateCompany(company.companyId, {
+        code: form.code,
         companyName: form.companyName.trim(), workspaceName: form.workspaceName.trim(), timezone: form.timezone,
         reporterCode: form.reporterCode.trim() || null,
         brandKey: preset ? preset.key : null, brandName: form.brandName.trim() || null, version: company.version,
@@ -645,8 +652,28 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
           hint="Tampil di pemilih workspace."
           error={error?.field === 'workspaceName' ? 'Isi nama workspace (maks. 200 karakter).' : undefined}
           onChange={(e) => setForm({ ...form, workspaceName: e.target.value })} />
-        <TextField label="Kode workspace (terkunci)" value={company.workspaceCode} readOnly
-          hint={`Terkunci: kode ini dipakai pada nomor tiket yang sudah terbit (mis. ${company.workspaceCode}-1), jadi tidak dapat diubah.`} />
+        <TextField label="Kode workspace" required maxLength={10} value={form.code} disabled={busy}
+          autoCapitalize="characters" spellCheck={false}
+          hint="2–10 huruf besar/angka. Dipakai untuk nomor tiket BARU; nomor tiket lama tidak berubah."
+          error={error?.field === 'code'
+            ? 'Kode sudah/pernah dipakai perusahaan lain atau formatnya tidak valid.'
+            : !codeOk && form.code !== '' ? 'Gunakan 2–10 huruf besar A–Z atau angka.' : undefined}
+          onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase().replace(/\s/g, '') })} />
+        <div className="full tiny" data-testid="code-impact" role="status" aria-live="polite">
+          {codeChanged && codeOk ? (
+            <p className="banner">
+              Tiket baru akan bernomor <strong>{form.code}-…</strong> dan melanjutkan urutan yang ada.
+              Tiket yang sudah terbit tetap memakai nomornya (mis. <strong>{company.workspaceCode}-1</strong>)
+              di daftar, detail, pencarian dan ekspor. Kode <strong>{company.workspaceCode}</strong> tetap dicadangkan
+              untuk perusahaan ini. Kode perusahaan ikut berubah; kode pelapor tidak.
+            </p>
+          ) : (
+            <p className="muted">
+              Kode saat ini {company.workspaceCode}
+              {company.previousCodes.length > 0 && <> · kode sebelumnya: {company.previousCodes.join(', ')} (tetap dicadangkan)</>}.
+            </p>
+          )}
+        </div>
         <SelectField label="Zona waktu" value={form.timezone} disabled={busy}
           onChange={(e) => setForm({ ...form, timezone: e.target.value as Timezone })}>
           {Object.entries(TZ_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -675,18 +702,21 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
             <span className="tiny muted"> · {preset ? preset.label : 'Netral'}</span>
           </span>
         </div>
-        <p className="full tiny muted">Hanya profil yang berubah. Tiket, nomor tiket, laporan dan histori tidak disentuh; perubahan tercatat di audit.</p>
+        <p className="full tiny muted">Hanya profil yang berubah. Data, nomor tiket yang sudah terbit, laporan dan histori tidak dipindah atau dinomori ulang; perubahan tercatat di audit.</p>
       </form>
     </Dialog>
   );
 }
+
+/** Server rule for workspace codes; the API and the database enforce it too. */
+const CODE_PATTERN = /^[A-Z0-9]{2,10}$/;
 
 function CompanyDialog({ api, onClose, onDone }: { api: Api; onClose: () => void; onDone: (c: WorkspaceSettings) => void }) {
   const [form, setForm] = useState({ name: '', code: '', timezone: 'Asia/Jakarta' as Timezone, reporterCode: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<WriteError | null>(null);
   const formId = useId();
-  const valid = form.name.trim() !== '' && /^[A-Z0-9]{2,10}$/.test(form.code);
+  const valid = form.name.trim() !== '' && CODE_PATTERN.test(form.code);
   async function submit() {
     if (busy || !valid) return;
     setBusy(true);

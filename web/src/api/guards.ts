@@ -334,7 +334,7 @@ const isWorkspaceSettings = (v: unknown): v is WorkspaceSettings =>
   isObj(v) && isStr(v.workspaceId) && isStr(v.workspaceCode) && isStr(v.workspaceName) && isStr(v.timezone) &&
   isStr(v.companyId) && isStr(v.companyCode) && isStr(v.companyName) && isStrOrNull(v.reporterCode) &&
   typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount) &&
-  isBrandKey(v.brandKey) && isStrOrNull(v.brandName);
+  isBrandKey(v.brandKey) && isStrOrNull(v.brandName) && isArr(v.previousCodes, isStr);
 export const isSettingsBody = (v: unknown): v is SettingsBody =>
   isObj(v) && isWorkspaceSettings(v.settings) && typeof v.canEdit === 'boolean' &&
   isArr(v.timezones, (t) => isStr(t) && TIMEZONES.includes(t));
