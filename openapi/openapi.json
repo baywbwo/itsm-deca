@@ -867,6 +867,8 @@
           "timezone",
           "companyId",
           "version",
+          "brandKey",
+          "brandName",
           "myRole"
         ],
         "properties": {
@@ -890,6 +892,13 @@
           },
           "version": {
             "type": "integer"
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": "string",
+            "description": "Name shown next to the logo: the branding display name, else the company name."
           },
           "myRole": {
             "type": [
@@ -4167,6 +4176,8 @@
           "companyCode",
           "companyName",
           "reporterCode",
+          "brandKey",
+          "brandName",
           "active",
           "version",
           "memberCount"
@@ -4200,6 +4211,16 @@
               "string",
               "null"
             ]
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name override; null = the company name."
           },
           "active": {
             "type": "boolean"
@@ -4273,6 +4294,55 @@
           }
         },
         "additionalProperties": false
+      },
+      "CompanyProfilePatchRequest": {
+        "type": "object",
+        "required": [
+          "workspaceName",
+          "companyName",
+          "timezone",
+          "brandKey",
+          "brandName",
+          "version"
+        ],
+        "properties": {
+          "workspaceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "companyName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "timezone": {
+            "$ref": "#/components/schemas/Timezone"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 60
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable."
       },
       "SettingsResult": {
         "type": "object",
@@ -5467,6 +5537,18 @@
             "maxLength": 43
           }
         }
+      },
+      "BrandKey": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "deca",
+          "ajr",
+          null
+        ],
+        "description": "Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted."
       }
     },
     "responses": {
@@ -8409,7 +8491,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SettingsPatchRequest"
+                "$ref": "#/components/schemas/CompanyProfilePatchRequest"
               }
             }
           }

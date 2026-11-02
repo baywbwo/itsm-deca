@@ -20,6 +20,10 @@ pub struct WorkspaceView {
     timezone: String,
     company_id: Uuid,
     version: i32,
+    /// Company branding preset (`deca` | `ajr`); `null` = not configured (neutral look).
+    brand_key: Option<String>,
+    /// Name shown next to the logo: the branding display name, else the company name.
+    brand_name: String,
     /// Caller's business role here; `null` for UAT Superadmin without membership.
     my_role: Option<String>,
 }
@@ -30,8 +34,9 @@ pub struct ListBody<T> {
 }
 
 const WORKSPACE_SELECT: &str = "SELECT w.id, w.code, w.name, w.timezone, w.company_id, w.version, \
-            m.role AS my_role \
+            c.brand_key, COALESCE(c.brand_name, c.name) AS brand_name, m.role AS my_role \
      FROM workspaces w \
+     JOIN companies c ON c.id = w.company_id \
      LEFT JOIN workspace_memberships m \
             ON m.workspace_id = w.id AND m.user_id = $1 AND m.active \
      WHERE w.active AND (m.id IS NOT NULL OR $2)";

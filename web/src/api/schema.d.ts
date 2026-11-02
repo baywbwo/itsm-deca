@@ -1190,6 +1190,9 @@ export interface components {
             /** Format: uuid */
             companyId: string;
             version: number;
+            brandKey: components["schemas"]["BrandKey"];
+            /** @description Name shown next to the logo: the branding display name, else the company name. */
+            brandName: string;
             /** @enum {string|null} */
             myRole: "cs" | "lead_cs" | null;
         };
@@ -2103,6 +2106,9 @@ export interface components {
             companyCode: string;
             companyName: string;
             reporterCode: string | null;
+            brandKey: components["schemas"]["BrandKey"];
+            /** @description Display name override; null = the company name. */
+            brandName: string | null;
             active: boolean;
             /** Format: int32 */
             version: number;
@@ -2119,6 +2125,17 @@ export interface components {
             companyName: string;
             timezone: components["schemas"]["Timezone"];
             reporterCode?: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable. */
+        CompanyProfilePatchRequest: {
+            workspaceName: string;
+            companyName: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+            brandKey: components["schemas"]["BrandKey"];
+            brandName: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -2438,6 +2455,11 @@ export interface components {
         CsrfIssued: {
             csrfToken: string;
         };
+        /**
+         * @description Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted.
+         * @enum {string|null}
+         */
+        BrandKey: "deca" | "ajr" | null;
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -4249,7 +4271,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SettingsPatchRequest"];
+                "application/json": components["schemas"]["CompanyProfilePatchRequest"];
             };
         };
         responses: {
