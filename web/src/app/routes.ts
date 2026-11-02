@@ -1,6 +1,6 @@
 import type { DashboardPeriodKey, PermissionCode, TicketFilter } from '../api/types';
 
-export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'components';
+export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations';
 
 export interface PageDef {
   id: PageId;
@@ -29,7 +29,6 @@ export const PAGES: readonly PageDef[] = [
     anyOf: ['integration.manage', 'integration.credentials', 'integration.recovery'],
     milestone: 'D09–D10',
   },
-  { id: 'components', label: 'Komponen', anyOf: [], uatOnly: true, milestone: 'D04' },
 ];
 
 export const pageDef = (id: PageId): PageDef => PAGES.find((p) => p.id === id) ?? PAGES[0]!;
@@ -317,11 +316,11 @@ export function reportQuery(p: ReportParams): string {
   return q.toString();
 }
 
-/** Body of the export request for exactly the previewed spec. */
-export function reportExportBody(p: ReportParams) {
+/** Body of the export request for exactly the previewed spec, as CSV or a real XLSX workbook. */
+export function reportExportBody(p: ReportParams, format: 'csv' | 'xlsx' = 'csv') {
   return {
     reportType: 'operational' as const,
-    format: 'csv' as const,
+    format,
     periodStart: p.periodStart,
     periodEnd: p.periodEnd,
     basis: p.basis,

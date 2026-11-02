@@ -5,6 +5,11 @@
 #   - ITSM_UAT_SITE_ADDRESS, ITSM_UAT_TLS, ITSM_UAT_ALLOWED_CIDRS, ITSM_UAT_BASIC_AUTH_USER in .env
 #   - secrets/ingress_basic_auth_hash (bcrypt) and secrets/pg_password
 # See README.md. Only the ingress publishes ports; API, Postgres and clamd stay private.
+#
+# D13: attachments are out of scope. clamd is NOT started by default and is not a startup
+# dependency; without ITSM_CLAMD_ADDR every upload is refused fail-closed (503
+# scanner_unavailable, nothing stored as clean). Re-enable only together with the feature:
+#   ITSM_CLAMD_ADDR=tcp://clamav:3310 docker compose --profile attachments ...
 name: itsm-uat
 
 x-ingress-required: &ingress-required
@@ -34,9 +39,10 @@ services:
     shm_size: 256m
 
   clamav:
-    # Official ClamAV image; clamd on 3310, signatures persisted. Needs egress for freshclam
+    # Optional (profile `attachments`, off by default). Official ClamAV image; clamd on 3310, signatures persisted. Needs egress for freshclam
     # (clamav-updates network) and ~3 GB RAM. First start can take several minutes.
     image: clamav/clamav:1.5.4@sha256:bda39705e291105049c3936e2803ac90b955172af8030f94f05dce1252df6c6d
+    profiles: [attachments]
     volumes:
       - clamav-db:/var/lib/clamav
     networks: [backend, clamav-updates]
@@ -61,7 +67,8 @@ services:
       ITSM_DB_HOST: postgres
       ITSM_DB_NAME: itsm_uat_dummy
       ITSM_DB_USER: itsm
-      ITSM_CLAMD_ADDR: tcp://clamav:3310
+      # Empty by default = attachment uploads refused (fail-closed). Never a startup dependency.
+      ITSM_CLAMD_ADDR: "${ITSM_CLAMD_ADDR:-}"
       ITSM_TRUSTED_PROXIES: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
       ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-on}
       RUST_LOG: ${RUST_LOG:-info}

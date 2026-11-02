@@ -754,6 +754,23 @@ export interface paths {
         patch: operations["setCompanyActive"];
         trace?: never;
     };
+    "/api/v1/companies/{company_id}/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed. */
+        patch: operations["updateCompany"];
+        trace?: never;
+    };
     "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
         parameters: {
             query?: never;
@@ -1173,6 +1190,9 @@ export interface components {
             /** Format: uuid */
             companyId: string;
             version: number;
+            brandKey: components["schemas"]["BrandKey"];
+            /** @description Name shown next to the logo: the branding display name, else the company name. */
+            brandName: string;
             /** @enum {string|null} */
             myRole: "cs" | "lead_cs" | null;
         };
@@ -1287,7 +1307,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        /** @description Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed. */
+        /** @description Operational report run (D10: synchronous CSV/XLSX export). Official BI export is held. The artifact reference is not exposed. */
         ReportRun: {
             /** Format: uuid */
             id: string;
@@ -1307,7 +1327,7 @@ export interface components {
             createdAt: string;
             basis: components["schemas"]["ReportBasis"];
             filters: components["schemas"]["ReportRunFilters"];
-            /** @description True while the stored CSV can be downloaded (D10 artifact, not expired). */
+            /** @description True while the stored artifact (CSV or XLSX) can be downloaded (not expired). */
             downloadable: boolean;
             requestedBy: components["schemas"]["PersonRef"];
             rowCount: number | null;
@@ -1320,6 +1340,11 @@ export interface components {
             /** @enum {string|null} */
             failureCode: "row_limit" | "internal" | null;
             fileName: string | null;
+            /**
+             * @description Artifact format (D13). Runs before D13 are csv.
+             * @enum {string}
+             */
+            format: "csv" | "xlsx";
         };
         UatNotice: {
             /** @example Mode uji — Superadmin */
@@ -2081,6 +2106,9 @@ export interface components {
             companyCode: string;
             companyName: string;
             reporterCode: string | null;
+            brandKey: components["schemas"]["BrandKey"];
+            /** @description Display name override; null = the company name. */
+            brandName: string | null;
             active: boolean;
             /** Format: int32 */
             version: number;
@@ -2097,6 +2125,17 @@ export interface components {
             companyName: string;
             timezone: components["schemas"]["Timezone"];
             reporterCode?: string | null;
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable. */
+        CompanyProfilePatchRequest: {
+            workspaceName: string;
+            companyName: string;
+            timezone: components["schemas"]["Timezone"];
+            reporterCode?: string | null;
+            brandKey: components["schemas"]["BrandKey"];
+            brandName: string | null;
             /** Format: int32 */
             version: number;
         };
@@ -2123,6 +2162,11 @@ export interface components {
             item: components["schemas"]["WorkspaceSettings"];
             /** Format: uuid */
             auditEventId: string;
+        };
+        CompanyUpdateResult: {
+            item: components["schemas"]["WorkspaceSettings"];
+            /** Format: uuid */
+            auditEventId: string | null;
         };
         CatalogEntry: {
             /** Format: uuid */
@@ -2386,8 +2430,11 @@ export interface components {
             category?: string;
             /** @description UUID or `none`. */
             priority?: string;
-            /** @enum {string} */
-            format?: "csv";
+            /**
+             * @description Default csv. xlsx = real Office Open XML workbook (sheet Data = CSV columns with typed date/number cells, sheet Ringkasan = header, filters, totals). User strings are always string cells, never formulas. The format is part of the idempotency fingerprint.
+             * @enum {string}
+             */
+            format?: "csv" | "xlsx";
         };
         /** @description Validated filters of the run (null = not filtered). Empty object for runs created before D10. */
         ReportRunFilters: {
@@ -2408,6 +2455,11 @@ export interface components {
         CsrfIssued: {
             csrfToken: string;
         };
+        /**
+         * @description Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted.
+         * @enum {string|null}
+         */
+        BrandKey: "deca" | "ajr" | null;
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -4208,6 +4260,39 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
+    updateCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompanyProfilePatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompanyUpdateResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
     listCatalogEntries: {
         parameters: {
             query?: never;
@@ -4764,7 +4849,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description CSV bytes */
+            /** @description Artifact bytes; media type follows the run format */
             200: {
                 headers: {
                     "X-Content-SHA256"?: string;
@@ -4772,6 +4857,7 @@ export interface operations {
                 };
                 content: {
                     "text/csv": string;
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": string;
                 };
             };
             401: components["responses"]["Unauthenticated"];

@@ -145,6 +145,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/companies"),
     ("post", "/api/v1/companies"),
     ("patch", "/api/v1/companies/{company_id}"),
+    ("patch", "/api/v1/companies/{company_id}/profile"),
     ("get", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
     ("post", "/api/v1/workspaces/{workspace_id}/catalogs/{kind}"),
     (
@@ -328,6 +329,10 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/companies/{company_id}",
             patch(settings::set_company_active),
+        )
+        .route(
+            "/api/v1/companies/{company_id}/profile",
+            patch(settings::update_company),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/catalogs/{kind}",

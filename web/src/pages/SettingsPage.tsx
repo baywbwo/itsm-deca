@@ -1,9 +1,10 @@
 import { useId, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type {
-  CatalogEditor, CatalogEntry, CatalogKind, GrantCode, Member, MemberList, SettingsBody, Timezone,
+  CatalogEditor, CatalogEntry, CatalogKind, CompanyList, GrantCode, Member, MemberList, SettingsBody, Timezone,
   Workspace, WorkspaceSettings,
 } from '../api/types';
+import { BRAND_PRESETS } from '../app/brand';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
@@ -33,7 +34,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   const tabs: { id: TabId; label: string }[] = [
     ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
     ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota' }] : []),
-    ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Kategori & referensi' }] : []),
+    ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Kategori & data master' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
   ];
   const [tab, setTab] = useState<TabId>(tabs[0]?.id ?? 'workspace');
@@ -42,7 +43,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   return (
     <>
       <PageHeader eyebrow={workspace.code} title="Pengaturan"
-        description={`Profil workspace, anggota dan katalog referensi ${workspace.code}. Penonaktifan menggantikan penghapusan; histori tetap tersimpan.`} />
+        description={`Profil workspace, anggota dan data master ${workspace.code}. Penonaktifan menggantikan penghapusan; histori tetap tersimpan.`} />
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Bagian pengaturan" panelId={panelId} />
       <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab-${tab}`}>
         {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
@@ -365,11 +366,15 @@ function CatalogTab({ api, workspace, onNotice }: { api: Api; workspace: Workspa
   return (
     <section aria-labelledby="cat-title">
       <div className="row between spaced-bottom">
-        <h2 id="cat-title">Katalog referensi</h2>
+        <h2 id="cat-title">Kategori & data master</h2>
         {ed?.canEdit && kind !== 'priorities' && <Button variant="primary" onClick={() => setEditing('new')}>＋ Tambah {label.toLowerCase()}</Button>}
       </div>
+      <p className="tiny muted spaced-bottom" id="cat-desc">
+        Daftar pilihan yang muncul di formulir dan filter tiket: kategori, produk, prioritas, unit penerima, wilayah dan kanal penerimaan.
+        Entri dinonaktifkan, bukan dihapus, agar tiket lama tetap terbaca.
+      </p>
       <div className="toolbar row">
-        <SelectField label="Jenis katalog" value={kind} onChange={(e) => { setKind(e.target.value as CatalogKind); setEditing(null); }}>
+        <SelectField label="Jenis data master" value={kind} onChange={(e) => { setKind(e.target.value as CatalogKind); setEditing(null); }}>
           {KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
         </SelectField>
       </div>
@@ -492,6 +497,7 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
   const res = useLoad((s) => api.listCompanies(s), 'companies');
   const [adding, setAdding] = useState(false);
   const [toggle, setToggle] = useState<WorkspaceSettings | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
   const [error, setError] = useState<WriteError | null>(null);
   if (res.error) return <LoadFailure error={res.error} what="Daftar perusahaan" onRetry={res.reload} />;
   const list = res.data;
@@ -500,6 +506,7 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
     res.set({ items: list.items.map((x) => (x.companyId === c.companyId ? c : x)) });
     onChanged();
   };
+  const editing = list.items.find((c) => c.companyId === editId) ?? null;
   return (
     <section aria-labelledby="co-title">
       <div className="row between spaced-bottom">
@@ -515,18 +522,33 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
         empty={{ title: 'Belum ada perusahaan', body: 'Tambahkan perusahaan pertama.' }}
         columns={[
           { key: 'name', header: 'Perusahaan', cell: (c) => c.companyName },
-          { key: 'code', header: 'Workspace', cell: (c) => <><code>{c.workspaceCode}</code>{c.workspaceId === workspace.id ? ' (aktif dibuka)' : ''}</> },
+          { key: 'code', header: 'Workspace', cell: (c) => <><code>{c.workspaceCode}</code> {c.workspaceName}{c.workspaceId === workspace.id ? ' (aktif dibuka)' : ''}</> },
+          { key: 'brand', header: 'Branding', cell: (c) => (c.brandKey ? BRAND_PRESETS[c.brandKey].label : 'Netral (belum diatur)') },
           { key: 'members', header: 'Anggota', cell: (c) => c.memberCount },
           { key: 'status', header: 'Status', cell: (c) => <Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge> },
           {
             key: 'act', header: 'Aksi',
-            cell: (c) => <Button onClick={() => { setError(null); setToggle(c); }} aria-label={`${c.active ? 'Nonaktifkan' : 'Aktifkan'} ${c.companyName}`}>
-              {c.active ? 'Nonaktifkan' : 'Aktifkan'}</Button>,
+            cell: (c) => (
+              <div className="row">
+                <Button onClick={() => { setError(null); setEditId(c.companyId); }} aria-label={`Edit ${c.companyName}`}>Edit</Button>
+                <Button onClick={() => { setError(null); setToggle(c); }} aria-label={`${c.active ? 'Nonaktifkan' : 'Aktifkan'} ${c.companyName}`}>
+                  {c.active ? 'Nonaktifkan' : 'Aktifkan'}</Button>
+              </div>
+            ),
           },
         ]} />
       {adding && (
         <CompanyDialog api={api} onClose={() => setAdding(false)}
           onDone={(c) => { res.set({ items: [...list.items, c] }); setAdding(false); onChanged(); onNotice(`${c.companyName} (${c.workspaceCode}) dibuat tanpa anggota. Tercatat di audit.`); }} />
+      )}
+      {editing && (
+        <CompanyEditDialog api={api} company={editing} onClose={() => setEditId(null)}
+          onRefreshed={(l) => { res.set(l); onChanged(); }}
+          onDone={(c, changed) => {
+            replace(c);
+            setEditId(null);
+            onNotice(changed ? `${c.companyName} (${c.workspaceCode}) tersimpan. Tercatat di audit.` : 'Tidak ada perubahan; tidak ada yang disimpan.');
+          }} />
       )}
       {toggle && (
         <ConfirmDialog title={`${toggle.active ? 'Nonaktifkan' : 'Aktifkan'} ${toggle.companyName}?`}
@@ -547,6 +569,115 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
           }} />
       )}
     </section>
+  );
+}
+
+/**
+ * Edits an existing company + its workspace, prefilled with the listed values. The code stays
+ * locked: it prefixes every ticket number already issued. A 409 keeps the input; reloading
+ * fetches the latest version so the same input can be saved again.
+ */
+function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
+  api: Api;
+  company: WorkspaceSettings;
+  onClose: () => void;
+  onDone: (c: WorkspaceSettings, changed: boolean) => void;
+  onRefreshed: (list: CompanyList) => void;
+}) {
+  const [form, setForm] = useState({
+    companyName: company.companyName, workspaceName: company.workspaceName,
+    timezone: company.timezone as Timezone, reporterCode: company.reporterCode ?? '',
+    brandKey: company.brandKey ?? '', brandName: company.brandName ?? '',
+  });
+  const preset = form.brandKey ? BRAND_PRESETS[form.brandKey as keyof typeof BRAND_PRESETS] : null;
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<WriteError | null>(null);
+  const [refreshed, setRefreshed] = useState(false);
+  const formId = useId();
+  const valid = form.companyName.trim() !== '' && form.workspaceName.trim() !== '';
+  async function submit() {
+    if (busy || !valid) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await api.updateCompany(company.companyId, {
+        companyName: form.companyName.trim(), workspaceName: form.workspaceName.trim(), timezone: form.timezone,
+        reporterCode: form.reporterCode.trim() || null,
+        brandKey: preset ? preset.key : null, brandName: form.brandName.trim() || null, version: company.version,
+      });
+      onDone(r.item, r.auditEventId !== null);
+    } catch (e) {
+      setBusy(false);
+      setRefreshed(false);
+      setError(writeError(e, 'Perusahaan'));
+    }
+  }
+  async function reload() {
+    setBusy(true);
+    try {
+      onRefreshed(await api.listCompanies());
+      setError(null);
+      setRefreshed(true);
+    } catch (e) {
+      setError(writeError(e, 'Daftar perusahaan'));
+    }
+    setBusy(false);
+  }
+  return (
+    <Dialog open onClose={busy ? () => undefined : onClose} title={`Edit ${company.companyName}`} initialFocus="input"
+      footer={(
+        <>
+          <Button onClick={onClose} disabled={busy}>Batal</Button>
+          <Button type="submit" form={formId} variant="primary" disabled={busy || !valid} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan perubahan'}</Button>
+        </>
+      )}>
+      {error && <WriteAlert error={error} onReload={() => { void reload(); }} />}
+      {refreshed && (
+        <p className="banner spaced-bottom" role="status">
+          Data terbaru dimuat. Isian Anda tetap; periksa lalu simpan lagi.
+        </p>
+      )}
+      <form id={formId} className="formgrid" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+        <TextField label="Nama perusahaan" required maxLength={200} value={form.companyName} disabled={busy}
+          error={error?.field === 'companyName' ? 'Isi nama perusahaan (maks. 200 karakter).' : undefined}
+          onChange={(e) => setForm({ ...form, companyName: e.target.value })} />
+        <TextField label="Nama workspace" required maxLength={200} value={form.workspaceName} disabled={busy}
+          hint="Tampil di pemilih workspace."
+          error={error?.field === 'workspaceName' ? 'Isi nama workspace (maks. 200 karakter).' : undefined}
+          onChange={(e) => setForm({ ...form, workspaceName: e.target.value })} />
+        <TextField label="Kode workspace (terkunci)" value={company.workspaceCode} readOnly
+          hint={`Terkunci: kode ini dipakai pada nomor tiket yang sudah terbit (mis. ${company.workspaceCode}-1), jadi tidak dapat diubah.`} />
+        <SelectField label="Zona waktu" value={form.timezone} disabled={busy}
+          onChange={(e) => setForm({ ...form, timezone: e.target.value as Timezone })}>
+          {Object.entries(TZ_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </SelectField>
+        <TextField label="Kode pelapor" maxLength={40} value={form.reporterCode} disabled={busy}
+          hint="Opsional; isi setelah kode terverifikasi."
+          error={error?.field === 'reporterCode' ? 'Periksa kode pelapor.' : undefined}
+          onChange={(e) => setForm({ ...form, reporterCode: e.target.value })} />
+        <SelectField label="Branding" value={form.brandKey} disabled={busy}
+          hint="Logo dan warna aplikasi saat workspace ini dibuka. Hanya preset bawaan aplikasi."
+          error={error?.field === 'brandKey' ? 'Pilih salah satu preset.' : undefined}
+          onChange={(e) => setForm({ ...form, brandKey: e.target.value })}>
+          <option value="">Netral (tanpa logo)</option>
+          {Object.values(BRAND_PRESETS).map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </SelectField>
+        <TextField label="Nama tampilan" maxLength={60} value={form.brandName} disabled={busy}
+          hint="Opsional; tampil di bawah logo dan judul tab. Kosong = nama perusahaan."
+          error={error?.field === 'brandName' ? 'Maks. 60 karakter.' : undefined}
+          onChange={(e) => setForm({ ...form, brandName: e.target.value })} />
+        <div className="full brand-preview" data-testid="brand-preview" aria-label="Pratinjau branding">
+          {preset
+            ? <img className="brand-logo" src={preset.logo} alt={`Logo ${preset.logoAlt}`} />
+            : <span className="brand-mark">ITSM</span>}
+          <span>
+            <span className="brand-name">{form.brandName.trim() || form.companyName.trim() || company.companyName}</span>
+            <span className="tiny muted"> · {preset ? preset.label : 'Netral'}</span>
+          </span>
+        </div>
+        <p className="full tiny muted">Hanya profil yang berubah. Tiket, nomor tiket, laporan dan histori tidak disentuh; perubahan tercatat di audit.</p>
+      </form>
+    </Dialog>
   );
 }
 

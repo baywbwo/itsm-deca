@@ -825,6 +825,130 @@ async fn companies_are_superadmin_only_and_start_without_members(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn company_profile_edit_is_superadmin_versioned_and_keeps_tickets(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let db: String = ok(
+        sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(&pool)
+            .await,
+        "db name",
+    );
+    ok(seed::seed_uat_tickets(&pool, &db).await, "seed tickets");
+    // A workspace admin grant is not platform administration.
+    grant(&pool, f.a, f.lead, "admin.settings", f.admin).await;
+    let tickets = |pool: PgPool, ws: Uuid| async move {
+        let rows: Vec<(Uuid, i64)> = ok(
+            sqlx::query_as("SELECT id, number FROM tickets WHERE workspace_id = $1 ORDER BY id")
+                .bind(ws)
+                .fetch_all(&pool)
+                .await,
+            "tickets",
+        );
+        rows
+    };
+    let before = tickets(pool.clone(), f.a).await;
+    assert!(!before.is_empty(), "seed has DUMA tickets");
+    let t = tok(&pool, f.admin).await;
+    let list = get(&pool, "/api/v1/companies", &t).await;
+    assert_eq!(list.status, StatusCode::OK, "{}", list.json);
+    let duma = list.json["items"]
+        .as_array()
+        .and_then(|a| a.iter().find(|c| c["workspaceCode"] == "DUMA"))
+        .cloned()
+        .unwrap_or_default();
+    let company = s(&duma["companyId"]);
+    let uri = format!("/api/v1/companies/{company}/profile");
+    let edit = |v: &Value| {
+        json!({"workspaceName": "Ruang Alfa Baru (dummy)", "companyName": "PT Alfa Baru (dummy)",
+               "timezone": duma["timezone"], "reporterCode": duma["reporterCode"],
+               "brandKey": duma["brandKey"], "brandName": duma["brandName"], "version": v})
+    };
+
+    for (who, uid) in [
+        ("cs", f.cs),
+        ("lead admin.settings", f.lead),
+        ("bravo", f.bravo),
+    ] {
+        let other = tok(&pool, uid).await;
+        let r = write(&pool, "PATCH", &uri, &other, edit(&duma["version"])).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{who}: {}", r.json);
+    }
+    let mut with_code = edit(&duma["version"]);
+    with_code["code"] = json!("ZZZ");
+    let r = write(&pool, "PATCH", &uri, &t, with_code).await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "code is not editable: {}",
+        r.json
+    );
+    let r = write(&pool, "PATCH", &uri, &t, edit(&json!(999))).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    let unknown = format!("/api/v1/companies/{}/profile", Uuid::new_v4());
+    let r = write(&pool, "PATCH", &unknown, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.json);
+    let mut blank = edit(&duma["version"]);
+    blank["companyName"] = json!("  ");
+    let r = write(&pool, "PATCH", &uri, &t, blank).await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.json);
+    assert_eq!(
+        audit_count(&pool, f.a, "company.update").await,
+        0,
+        "nothing written yet"
+    );
+
+    let r = write(&pool, "PATCH", &uri, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    audit_exists(&pool, &r.json["auditEventId"], "company.update", f.admin).await;
+    assert_eq!(r.json["item"]["workspaceName"], "Ruang Alfa Baru (dummy)");
+    assert_eq!(r.json["item"]["companyName"], "PT Alfa Baru (dummy)");
+    assert_eq!(r.json["item"]["workspaceCode"], "DUMA", "code unchanged");
+    assert_eq!(r.json["item"]["companyCode"], duma["companyCode"]);
+    let v2 = r.json["item"]["version"].clone();
+    assert_eq!(v2.as_i64(), duma["version"].as_i64().map(|v| v + 1));
+    let changed: Value = ok(
+        sqlx::query_scalar(
+            "SELECT safe_change->'changed' FROM audit_events WHERE action = 'company.update'",
+        )
+        .fetch_one(&pool)
+        .await,
+        "audit payload",
+    );
+    assert_eq!(changed, json!(["workspaceName", "companyName"]));
+
+    // The old version is now stale; an unchanged save writes nothing.
+    let r = write(&pool, "PATCH", &uri, &t, edit(&duma["version"])).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    let r = write(&pool, "PATCH", &uri, &t, edit(&v2)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["auditEventId"], Value::Null);
+    assert_eq!(r.json["item"]["version"], v2);
+    assert_eq!(audit_count(&pool, f.a, "company.update").await, 1);
+
+    // Reload: the switcher list and the members' own settings show the new name.
+    let ws = get(&pool, "/api/v1/workspaces", &t).await;
+    assert!(
+        ws.json.to_string().contains("Ruang Alfa Baru (dummy)"),
+        "{}",
+        ws.json
+    );
+    let cs = tok(&pool, f.cs).await;
+    let r = get(&pool, &ws_uri(f.a, "settings"), &cs).await;
+    assert_eq!(r.json["settings"]["companyName"], "PT Alfa Baru (dummy)");
+    assert_eq!(
+        tickets(pool.clone(), f.a).await,
+        before,
+        "ticket ids and numbers intact"
+    );
+    let r = get(&pool, &ws_uri(f.a, "tickets"), &cs).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert!(
+        r.json.to_string().contains("\"DUMA-"),
+        "display numbers keep the code"
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
 async fn connection_lifecycle_is_save_test_activate(pool: PgPool) {
     let f = fixture(&pool).await;
     grant(&pool, f.a, f.lead, "integration.manage", f.admin).await;
@@ -1018,4 +1142,251 @@ async fn migration_0009_rolls_back_and_promotes_only_dummy_connections(pool: PgP
     let t = tok(&pool, f.admin).await;
     let r = get(&pool, &ws_uri(f.a, "integrations"), &t).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+}
+
+/// D15: per-company branding is a bundled preset (or none) edited with the company profile.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn company_branding_is_a_preset_scoped_per_company_and_versioned(pool: PgPool) {
+    let f = fixture(&pool).await;
+    grant(&pool, f.a, f.lead, "admin.settings", f.admin).await;
+    let t = tok(&pool, f.admin).await;
+    let list = get(&pool, "/api/v1/companies", &t).await;
+    let find = |code: &str| {
+        list.json["items"]
+            .as_array()
+            .and_then(|a| a.iter().find(|c| c["workspaceCode"] == code))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (duma, dumb) = (find("DUMA"), find("DUMB"));
+    assert_eq!(
+        duma["brandKey"],
+        Value::Null,
+        "unconfigured until an admin picks a preset"
+    );
+    assert_eq!(duma["brandName"], Value::Null);
+    let body = |c: &Value, key: Value, name: Value, v: &Value| {
+        json!({"workspaceName": c["workspaceName"], "companyName": c["companyName"],
+               "timezone": c["timezone"], "reporterCode": c["reporterCode"],
+               "brandKey": key, "brandName": name, "version": v})
+    };
+    let uri = |c: &Value| format!("/api/v1/companies/{}/profile", s(&c["companyId"]));
+    let none = Value::Null;
+
+    // Only bundled presets: never a URL, a path or an unknown key.
+    for bad in [
+        "https://example.com/logo.png",
+        "../logo",
+        "DECA",
+        "qash",
+        "",
+    ] {
+        let b = body(&dumb, json!(bad), none.clone(), &dumb["version"]);
+        let r = write(&pool, "PATCH", &uri(&dumb), &t, b).await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{bad}: {}",
+            r.json
+        );
+        assert_eq!(r.json["error"]["field"], "brandKey", "{bad}");
+    }
+    let long = json!("x".repeat(61));
+    let r = write(
+        &pool,
+        "PATCH",
+        &uri(&dumb),
+        &t,
+        body(&dumb, json!("ajr"), long, &dumb["version"]),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{}", r.json);
+    // Omitting a branding field is rejected, never read as "clear".
+    let mut partial = body(&dumb, json!("ajr"), none.clone(), &dumb["version"]);
+    if let Some(o) = partial.as_object_mut() {
+        o.remove("brandKey");
+    }
+    let r = write(&pool, "PATCH", &uri(&dumb), &t, partial).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.json);
+    // Not editable through workspace settings (even with admin.settings), nor by CS, Lead or Bravo.
+    let lead = tok(&pool, f.lead).await;
+    let mut ws_body = body(&duma, json!("ajr"), none.clone(), &duma["version"]);
+    if let Some(o) = ws_body.as_object_mut() {
+        o.remove("brandName");
+    }
+    let r = write(&pool, "PATCH", &ws_uri(f.a, "settings"), &lead, ws_body).await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "brandKey is no settings field: {}",
+        r.json
+    );
+    for uid in [f.cs, f.lead, f.bravo] {
+        let other = tok(&pool, uid).await;
+        let b = body(&duma, json!("ajr"), none.clone(), &duma["version"]);
+        let r = write(&pool, "PATCH", &uri(&duma), &other, b).await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{}", r.json);
+    }
+    let r = write(
+        &pool,
+        "PATCH",
+        &uri(&duma),
+        &t,
+        body(&duma, json!("deca"), none.clone(), &json!(999)),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    assert_eq!(audit_count(&pool, f.a, "company.update").await, 0);
+    assert_eq!(audit_count(&pool, f.b, "company.update").await, 0);
+
+    // Two companies, two presets.
+    let r = write(
+        &pool,
+        "PATCH",
+        &uri(&duma),
+        &t,
+        body(&duma, json!("deca"), none.clone(), &duma["version"]),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    audit_exists(&pool, &r.json["auditEventId"], "company.update", f.admin).await;
+    assert_eq!(r.json["item"]["brandKey"], "deca");
+    let b = body(
+        &dumb,
+        json!("ajr"),
+        json!("  Bravo uji  "),
+        &dumb["version"],
+    );
+    let r = write(&pool, "PATCH", &uri(&dumb), &t, b).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["brandName"], "Bravo uji", "trimmed");
+    let v = r.json["item"]["version"].clone();
+    let changed: Value = ok(
+        sqlx::query_scalar(
+            "SELECT safe_change->'changed' FROM audit_events \
+             WHERE action = 'company.update' AND workspace_id = $1",
+        )
+        .bind(f.b)
+        .fetch_one(&pool)
+        .await,
+        "audit change",
+    );
+    assert_eq!(
+        changed,
+        json!(["brandKey", "brandName"]),
+        "names only, no values"
+    );
+    let r = write(
+        &pool,
+        "PATCH",
+        &uri(&dumb),
+        &t,
+        body(&dumb, json!("deca"), none.clone(), &dumb["version"]),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::CONFLICT,
+        "a stale version keeps AJR: {}",
+        r.json
+    );
+
+    // The switcher list carries each workspace's own branding; members see only their own.
+    let all = get(&pool, "/api/v1/workspaces", &t).await;
+    let by_code = |code: &str| {
+        all.json["items"]
+            .as_array()
+            .and_then(|a| a.iter().find(|w| w["code"] == code))
+            .map(|w| (w["brandKey"].clone(), w["brandName"].clone()))
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        by_code("DUMA"),
+        (json!("deca"), duma["companyName"].clone()),
+        "name falls back to the company"
+    );
+    assert_eq!(by_code("DUMB"), (json!("ajr"), json!("Bravo uji")));
+    let mine = get(&pool, "/api/v1/workspaces", &tok(&pool, f.cs).await).await;
+    let items = mine.json["items"].as_array().cloned().unwrap_or_default();
+    assert_eq!(items.len(), 1, "{}", mine.json);
+    assert_eq!(
+        (items[0]["code"].clone(), items[0]["brandKey"].clone()),
+        (json!("DUMA"), json!("deca"))
+    );
+    let none_of_mine = get(&pool, "/api/v1/workspaces", &tok(&pool, f.bravo).await).await;
+    assert_eq!(
+        none_of_mine.json["items"],
+        json!([]),
+        "no membership, no branding of anyone"
+    );
+
+    // A workspace settings save keeps the branding; clearing it is an explicit null.
+    let cur = get(&pool, &ws_uri(f.b, "settings"), &t).await.json["settings"].clone();
+    let b = json!({"workspaceName": "Ruang Bravo (dummy)", "companyName": cur["companyName"],
+                   "timezone": cur["timezone"], "reporterCode": cur["reporterCode"], "version": v});
+    let r = write(&pool, "PATCH", &ws_uri(f.b, "settings"), &t, b).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    let saved = r.json["settings"].clone();
+    assert_eq!(
+        (saved["brandKey"].clone(), saved["brandName"].clone()),
+        (json!("ajr"), json!("Bravo uji"))
+    );
+    let r = write(
+        &pool,
+        "PATCH",
+        &uri(&dumb),
+        &t,
+        body(&saved, none.clone(), none.clone(), &saved["version"]),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["brandKey"], Value::Null);
+    let w = get(&pool, &format!("/api/v1/workspaces/{}", f.b), &t).await;
+    assert_eq!(
+        (w.json["brandKey"].clone(), w.json["brandName"].clone()),
+        (none, dumb["companyName"].clone())
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0013_rolls_back_and_reapplies(pool: PgPool) {
+    let f = fixture(&pool).await;
+    ok(
+        sqlx::query("UPDATE companies SET brand_key = 'ajr', brand_name = 'X'")
+            .execute(&pool)
+            .await,
+        "brand",
+    );
+    let count = "SELECT count(*) FROM companies";
+    let before: i64 = ok(sqlx::query_scalar(count).fetch_one(&pool).await, "before");
+    ok(db::MIGRATOR.undo(&pool, 12).await, "undo to 0012");
+    let cols: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.columns \
+             WHERE table_name = 'companies' AND column_name IN ('brand_key', 'brand_name')",
+        )
+        .fetch_one(&pool)
+        .await,
+        "columns",
+    );
+    assert_eq!(cols, 0);
+    let after: i64 = ok(sqlx::query_scalar(count).fetch_one(&pool).await, "after");
+    assert_eq!(after, before, "company rows kept");
+    ok(db::MIGRATOR.run(&pool).await, "reapply");
+    let t = tok(&pool, f.admin).await;
+    let w = get(&pool, "/api/v1/workspaces", &t).await;
+    assert_eq!(w.status, StatusCode::OK, "{}", w.json);
+    let items = w.json["items"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !items.is_empty() && items.iter().all(|x| x["brandKey"].is_null()),
+        "{}",
+        w.json
+    );
+    let bad = sqlx::query("UPDATE companies SET brand_key = 'https://x'")
+        .execute(&pool)
+        .await;
+    assert!(
+        bad.is_err(),
+        "the CHECK keeps the preset allowlist in the database too"
+    );
 }

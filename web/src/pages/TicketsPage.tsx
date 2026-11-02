@@ -357,7 +357,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
   ];
 
   return (
-    <div className="toolbar ticket-toolbar" role="search" aria-label="Cari dan filter tiket">
+    <div className="toolbar filterbar ticket-toolbar" role="search" aria-label="Cari dan filter tiket">
       <div className="toolbar-row">
         <label className="toolbar-search">
           <span className="sr-only">Cari tiket</span>

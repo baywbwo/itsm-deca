@@ -867,6 +867,8 @@
           "timezone",
           "companyId",
           "version",
+          "brandKey",
+          "brandName",
           "myRole"
         ],
         "properties": {
@@ -890,6 +892,13 @@
           },
           "version": {
             "type": "integer"
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": "string",
+            "description": "Name shown next to the logo: the branding display name, else the company name."
           },
           "myRole": {
             "type": [
@@ -1286,7 +1295,7 @@
       },
       "ReportRun": {
         "type": "object",
-        "description": "Operational report run (D10: synchronous CSV export). Official BI export is held. The artifact reference is not exposed.",
+        "description": "Operational report run (D10: synchronous CSV/XLSX export). Official BI export is held. The artifact reference is not exposed.",
         "required": [
           "id",
           "reportType",
@@ -1306,7 +1315,8 @@
           "expiresAt",
           "expired",
           "failureCode",
-          "fileName"
+          "fileName",
+          "format"
         ],
         "properties": {
           "id": {
@@ -1359,7 +1369,7 @@
           },
           "downloadable": {
             "type": "boolean",
-            "description": "True while the stored CSV can be downloaded (D10 artifact, not expired)."
+            "description": "True while the stored artifact (CSV or XLSX) can be downloaded (not expired)."
           },
           "requestedBy": {
             "$ref": "#/components/schemas/PersonRef"
@@ -1410,6 +1420,14 @@
               "string",
               "null"
             ]
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "xlsx"
+            ],
+            "description": "Artifact format (D13). Runs before D13 are csv."
           }
         }
       },
@@ -4158,6 +4176,8 @@
           "companyCode",
           "companyName",
           "reporterCode",
+          "brandKey",
+          "brandName",
           "active",
           "version",
           "memberCount"
@@ -4191,6 +4211,16 @@
               "string",
               "null"
             ]
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name override; null = the company name."
           },
           "active": {
             "type": "boolean"
@@ -4264,6 +4294,55 @@
           }
         },
         "additionalProperties": false
+      },
+      "CompanyProfilePatchRequest": {
+        "type": "object",
+        "required": [
+          "workspaceName",
+          "companyName",
+          "timezone",
+          "brandKey",
+          "brandName",
+          "version"
+        ],
+        "properties": {
+          "workspaceName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "companyName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "timezone": {
+            "$ref": "#/components/schemas/Timezone"
+          },
+          "reporterCode": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 40
+          },
+          "brandKey": {
+            "$ref": "#/components/schemas/BrandKey"
+          },
+          "brandName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 60
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Company administration (UAT Superadmin): profile plus branding. brandKey and brandName are required and may be null, so omitting them never clears the branding. Codes are immutable."
       },
       "SettingsResult": {
         "type": "object",
@@ -4359,6 +4438,26 @@
           },
           "auditEventId": {
             "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CompanyUpdateResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/WorkspaceSettings"
+          },
+          "auditEventId": {
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           }
         },
@@ -5344,8 +5443,10 @@
           "format": {
             "type": "string",
             "enum": [
-              "csv"
-            ]
+              "csv",
+              "xlsx"
+            ],
+            "description": "Default csv. xlsx = real Office Open XML workbook (sheet Data = CSV columns with typed date/number cells, sheet Ringkasan = header, filters, totals). User strings are always string cells, never formulas. The format is part of the idempotency fingerprint."
           }
         }
       },
@@ -5436,6 +5537,18 @@
             "maxLength": 43
           }
         }
+      },
+      "BrandKey": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "enum": [
+          "deca",
+          "ajr",
+          null
+        ],
+        "description": "Branding preset bundled with the web app (logo + palette). null = not configured: neutral look. No URL or upload is accepted."
       }
     },
     "responses": {
@@ -8358,6 +8471,66 @@
         }
       }
     },
+    "/api/v1/companies/{company_id}/profile": {
+      "patch": {
+        "operationId": "updateCompany",
+        "summary": "Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompanyProfilePatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyUpdateResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
     "/api/v1/workspaces/{workspace_id}/catalogs/{kind}": {
       "get": {
         "operationId": "listCatalogEntries",
@@ -9347,7 +9520,7 @@
         ],
         "responses": {
           "200": {
-            "description": "CSV bytes",
+            "description": "Artifact bytes; media type follows the run format",
             "headers": {
               "X-Content-SHA256": {
                 "schema": {
@@ -9358,6 +9531,12 @@
             },
             "content": {
               "text/csv": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": {
                 "schema": {
                   "type": "string",
                   "format": "binary"

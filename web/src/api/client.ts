@@ -16,6 +16,7 @@ import {
   isSettingsResult,
   isCompanyList,
   isCompanyResult,
+  isCompanyUpdateResult,
   isCatalogEditor,
   isCatalogEntryResult,
   isIntegrationList,
@@ -76,11 +77,13 @@ import type {
   MemberResult,
   SettingsBody,
   SettingsPatchRequest,
+  CompanyProfilePatchRequest,
   SettingsResult,
   CompanyList,
   CompanyCreateRequest,
   CompanyActivationRequest,
   CompanyResult,
+  CompanyUpdateResult,
   CatalogKind,
   CatalogEditor,
   CatalogCreateRequest,
@@ -454,6 +457,9 @@ export function createApi(transport: Transport) {
       call({ method: 'POST', path: '/api/v1/companies', headers: csrf(), body }, isCompanyResult, 201),
     setCompanyActive: (companyId: string, body: CompanyActivationRequest): Promise<CompanyResult> =>
       call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}`, headers: csrf(), body }, isCompanyResult),
+    /** Edits names/time zone/reporter code; the code is immutable. `auditEventId` is null when nothing changed. */
+    updateCompany: (companyId: string, body: CompanyProfilePatchRequest): Promise<CompanyUpdateResult> =>
+      call({ method: 'PATCH', path: `/api/v1/companies/${encodeURIComponent(companyId)}/profile`, headers: csrf(), body }, isCompanyUpdateResult),
     listCatalogEntries: (id: string, kind: CatalogKind, signal?: AbortSignal): Promise<CatalogEditor> =>
       get(`${ws(id)}/catalogs/${kind}`, isCatalogEditor, signal),
     createCatalogEntry: (id: string, kind: CatalogKind, body: CatalogCreateRequest): Promise<CatalogEntryResult> =>

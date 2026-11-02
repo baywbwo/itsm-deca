@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode 
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
-  AttachmentMeta,
   ConversationPanel,
   Note,
   AssignmentEvent,
@@ -32,12 +31,13 @@ import { Dialog } from '../components/Dialog';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { statusTone } from './DashboardPage';
 
-type Tab = 'summary' | 'activity' | 'work' | 'attachments' | 'history';
+// D13: attachments are out of scope (owner decision); the Lampiran tab is not offered. The backend
+// endpoints, data and fail-closed scanner controls stay as they are.
+type Tab = 'summary' | 'activity' | 'work' | 'history';
 const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'summary', label: 'Ringkasan' },
   { id: 'activity', label: 'Aktivitas' },
   { id: 'work', label: 'Pekerjaan Jira' },
-  { id: 'attachments', label: 'Lampiran' },
   { id: 'history', label: 'Histori' },
 ];
 
@@ -119,7 +119,6 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
             {tab === 'summary' && <Conversations api={api} workspace={workspace} ticketId={t.id} />}
             {tab === 'activity' && <FollowUp api={api} workspace={workspace} detail={detail} />}
             {tab === 'work' && <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={() => setAttempt((n) => n + 1)} />}
-            {tab === 'attachments' && <Attachments api={api} workspace={workspace} detail={detail} onSaved={applied} />}
             {tab === 'history' && <History api={api} workspace={workspace} detail={detail} />}
           </div>
         </>
@@ -734,128 +733,6 @@ function Conversations({ api, workspace, ticketId }: { api: Api; workspace: Work
           </>
         )}
     </section>
-  );
-}
-
-const SCAN_LABEL: Record<string, string> = {
-  pending: 'Menunggu pemindaian',
-  clean: 'Bersih',
-  infected: 'Terinfeksi — diblokir',
-  error: 'Gagal dipindai — diblokir',
-};
-
-const ACCEPT = 'application/pdf,image/png,image/jpeg,.pdf,.png,.jpg,.jpeg';
-const MAX_UPLOAD_MB = 25;
-
-function uploadError(e: unknown): SaveError {
-  if (e instanceof ApiError) {
-    const rid = e.requestId ? ` (ID permintaan ${e.requestId})` : '';
-    const body = (s: string) => ({ title: 'Lampiran tidak disimpan', body: `${s}${rid}`, conflict: false });
-    switch (e.code) {
-      case 'attachment_too_large': return body(`Ukuran berkas melebihi ${MAX_UPLOAD_MB} MB.`);
-      case 'attachment_type_refused': return body('Hanya PDF, PNG atau JPEG yang diterima (isi berkas diperiksa, bukan hanya namanya).');
-      case 'attachment_infected': return body('Pemindai menandai berkas berbahaya. Berkas dihapus dan tidak dilampirkan.');
-      case 'scan_failed': return body('Pemindaian gagal sehingga berkas tidak dilampirkan. Coba lagi nanti.');
-      case 'scanner_unavailable':
-      case 'dependency_unavailable':
-        return body('Pemindai berkas tidak tersedia, jadi sistem menolak secara aman: berkas tidak disimpan dan tidak dilampirkan.');
-      default: break;
-    }
-  }
-  return saveError(e, 'Lampiran');
-}
-
-/** Lampiran: upload goes quarantine → scan → bind on the server; only clean, bound files are listed and downloadable. */
-function Attachments({ api, workspace, detail, onSaved }: {
-  api: Api;
-  workspace: Workspace;
-  detail: TicketDetail;
-  onSaved: (d: TicketDetail) => void;
-}) {
-  const id = useId();
-  const t = detail.ticket;
-  const [file, setFile] = useState<File | null>(null);
-  const [visibility, setVisibility] = useState<'internal' | 'public'>('internal');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<SaveError | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const input = useRef<HTMLInputElement | null>(null);
-  const errRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => { if (error) errRef.current?.focus(); }, [error]);
-
-  async function upload() {
-    if (busy) return;
-    if (!file) { setError({ title: 'Pilih berkas', body: 'Pilih satu berkas PDF, PNG atau JPEG.', conflict: false }); return; }
-    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) { setError(uploadError(new ApiError(413, 'attachment_too_large', ''))); return; }
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const res = await api.uploadTicketAttachment(workspace.id, t.id, file, visibility);
-      setBusy(false);
-      setFile(null);
-      if (input.current) input.current.value = '';
-      setNotice('Berkas dipindai bersih dan dilampirkan. Tercatat di audit.');
-      onSaved(res.detail);
-    } catch (e) {
-      setBusy(false);
-      setError(uploadError(e));
-    }
-  }
-
-  return (
-    <div>
-      <p className="tiny muted">
-        Berkas diunggah ke karantina, dipindai malware, lalu baru dilampirkan bila bersih. Bila pemindai tidak tersedia atau
-        gagal, berkas ditolak (fail-closed). Unduhan diperiksa ulang izin, status pindai dan integritasnya.
-      </p>
-      {notice && <p className="notice" role="status">{notice}</p>}
-      {detail.can.uploadAttachment ? (
-        <form className="formgrid card" aria-label="Unggah lampiran" onSubmit={(e) => { e.preventDefault(); void upload(); }}>
-          {error && <div className="full state-error" role="alert" tabIndex={-1} ref={errRef}><h3>{error.title}</h3><p>{error.body}</p></div>}
-          <div className="field">
-            <label htmlFor={`${id}-file`}>Berkas (PDF, PNG, JPEG; maks {MAX_UPLOAD_MB} MB) *</label>
-            <input id={`${id}-file`} ref={input} type="file" accept={ACCEPT} disabled={busy} className="field-control"
-              onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(null); setNotice(null); }} />
-          </div>
-          <div className="field">
-            <label htmlFor={`${id}-vis`}>Visibilitas</label>
-            <select id={`${id}-vis`} className="field-control" value={visibility} disabled={busy}
-              onChange={(e) => setVisibility(e.target.value === 'public' ? 'public' : 'internal')}>
-              <option value="internal">Internal</option>
-              <option value="public">Publik</option>
-            </select>
-          </div>
-          <div className="full row">
-            <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Memindai dan mengunggah…' : 'Unggah lampiran'}</Button>
-          </div>
-        </form>
-      ) : (
-        <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: lampiran baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat mengunggah lampiran.'}</p>
-      )}
-      {detail.attachments.length === 0
-        ? <p className="muted">Belum ada lampiran yang dapat Anda lihat.</p>
-        : (
-          <ul className="plain" aria-label="Daftar lampiran">
-            {detail.attachments.map((a) => <AttachmentRow key={a.id} a={a} href={api.attachmentContentUrl(workspace.id, t.id, a.id)} tz={workspace.timezone} />)}
-          </ul>
-        )}
-    </div>
-  );
-}
-
-function AttachmentRow({ a, href, tz }: { a: AttachmentMeta; href: string; tz: string }) {
-  return (
-    <li className="activity row between">
-      <span>
-        <strong>{a.fileName}</strong>
-        <span className="tiny muted"> · {num(Math.ceil(a.sizeBytes / 1024))} KB · {a.visibility === 'internal' ? 'Internal' : 'Publik'} · {instantLabel(a.createdAt, tz)}</span>
-      </span>
-      <span className="row">
-        <Badge tone={a.scanStatus === 'clean' ? 'ok' : a.scanStatus === 'pending' ? 'waiting' : 'error'}>{SCAN_LABEL[a.scanStatus] ?? a.scanStatus}</Badge>
-        {a.scanStatus === 'clean' && <a className="btn" href={href} download={a.fileName} aria-label={`Unduh ${a.fileName}`}>Unduh</a>}
-      </span>
-    </li>
   );
 }
 

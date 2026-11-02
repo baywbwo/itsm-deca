@@ -25,5 +25,7 @@ sha2 = "0.10"
 subtle = "2.6"
 base64 = "0.22"
 http-body-util = "0.1"
+rust_xlsxwriter = { version = "0.102", default-features = false }
 
 [dev-dependencies]
+calamine = { version = "0.30", default-features = false, features = ["dates"] }

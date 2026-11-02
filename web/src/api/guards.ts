@@ -25,7 +25,7 @@ import type {
   SettingsBody,
   SettingsResult,
   CompanyList,
-  CompanyResult,
+  CompanyResult, CompanyUpdateResult,
   CatalogEditor,
   CatalogEntry,
   CatalogEntryResult,
@@ -45,6 +45,7 @@ import type {
   ReportRun,
   ReportRunList,
   ReportExportResult,
+  BrandKey,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -92,10 +93,14 @@ export const isCsrfIssued = (v: unknown): v is { csrfToken: string } =>
 export const isSessionIssued = (v: unknown): v is SessionIssued =>
   isSession(v) && isStr((v as Obj).csrfToken) && ((v as Obj).csrfToken as string).length > 0;
 
+/** Only the bundled presets (or none): never a URL or a path. */
+export const isBrandKey = (v: unknown): v is BrandKey => v === null || v === 'deca' || v === 'ajr';
+
 export function isWorkspace(v: unknown): v is Workspace {
   return (
     isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.name) && isStr(v.timezone) &&
-    isStr(v.companyId) && typeof v.version === 'number' && isRole(v.myRole)
+    isStr(v.companyId) && typeof v.version === 'number' && isRole(v.myRole) &&
+    isBrandKey(v.brandKey) && isStr(v.brandName)
   );
 }
 
@@ -328,7 +333,8 @@ const TIMEZONES = ['Asia/Jakarta', 'Asia/Makassar', 'Asia/Jayapura'];
 const isWorkspaceSettings = (v: unknown): v is WorkspaceSettings =>
   isObj(v) && isStr(v.workspaceId) && isStr(v.workspaceCode) && isStr(v.workspaceName) && isStr(v.timezone) &&
   isStr(v.companyId) && isStr(v.companyCode) && isStr(v.companyName) && isStrOrNull(v.reporterCode) &&
-  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount);
+  typeof v.active === 'boolean' && isNum(v.version) && isNum(v.memberCount) &&
+  isBrandKey(v.brandKey) && isStrOrNull(v.brandName);
 export const isSettingsBody = (v: unknown): v is SettingsBody =>
   isObj(v) && isWorkspaceSettings(v.settings) && typeof v.canEdit === 'boolean' &&
   isArr(v.timezones, (t) => isStr(t) && TIMEZONES.includes(t));
@@ -337,6 +343,8 @@ export const isSettingsResult = (v: unknown): v is SettingsResult =>
 export const isCompanyList = (v: unknown): v is CompanyList => isObj(v) && isArr(v.items, isWorkspaceSettings);
 export const isCompanyResult = (v: unknown): v is CompanyResult =>
   isObj(v) && isWorkspaceSettings(v.item) && isStr(v.auditEventId);
+export const isCompanyUpdateResult = (v: unknown): v is CompanyUpdateResult =>
+  isObj(v) && isWorkspaceSettings(v.item) && isStrOrNull(v.auditEventId);
 const CATALOG_KINDS = ['priorities', 'categories', 'products', 'receiving-units', 'regions', 'intake-channels'];
 const isCatalogEntry = (v: unknown): v is CatalogEntry =>
   isObj(v) && isStr(v.id) && isStr(v.code) && isStr(v.label) && typeof v.active === 'boolean' &&
@@ -401,7 +409,8 @@ export function isReportRun(v: unknown): v is ReportRun {
     typeof v.hasArtifact === 'boolean' && typeof v.expired === 'boolean' &&
     isObj(v.requestedBy) && isStr(v.requestedBy.id) && isStr(v.requestedBy.label) &&
     isNumOrNull(v.rowCount) && isStrOrNull(v.artifactSha256) && isNumOrNull(v.artifactBytes) &&
-    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName)
+    isStrOrNull(v.expiresAt) && isStrOrNull(v.failureCode) && isStr(v.createdAt) && isStrOrNull(v.fileName) &&
+    (v.format === 'csv' || v.format === 'xlsx')
   );
 }
 

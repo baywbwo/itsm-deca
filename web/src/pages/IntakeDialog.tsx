@@ -461,7 +461,7 @@ function Receipt({ api, workspace, result, onClose, onAnother }: {
       </dl>
       <p className="spaced"><a href={href} onClick={onClose}>Lihat {t.displayNumber} di List tiket</a></p>
       <IntegrationPanel api={api} workspaceId={workspace.id} ticketId={t.id} timezone={workspace.timezone} initial={result.integrations} />
-      <p className="tiny muted spaced">Catatan tindak lanjut, percakapan, lampiran dan riwayat ada di detail tiket (buka dari List tiket).</p>
+      <p className="tiny muted spaced">Catatan tindak lanjut, percakapan dan riwayat ada di detail tiket (buka dari List tiket).</p>
     </Dialog>
   );
 }

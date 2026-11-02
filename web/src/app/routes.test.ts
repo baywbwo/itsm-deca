@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PAGES,
   allowedPages,
   dashboardQuery,
   drilldownHash,
@@ -20,12 +21,16 @@ describe('routes', () => {
     expect(parseHash('')).toEqual({ workspaceId: null, page: 'dashboard', query: '' });
     expect(parseHash('#/x/y')).toEqual({ workspaceId: null, page: 'dashboard', query: '' });
     expect(parseHash('#/w/abc/unknown')).toEqual({ workspaceId: 'abc', page: 'dashboard', query: '' });
+    // Old deep link to the removed Komponen page lands on the dashboard, never the showcase.
+    expect(parseHash('#/w/abc/components')).toEqual({ workspaceId: 'abc', page: 'dashboard', query: '' });
     expect(parseHash('#/x?w=1')).toEqual({ workspaceId: null, page: 'dashboard', query: '' });
   });
 
   it('derives navigation only from server permissions (default deny)', () => {
     expect(allowedPages([], false).map((p) => p.id)).toEqual([]);
-    expect(allowedPages([], true).map((p) => p.id)).toEqual(['components']);
+    // D13: the UAT-only component showcase is gone; UAT grants no extra page.
+    expect(allowedPages([], true).map((p) => p.id)).toEqual([]);
+    expect(PAGES.map((p) => p.id)).not.toContain('components');
     const cs = ['member.read', 'catalog.read', 'ticket.read', 'report.view'] as const;
     expect(allowedPages(cs, false).map((p) => p.id)).toEqual(['dashboard', 'tickets', 'reports', 'settings']);
     expect(allowedPages(['integration.recovery'], false).map((p) => p.id)).toEqual(['integrations']);

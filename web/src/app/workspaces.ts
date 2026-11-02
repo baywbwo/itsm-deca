@@ -7,5 +7,8 @@ import type { Workspace } from '../api/types';
  */
 export function freshest(scoped: Workspace, listed: Workspace | null | undefined): Workspace {
   if (!listed || listed.id !== scoped.id || listed.version <= scoped.version) return scoped;
-  return { ...scoped, name: listed.name, timezone: listed.timezone, version: listed.version };
+  return {
+    ...scoped, name: listed.name, timezone: listed.timezone, version: listed.version,
+    brandKey: listed.brandKey, brandName: listed.brandName,
+  };
 }

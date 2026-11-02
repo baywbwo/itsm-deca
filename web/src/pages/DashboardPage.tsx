@@ -25,6 +25,7 @@ import { Badge, type BadgeTone } from '../components/Badge';
 import { BarList, TrendChart } from '../components/Charts';
 import { Button } from '../components/Button';
 import { DataTable, type Column } from '../components/DataTable';
+import { Icon, type IconName } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
 
@@ -83,7 +84,7 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
         action={canReports
           ? <a className="btn" href={toHash({ workspaceId: workspace.id, page: 'reports' })}>Lihat laporan ↗</a>
           : undefined} />
-      <div className="toolbar row" role="group" aria-label="Periode dan filter dashboard">
+      <div className="toolbar row filterbar dash-filters" role="group" aria-label="Periode dan filter dashboard">
         <label className="period">
           Periode
           <select ref={periodRef} className="field-control" value={params.period}
@@ -129,7 +130,7 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
           setAttempt((n) => n + 1);
         }} />
       )}
-      {d && <DashboardBody d={d} uat={uat} filtered={filtered} />}
+      {d && <DashboardBody d={d} uat={uat} filtered={filtered} canReports={canReports} />}
     </>
   );
 }
@@ -184,7 +185,31 @@ export function statusTone(s: Pick<TicketStatus, 'code'>): BadgeTone {
   }
 }
 
-function DashboardBody({ d, uat, filtered }: { d: Dashboard; uat: boolean; filtered: boolean }) {
+/** Shortcuts to screens the user can already open here (D16); no new route or filter. */
+function QuickActions({ workspaceId, canReports }: { workspaceId: string; canReports: boolean }) {
+  const items: { label: string; icon: IconName; href: string }[] = [
+    { label: 'Daftar tiket', icon: 'tickets', href: toHash({ workspaceId, page: 'tickets' }) },
+    { label: 'Board status tiket', icon: 'board', href: toHash({ workspaceId, page: 'tickets', query: 'view=board' }) },
+    ...(canReports ? [{ label: 'Laporan operasional', icon: 'reports' as const, href: toHash({ workspaceId, page: 'reports' }) }] : []),
+  ];
+  return (
+    <nav aria-label="Aksi cepat">
+      <ul className="quick">
+        {items.map((it) => (
+          <li key={it.label}>
+            <a href={it.href}>
+              <span className="quick-icon"><Icon name={it.icon} /></span>
+              {it.label}
+              <span className="quick-go" aria-hidden="true">↗</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: boolean; filtered: boolean; canReports: boolean }) {
   const ws = d.workspaceId;
   const t = d.totals;
   const periodText = PERIOD_LABELS[d.period.key];
@@ -205,20 +230,21 @@ function DashboardBody({ d, uat, filtered }: { d: Dashboard; uat: boolean; filte
   return (
     <>
       <div className="kpis">
-        {kpis.map((k) => k.href ? (
-          <a className="kpi" key={k.label} href={k.href}>
+        {kpis.map((k, i) => k.href ? (
+          <a className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label} href={k.href}>
             <span className="muted">{k.label}</span>
             <strong>{num(k.value)}</strong>
             <small>{k.hint} <span aria-hidden="true">↗</span></small>
           </a>
         ) : (
-          <div className="kpi" key={k.label}>
+          <div className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label}>
             <span className="muted">{k.label}</span>
             <strong>{num(k.value)}</strong>
             <small>{k.hint} · tidak berlaku untuk filter PIC</small>
           </div>
         ))}
       </div>
+      <QuickActions workspaceId={ws} canReports={canReports} />
       {t.tickets === 0 ? (
         filtered ? (
           <EmptyState title="Tidak ada tiket yang cocok"

@@ -420,6 +420,12 @@ mod tests {
             && c.attachment_max_bytes == DEFAULT_ATTACHMENT_MAX_BYTES)
         );
 
+        // D13 compose default: an empty address = no scanner (uploads refused), not a start error.
+        let mut v = base();
+        v.push(("ITSM_CLAMD_ADDR", ""));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.clamd.is_none()));
+
         let mut v = base();
         v.push(("ITSM_ATTACHMENT_DIR", "/srv/itsm/att"));
         v.push(("ITSM_CLAMD_ADDR", "tcp://127.0.0.1:3310"));
