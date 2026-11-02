@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { isWorkspace } from '../api/guards';
 import type { Workspace } from '../api/types';
-import { BRAND_PRESETS, NEUTRAL, activeBrand, contrast, pageTitle } from './brand';
+import { BRAND_PRESETS, CANVAS, INK, MUTED, NEUTRAL, activeBrand, contrast, pageTitle } from './brand';
 
 const ws: Workspace = {
   id: 'a1e8dd4a-a301-42f1-ac2a-58db5c57811b', code: 'DUMA', name: 'Workspace A (dummy)', timezone: 'Asia/Jakarta',
@@ -30,12 +30,19 @@ describe('D15 company branding', () => {
   });
 
   it('keeps text and buttons readable in every theme (WCAG AA 4.5:1)', () => {
-    const ink = '#18261e';
     for (const t of [...Object.values(BRAND_PRESETS), NEUTRAL]) {
       expect(contrast('#ffffff', t.accent)).toBeGreaterThanOrEqual(4.5);
       expect(contrast('#ffffff', t.accentHover)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(ink, t.soft)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(INK, t.soft)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(t.accent, t.soft)).toBeGreaterThanOrEqual(4.5);
+      // D16: active nav item and the primary KPI card (white text, hint at 86% opacity → test plain white).
+      expect(contrast(t.navInk, t.navCurrent)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast('#ffffff', t.kpi)).toBeGreaterThanOrEqual(7);
+    }
+    for (const bg of ['#ffffff', CANVAS]) {
+      expect(contrast(INK, bg)).toBeGreaterThanOrEqual(7);
+      expect(contrast(MUTED, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast('#63726c', bg)).toBeGreaterThanOrEqual(4.5); // idle nav text
     }
   });
 
@@ -47,7 +54,14 @@ describe('D15 company branding', () => {
       expect(rule).toContain(`--accent: ${p.accent}`);
       expect(rule).toContain(`--accent-hover: ${p.accentHover}`);
       expect(rule).toContain(`--soft: ${p.soft}`);
+      expect(rule).toContain(`--nav-current: ${p.navCurrent}`);
+      expect(rule).toContain(`--nav-ink: ${p.navInk}`);
+      expect(rule).toContain(`--kpi: ${p.kpi}`);
     }
     expect(css).toContain(`--accent: ${NEUTRAL.accent}`);
+    for (const v of [`--nav-current: ${NEUTRAL.navCurrent}`, `--nav-ink: ${NEUTRAL.navInk}`, `--kpi: ${NEUTRAL.kpi}`,
+      `--ink: ${INK}`, `--muted: ${MUTED}`, `--canvas: ${CANVAS}`, '--nav-ink-idle: #63726c']) {
+      expect(css).toContain(v);
+    }
   });
 });

@@ -223,9 +223,20 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
               <Button className="mobile-only" iconOnly aria-label="Buka navigasi"
                 aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></Button>
               <BrandMark brand={brand} className="top-brand" />
-              <span className="breadcrumb">{listed ? `${listed.code} / ${current.label}` : current.label}</span>
+              <span className="breadcrumb">{listed ? <>{listed.code} / <b>{current.label}</b></> : <b>{current.label}</b>}</span>
+            </div>
+            <div className="top-right">
+              {/* Not on Tiket itself: that page has its own search box for the same filter. */}
+              {route.workspaceId && route.page !== 'tickets' && pages.some((p) => p.id === 'tickets') && (
+                <TicketSearch onSearch={(q) => navigate(toHash({
+                  workspaceId: route.workspaceId!, page: 'tickets', query: new URLSearchParams({ q }).toString(),
+                }))} />
+              )}
+              <span className="avatar top-avatar" role="img" aria-label={`Profil: ${session.user.displayName}`}
+                title={session.user.displayName}>{initials(session.user.displayName)}</span>
             </div>
           </div>
+          <div className="content">
           {meta.uat && (
             <div className="uat-banner" role="note" aria-label="Mode uji">
               <strong>{meta.uat.banner}</strong> · Data dummy · Tanpa SSO/koneksi produksi. Akses Superadmin bukan
@@ -236,7 +247,8 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">{brand.name ? `${brand.name} · ` : ''}ITSM · kandidat D15 (rilis develop) · data dummy UAT</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}ITSM · kandidat D16 (rilis develop) · data dummy UAT</div>
+          </div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
@@ -286,6 +298,23 @@ function navTargetLabel(hash: string, workspaces: Workspace[]): string {
   const to = parseHash(hash);
   const w = workspaces.find((x) => x.id === to.workspaceId);
   return w ? `${w.code} / ${pageDef(to.page).label}` : pageDef(to.page).label;
+}
+
+/** Header shortcut to the Tiket list search (the existing `q` filter); no new query or API. */
+function TicketSearch({ onSearch }: { onSearch: (q: string) => void }) {
+  return (
+    <form className="top-search" role="search" aria-label="Pencarian cepat tiket" onSubmit={(e) => {
+      e.preventDefault();
+      const input = e.currentTarget.elements.namedItem('q') as HTMLInputElement;
+      const q = input.value.trim();
+      if (!q) return;
+      onSearch(q);
+      input.value = '';
+    }}>
+      <Icon name="search" size={16} />
+      <input name="q" type="search" aria-label="Pencarian cepat tiket" placeholder="Cari tiket…" maxLength={100} />
+    </form>
+  );
 }
 
 function Profile({ session }: { session: Session }) {

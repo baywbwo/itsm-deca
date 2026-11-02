@@ -156,7 +156,7 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
         ) : <p className="muted">Perusahaan dibaca dari server untuk workspace {workspace.code}; tidak dapat diubah di sini.</p>}
       </section>
 
-      <form className="toolbar row report-filters" aria-label="Parameter laporan"
+      <form className="toolbar row filterbar report-filters" aria-label="Parameter laporan"
         onSubmit={(e) => { e.preventDefault(); applyPeriod(); }}>
         <label className="period">
           Jenis laporan
@@ -301,7 +301,7 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
   return (
     <>
       <div className="kpis">
-        <div className="kpi"><span className="muted">Tiket unik</span><strong>{num(t.tickets)}</strong><small>{p.header.basisLabel} · = baris ekspor</small></div>
+        <div className="kpi kpi-primary"><span className="muted">Tiket unik</span><strong>{num(t.tickets)}</strong><small>{p.header.basisLabel} · = baris ekspor</small></div>
         <div className="kpi"><span className="muted">Siklus penyelesaian</span><strong>{num(t.resolutionCycles)}</strong><small>Peristiwa selesai dalam periode · bukan jumlah tiket</small></div>
         <div className="kpi"><span className="muted">Tiket terselesaikan</span><strong>{num(t.resolvedTickets)}</strong><small>Tiket unik dengan ≥1 penyelesaian dalam periode</small></div>
         <div className="kpi"><span className="muted">Belum ditugaskan</span><strong>{num(t.unassigned)}</strong><small>Tanpa PIC saat ini</small></div>

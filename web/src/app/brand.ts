@@ -17,21 +17,34 @@ export interface BrandPreset {
   accent: string;
   accentHover: string;
   soft: string;
+  /** D16: active nav item (`navInk` on `navCurrent`) and the primary KPI card (white on `kpi`). */
+  navCurrent: string;
+  navInk: string;
+  kpi: string;
 }
 
 export const BRAND_PRESETS: Record<Exclude<BrandKey, null>, BrandPreset> = {
   deca: {
     key: 'deca', label: 'DECA (logo Qash, hijau)', logo: decaLogo, logoAlt: 'Qash',
     accent: '#245c31', accentHover: '#16482f', soft: '#e8f1e5',
+    navCurrent: '#eafbe5', navInk: '#174b2b', kpi: '#003571',
   },
   ajr: {
     key: 'ajr', label: 'AJR (ungu)', logo: ajrLogo, logoAlt: 'AJR',
     accent: '#3b299c', accentHover: '#2c1f78', soft: '#efecf9',
+    navCurrent: '#efecf9', navInk: '#2c1f78', kpi: '#2c1f78',
   },
 };
 
 /** No preset configured (or no workspace yet): a neutral slate theme with a text mark, no logo. */
-export const NEUTRAL = { accent: '#3f4a56', accentHover: '#2e3640', soft: '#eef0f3' } as const;
+export const NEUTRAL = {
+  accent: '#3f4a56', accentHover: '#2e3640', soft: '#eef0f3', navCurrent: '#eef0f3', navInk: '#152b3a', kpi: '#2e3640',
+} as const;
+
+/** Body text and secondary text on the white cards and the canvas (app.css `--ink`, `--muted`). */
+export const INK = '#152b3a';
+export const MUTED = '#5f6d74';
+export const CANVAS = '#f7f9f7';
 
 export interface ActiveBrand {
   key: BrandKey;
