@@ -640,7 +640,7 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
           hint="Tampil di pemilih workspace."
           error={error?.field === 'workspaceName' ? 'Isi nama workspace (maks. 200 karakter).' : undefined}
           onChange={(e) => setForm({ ...form, workspaceName: e.target.value })} />
-        <TextField label="Kode workspace" value={company.workspaceCode} readOnly
+        <TextField label="Kode workspace (terkunci)" value={company.workspaceCode} readOnly
           hint={`Terkunci: kode ini dipakai pada nomor tiket yang sudah terbit (mis. ${company.workspaceCode}-1), jadi tidak dapat diubah.`} />
         <SelectField label="Zona waktu" value={form.timezone} disabled={busy}
           onChange={(e) => setForm({ ...form, timezone: e.target.value as Timezone })}>

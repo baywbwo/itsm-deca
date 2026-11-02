@@ -44,6 +44,7 @@ p { margin: 8px 0; }
 .field-control { font-size: 14px; font-weight: 400; border: 1px solid var(--input-line); background: #fff; border-radius: 6px; padding: 9px 10px; min-height: 40px; max-width: 100%; width: 100%; }
 textarea.field-control { min-height: 100px; resize: vertical; }
 .field-control[aria-invalid='true'] { border-color: var(--danger-ink); }
+.field-control[readonly] { background: #f1f3ef; color: var(--muted); cursor: default; }
 .field-hint { font-weight: 400; color: var(--muted); }
 .field-error { font-weight: 400; color: var(--danger-ink); }
 .formgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
