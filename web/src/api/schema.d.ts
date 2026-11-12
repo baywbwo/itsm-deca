@@ -2862,7 +2862,7 @@ export interface components {
              * @enum {string}
              */
             integrationsMode: "simulation" | "live";
-            /** @description ITSM_KEYRING is set (credentials can be stored). */
+            /** @description The keyring (ITSM_KEYRING_FILE) is set (credentials can be stored). */
             keyringConfigured: boolean;
             priorities: components["schemas"]["IntegrationPriorityOption"][];
             ticketStatuses: string[];
@@ -3396,7 +3396,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description ITSM_KEYRING is not configured on the server (keyring_missing); credentials cannot be stored or read */
+        /** @description The keyring (ITSM_KEYRING_FILE) is not configured on the server (keyring_missing); credentials cannot be stored or read */
         KeyringMissing: {
             headers: {
                 [name: string]: unknown;

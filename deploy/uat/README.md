@@ -46,7 +46,8 @@ install -d -m 700 secrets
 openssl rand -hex 32 > secrets/pg_password                        # alfanumerik, aman di URL
 docker run --rm caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 \
   caddy hash-password > secrets/ingress_basic_auth_hash           # prompt interaktif; password dibagikan lewat kanal aman
-chmod 444 secrets/pg_password secrets/ingress_basic_auth_hash     # dibaca uid container; direktori 700 membatasi host
+: > secrets/itsm_keyring                                          # kosong = tanpa keyring; isi: lihat deploy/RUNBOOK-keyring.md
+chmod 444 secrets/pg_password secrets/ingress_basic_auth_hash secrets/itsm_keyring  # dibaca uid container; direktori 700 membatasi host
 ./check-config.sh                                                 # wajib OK sebelum up
 ```
 `.env` dan `secrets/` ada di `.gitignore` dan `.dockerignore`. Jangan di-commit, jangan dicetak.
@@ -124,11 +125,13 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d
   - Mengaktifkan lagi fitur lampiran butuh scope baru: UI, `ITSM_CLAMD_ADDR=tcp://clamav:3310`,
     `--profile attachments`, lalu uji runtime (PONG, EICAR, timeout, `StreamMaxLength` ≥ batas unggah API 10–25 MiB).
 - **Integrasi Jira/Lark (CP5b):** default UAT `ITSM_INTEGRATIONS` kosong = `simulation` (tanpa panggilan keluar).
-  - Mode `live` butuh `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` di `.env` (tanpa itu: 503 `keyring_missing`,
+  - Mode `live` butuh keyring di `secrets/itsm_keyring` + `ITSM_KEYRING_ACTIVE` di `.env` (tanpa itu: 503 `keyring_missing`,
     koneksi tidak bisa diaktifkan) **dan** egress HTTPS ke Jira Cloud / Lark. Jaringan `backend` sengaja
     `internal: true`, jadi paket ini **tidak** punya egress: live tidak akan tersambung sampai ada egress
     terkendali (proxy/allowlist domain) yang disetujui security. Isolasi tidak dilonggarkan di paket ini.
   - `ITSM_INTEGRATIONS_LAB=on` hanya untuk stub uji (http/alamat privat); jangan dipakai dengan provider nyata.
+  - Keyring dibaca dari file secret (`ITSM_KEYRING_FILE`), bukan env, sehingga tidak terlihat lewat `docker inspect`.
+    Rotasi kunci: `deploy/RUNBOOK-keyring.md` (`docker compose run --rm api reseal --dry-run`, lalu `reseal`).
   - Kredensial hanya-tulis (UI: "Tersimpan · diganti <tgl>", ganti/hapus); nilainya tidak pernah keluar dari API, log, atau audit.
 - **Rate limit per proses** (satu replika). Jangan scale-out `api` tanpa shared store.
 - **Basic auth** adalah gerbang ingress, bukan identitas pengguna. Semua tester tetap masuk sebagai Superadmin UAT, dan itu tidak membuktikan RBAC.

@@ -5105,7 +5105,7 @@
           },
           "keyringConfigured": {
             "type": "boolean",
-            "description": "ITSM_KEYRING is set (credentials can be stored)."
+            "description": "The keyring (ITSM_KEYRING_FILE) is set (credentials can be stored)."
           },
           "priorities": {
             "type": "array",
@@ -6701,7 +6701,7 @@
         }
       },
       "KeyringMissing": {
-        "description": "ITSM_KEYRING is not configured on the server (keyring_missing); credentials cannot be stored or read",
+        "description": "The keyring (ITSM_KEYRING_FILE) is not configured on the server (keyring_missing); credentials cannot be stored or read",
         "content": {
           "application/json": {
             "schema": {

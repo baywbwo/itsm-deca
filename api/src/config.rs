@@ -6,6 +6,8 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
+use zeroize::Zeroizing;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Environment {
     Uat,
@@ -41,6 +43,10 @@ pub enum ConfigError {
     UatInProduction,
     #[error("mode akses SSO belum tersedia; server menolak start")]
     SsoUnavailable,
+    /// CP5B-04: a key secret given as a plain env var in production (visible to `docker
+    /// inspect`, `/proc/<pid>/environ` and crash dumps).
+    #[error("{0} tidak boleh lewat env di production; pakai {0}_FILE (file secret)")]
+    SecretFromEnv(&'static str),
 }
 
 /// Database URL wrapper that never prints its value (it may contain credentials).
@@ -96,14 +102,14 @@ pub struct Config {
     /// challenge, no pre-MFA session, no step-up, MFA endpoints answer 404 and the keys below are
     /// neither required nor loaded. Stored factors stay in the database for a later re-enable.
     pub mfa_enabled: bool,
-    /// US-1.2 MFA keys (only with `ITSM_MFA=on`): `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
-    /// `ITSM_MFA_RECOVERY_PEPPER` (recovery-code HMAC). Required in production; absent in UAT
+    /// US-1.2 MFA keys (only with `ITSM_MFA=on`): the keyring + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
+    /// the recovery-code HMAC pepper, each read by [`secret_input`]. Required in production; absent in UAT
     /// = MFA endpoints answer 503 and users who must use MFA cannot finish signing in.
     pub mfa: Option<std::sync::Arc<crate::mfa::MfaKeys>>,
     /// CP5b provider integrations (see [`IntegrationsConfig`]).
     pub integrations: IntegrationsConfig,
-    /// Secret keyring for stored provider credentials: `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE`,
-    /// loaded whenever set (independent of MFA). Absent = credentials cannot be saved and live
+    /// Secret keyring for stored provider credentials: `ITSM_KEYRING_FILE` (or, outside production,
+    /// `ITSM_KEYRING`) + `ITSM_KEYRING_ACTIVE`, loaded whenever set (independent of MFA). Absent = credentials cannot be saved and live
     /// connections cannot be activated (clear 503 `keyring_missing`); set but malformed = no start.
     pub keyring: Option<std::sync::Arc<crate::crypto::Keyring>>,
 }
@@ -330,22 +336,31 @@ impl Config {
             Some("on") => true,
             Some(_) => return Err(ConfigError::Invalid { name: "ITSM_MFA" }),
         };
-        let mfa = match (
-            optional("ITSM_KEYRING"),
-            optional("ITSM_KEYRING_ACTIVE"),
-            optional("ITSM_MFA_RECOVERY_PEPPER"),
-        ) {
-            _ if !mfa_enabled => None,
-            (None, None, None) if environment == Environment::Uat => None,
-            (keyring, active, pepper) => {
-                let keyring = crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
-                    .map_err(keyring_error)?;
-                let pepper = pepper.ok_or(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))?;
-                Some(std::sync::Arc::new(
-                    crate::mfa::MfaKeys::new(keyring, &pepper).ok_or(ConfigError::Invalid {
-                        name: "ITSM_MFA_RECOVERY_PEPPER",
-                    })?,
-                ))
+        let (keyring_raw, keyring_src) =
+            secret_input(vars, "ITSM_KEYRING", "ITSM_KEYRING_FILE", environment)?;
+        let keyring_raw = keyring_raw.as_ref().map(|s| s.as_str());
+        let keyring_active = optional("ITSM_KEYRING_ACTIVE");
+        let mfa = match mfa_enabled {
+            false => None,
+            true => {
+                let (pepper, pepper_src) = secret_input(
+                    vars,
+                    "ITSM_MFA_RECOVERY_PEPPER",
+                    "ITSM_MFA_RECOVERY_PEPPER_FILE",
+                    environment,
+                )?;
+                match (keyring_raw, keyring_active.as_deref(), pepper) {
+                    (None, None, None) if environment == Environment::Uat => None,
+                    (keyring, active, pepper) => {
+                        let keyring = crate::crypto::Keyring::parse(keyring, active)
+                            .map_err(|e| keyring_error(e, keyring_src))?;
+                        let pepper = pepper.ok_or(ConfigError::Missing(pepper_src))?;
+                        Some(std::sync::Arc::new(
+                            crate::mfa::MfaKeys::new(keyring, &pepper)
+                                .ok_or(ConfigError::Invalid { name: pepper_src })?,
+                        ))
+                    }
+                }
             }
         };
 
@@ -381,11 +396,11 @@ impl Config {
                     })?,
             },
         };
-        let keyring = match (optional("ITSM_KEYRING"), optional("ITSM_KEYRING_ACTIVE")) {
+        let keyring = match (keyring_raw, keyring_active.as_deref()) {
             (None, None) => None,
             (keyring, active) => Some(std::sync::Arc::new(
-                crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
-                    .map_err(keyring_error)?,
+                crate::crypto::Keyring::parse(keyring, active)
+                    .map_err(|e| keyring_error(e, keyring_src))?,
             )),
         };
 
@@ -410,14 +425,59 @@ impl Config {
     }
 }
 
-fn keyring_error(e: crate::crypto::KeyringError) -> ConfigError {
+fn keyring_error(e: crate::crypto::KeyringError, source: &'static str) -> ConfigError {
     match e {
-        crate::crypto::KeyringError::Missing => ConfigError::Missing("ITSM_KEYRING"),
+        crate::crypto::KeyringError::Missing => ConfigError::Missing(source),
         crate::crypto::KeyringError::ActiveMissing => ConfigError::Missing("ITSM_KEYRING_ACTIVE"),
-        _ => ConfigError::Invalid {
-            name: "ITSM_KEYRING",
-        },
+        _ => ConfigError::Invalid { name: source },
     }
+}
+
+/// Largest secret file accepted; a keyring of many keys is a few KB.
+const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
+
+/// CP5B-04: a key secret comes from `<name>_FILE` (a mounted Docker/compose secret, read once at
+/// start and wiped from memory) or, outside production, from `<name>` itself. Production refuses
+/// the plain variable; setting both is ambiguous and refused everywhere. An empty file counts as
+/// unset. Also returns the variable name to report in errors.
+fn secret_input(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+    file_name: &'static str,
+    environment: Environment,
+) -> Result<(Option<Zeroizing<String>>, &'static str), ConfigError> {
+    let set = |n: &str| vars.get(n).filter(|v| !v.trim().is_empty());
+    match (set(file_name), set(name)) {
+        (Some(_), Some(_)) => Err(ConfigError::Invalid { name: file_name }),
+        (Some(path), None) => read_secret_file(path.trim())
+            .map(|v| (v, file_name))
+            .ok_or(ConfigError::Invalid { name: file_name }),
+        (None, Some(_)) if environment == Environment::Production => {
+            Err(ConfigError::SecretFromEnv(name))
+        }
+        (None, Some(v)) => Ok((Some(Zeroizing::new(v.trim().to_owned())), name)),
+        (None, None) if environment == Environment::Production => Ok((None, file_name)),
+        (None, None) => Ok((None, name)),
+    }
+}
+
+/// Reads a secret file: a regular file, at most 64 KB, UTF-8, not writable by other users.
+/// `None` = unusable (reported as an invalid `_FILE`); `Some(None)` = empty.
+fn read_secret_file(path: &str) -> Option<Option<Zeroizing<String>>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_SECRET_FILE_BYTES {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o002 != 0 {
+            return None;
+        }
+    }
+    let bytes = Zeroizing::new(std::fs::read(path).ok()?);
+    let text = std::str::from_utf8(&bytes).ok()?.trim();
+    Some((!text.is_empty()).then(|| Zeroizing::new(text.to_owned())))
 }
 
 /// Comma-separated exact IP addresses (no ranges), 1–16 entries, no blanks.
@@ -505,6 +565,15 @@ mod tests {
     const KEY: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const PEPPER: &str = "cGVwcGVyLXBlcHBlci1wZXBwZXItcGVwcGVyLXBlcHBlcg==";
 
+    /// Writes a 0600 secret file unique to this test process and tag; returns its path.
+    fn secret_file(tag: &str, content: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("itsm-cfg-{}-{tag}", std::process::id()));
+        assert!(std::fs::write(&path, content).is_ok());
+        assert!(std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).is_ok());
+        path.to_string_lossy().into_owned()
+    }
+
     #[test]
     fn production_password_mode_requires_mfa_keys() {
         let prod = vec![
@@ -515,28 +584,34 @@ mod tests {
         ];
         assert_eq!(
             Config::from_map(&vars(&prod)).err(),
-            Some(ConfigError::Missing("ITSM_KEYRING"))
+            Some(ConfigError::Missing("ITSM_KEYRING_FILE"))
         );
+        let key_file = secret_file("mfa-key", KEY);
+        let short_file = secret_file("mfa-short", "c2hvcnQ=");
+        let pepper_file = secret_file("mfa-pepper", PEPPER);
         let mut v = prod.clone();
-        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_FILE", &key_file));
         v.push(("ITSM_KEYRING_ACTIVE", "k1"));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
-            Some(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))
+            Some(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER_FILE"))
         );
-        v.push(("ITSM_MFA_RECOVERY_PEPPER", "c2hvcnQ="));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER_FILE", &short_file));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
             Some(ConfigError::Invalid {
-                name: "ITSM_MFA_RECOVERY_PEPPER"
+                name: "ITSM_MFA_RECOVERY_PEPPER_FILE"
             })
         );
         v.pop();
-        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER_FILE", &pepper_file));
         let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if c.mfa.is_some()));
         let printed = format!("{cfg:?}");
         assert!(!printed.contains(PEPPER) && !printed.contains("AAAAAAAA"));
+        for f in [key_file, short_file, pepper_file] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 
     #[test]
@@ -762,8 +837,9 @@ mod tests {
         }
 
         // The credential keyring loads without MFA and never prints its key material.
+        let key_file = secret_file("integrations-key", KEY);
         let mut v = prod.clone();
-        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_FILE", &key_file));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
             Some(ConfigError::Missing("ITSM_KEYRING_ACTIVE"))
@@ -772,5 +848,84 @@ mod tests {
         let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if c.keyring.is_some() && c.mfa.is_none()));
         assert!(!format!("{cfg:?}").contains("AAAAAAAA"));
+        let _ = std::fs::remove_file(key_file);
+    }
+
+    #[test]
+    fn cp5b04_production_takes_key_secrets_only_from_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+            ("ITSM_KEYRING_ACTIVE", "k1"),
+        ];
+        // Plain env vars are visible through docker inspect and /proc: refused in production.
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING", KEY));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::SecretFromEnv("ITSM_KEYRING"))
+        );
+        let mut v = prod.clone();
+        v.push(("ITSM_MFA", "on"));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::SecretFromEnv("ITSM_MFA_RECOVERY_PEPPER"))
+        );
+
+        // A mounted secret file loads (surrounding whitespace ignored) and never prints.
+        let good = secret_file("cp5b04-good", &format!("  {KEY}\n"));
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING_FILE", &good));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.keyring.as_ref().is_some_and(|k| k.active_key_id() == "k1"))
+        );
+        assert!(!format!("{cfg:?}").contains("AAAAAAAA"));
+
+        // Empty file = unset (live integrations then answer keyring_missing).
+        let empty = secret_file("cp5b04-empty", "\n");
+        let mut v = prod.clone();
+        v.pop();
+        v.push(("ITSM_KEYRING_FILE", &empty));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_none()));
+
+        // Unusable files refuse to start, named by the _FILE variable.
+        let bad = secret_file("cp5b04-bad", "k1:bad");
+        let open = secret_file("cp5b04-open", KEY);
+        assert!(std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o666)).is_ok());
+        let missing = format!("{}-missing", good);
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        for path in [&bad, &open, &missing, &dir] {
+            let mut v = prod.clone();
+            v.push(("ITSM_KEYRING_FILE", path));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid {
+                    name: "ITSM_KEYRING_FILE"
+                }),
+                "{path}"
+            );
+        }
+
+        // UAT still accepts the env var, but never both sources at once.
+        let mut v = base();
+        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_some()));
+        v.push(("ITSM_KEYRING_FILE", &good));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_KEYRING_FILE"
+            })
+        );
+        for f in [good, empty, bad, open] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 }

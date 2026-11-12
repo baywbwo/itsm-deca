@@ -161,7 +161,7 @@ impl Failure {
             Failure::NotConfigured => "Konfigurasi koneksi belum lengkap.".to_owned(),
             Failure::NoCredential => "Kredensial belum disimpan.".to_owned(),
             Failure::NoKeyring => {
-                "Kunci enkripsi server (ITSM_KEYRING) belum dipasang; kredensial tidak dapat dibuka."
+                "Kunci enkripsi server (ITSM_KEYRING_FILE) belum dipasang; kredensial tidak dapat dibuka."
                     .to_owned()
             }
             Failure::CredentialUnreadable => {

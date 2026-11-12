@@ -75,11 +75,12 @@ services:
       ITSM_INTEGRATIONS: "${ITSM_INTEGRATIONS:-}"
       ITSM_INTEGRATIONS_LAB: "${ITSM_INTEGRATIONS_LAB:-}"
       ITSM_INTEGRATIONS_TIMEOUT_MS: "${ITSM_INTEGRATIONS_TIMEOUT_MS:-}"
-      # Encrypts stored provider credentials (and TOTP seeds when ITSM_MFA=on). Value only in .env.
-      ITSM_KEYRING: "${ITSM_KEYRING:-}"
+      # Encrypts stored provider credentials (and TOTP seeds when ITSM_MFA=on). CP5B-04: the key
+      # material is a secret file (empty file = no keyring), never an env var visible to inspect.
+      ITSM_KEYRING_FILE: /run/secrets/itsm_keyring
       ITSM_KEYRING_ACTIVE: "${ITSM_KEYRING_ACTIVE:-}"
       RUST_LOG: ${RUST_LOG:-info}
-    secrets: [pg_password]
+    secrets: [pg_password, itsm_keyring]
     volumes:
       - attachments:/var/lib/itsm/attachments
     networks: [backend]
@@ -141,3 +142,5 @@ secrets:
     file: ./secrets/pg_password
   ingress_basic_auth_hash:
     file: ./secrets/ingress_basic_auth_hash
+  itsm_keyring:
+    file: ./secrets/itsm_keyring

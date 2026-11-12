@@ -23,9 +23,13 @@ case "$cmd" in
     exec "$bin" serve ;;
   migrate)
     exec "$bin" migrate ;;
+  reseal)
+    # Key rotation (deploy/RUNBOOK-keyring.md): reseal [--dry-run]
+    shift
+    exec "$bin" reseal "$@" ;;
   seed-uat)
     [ "${ITSM_SEED_CONFIRM_DB:-}" = "$ITSM_DB_NAME" ] || fail "seed-uat butuh ITSM_SEED_CONFIRM_DB=<nama DB dummy>"
     "$bin" migrate
     exec "$bin" seed-uat ;;
-  *) fail "perintah tidak dikenal (serve|migrate|seed-uat)" ;;
+  *) fail "perintah tidak dikenal (serve|migrate|seed-uat|reseal)" ;;
 esac

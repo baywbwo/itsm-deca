@@ -87,7 +87,7 @@ pub enum AppError {
     #[error("step_up_required")]
     StepUpRequired,
     /// CP5b: a credential cannot be stored or a live connection activated because the server
-    /// has no `ITSM_KEYRING`. Nothing was changed.
+    /// has no keyring (`ITSM_KEYRING_FILE`). Nothing was changed.
     #[error("keyring_missing")]
     KeyringMissing,
     /// CP5b: a provider lookup (options, chat list, user search) needs `ITSM_INTEGRATIONS=live`.
@@ -228,7 +228,7 @@ impl AppError {
             AppError::KeyringMissing => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "keyring_missing",
-                "Kunci enkripsi (ITSM_KEYRING) belum dipasang di server: kredensial tidak dapat disimpan dan koneksi live tidak dapat diaktifkan.",
+                "Kunci enkripsi (ITSM_KEYRING_FILE) belum dipasang di server: kredensial tidak dapat disimpan dan koneksi live tidak dapat diaktifkan.",
             ),
             AppError::IntegrationNotLive => (
                 StatusCode::CONFLICT,

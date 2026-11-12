@@ -1,4 +1,5 @@
-//! `itsm-api [serve|migrate|seed-uat]`. Exits non-zero on any guard failure.
+//! `itsm-api [serve|migrate|init-password|seed-uat|reseal [--dry-run]]`. Exits non-zero on any
+//! guard failure.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -16,10 +17,10 @@ async fn main() -> ExitCode {
         )
         .init();
 
-    let command = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "serve".to_owned());
-    match run(&command).await {
+    let mut args = std::env::args().skip(1);
+    let command = args.next().unwrap_or_else(|| "serve".to_owned());
+    let rest: Vec<String> = args.collect();
+    match run(&command, &rest).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             tracing::error!(command = %command, reason = %msg, "refusing to continue");
@@ -28,7 +29,12 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(command: &str) -> Result<(), String> {
+async fn run(command: &str, rest: &[String]) -> Result<(), String> {
+    let dry_run = match (command, rest) {
+        (_, []) => false,
+        ("reseal", [flag]) if flag == "--dry-run" => true,
+        _ => return Err("argumen tidak dikenal".to_owned()),
+    };
     let config = Config::from_env().map_err(|e| e.to_string())?;
     let pool = db::connect(&config.database_url)
         .await
@@ -55,6 +61,19 @@ async fn run(command: &str) -> Result<(), String> {
                 .await
                 .map_err(|e| e.to_string())?;
             println!("seed-uat: {n} tiket dummy baru");
+            Ok(())
+        }
+        // CP5B-03 key rotation; see deploy/RUNBOOK-keyring.md.
+        "reseal" => {
+            let keyring = config
+                .keyring
+                .as_deref()
+                .ok_or("keyring belum dipasang (ITSM_KEYRING_FILE)")?;
+            let report = itsm_api::crypto::reseal(&pool, keyring, dry_run)
+                .await
+                .map_err(|e| format!("reseal gagal: {e}"))?;
+            let line = report.verdict(dry_run)?;
+            println!("{line}");
             Ok(())
         }
         "serve" => serve(config, pool).await,

@@ -235,7 +235,7 @@ pub struct IntegrationsBody {
     workspace_id: Uuid,
     /// Server switch `ITSM_INTEGRATIONS`: `live` | `simulation`.
     integrations_mode: &'static str,
-    /// `ITSM_KEYRING` is set: credentials can be stored and live connections activated.
+    /// The keyring (`ITSM_KEYRING_FILE`) is set: credentials can be stored and live connections activated.
     keyring_configured: bool,
     items: Vec<ConnectionView>,
     /// Providers a connection can be created for (one per workspace each).

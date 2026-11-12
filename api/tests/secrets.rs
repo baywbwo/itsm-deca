@@ -137,9 +137,12 @@ async fn secret_scope_check_and_rotation_reseal(pool: PgPool) {
     );
     drop(conn);
     let new = keyring("new");
-    assert_eq!(ok(crypto::reseal_stale(&pool, &new).await, "reseal"), 1);
     assert_eq!(
-        ok(crypto::reseal_stale(&pool, &new).await, "reseal again"),
+        ok(crypto::reseal(&pool, &new, false).await, "reseal").resealed,
+        1
+    );
+    assert_eq!(
+        ok(crypto::reseal(&pool, &new, false).await, "reseal again").resealed,
         0
     );
     let (key_id, version): (String, i32) = ok(
@@ -183,4 +186,85 @@ async fn migrations_0018_0019_roll_back_and_reapply(pool: PgPool) {
         "triggers",
     );
     assert_eq!(triggers, 5);
+}
+
+const NEW_ONLY: &str = "new:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const GONE: &str = "gone:AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
+
+async fn sealed_with(pool: &PgPool) -> Vec<(Uuid, String, i32)> {
+    ok(
+        sqlx::query_as("SELECT id, key_id, version FROM encrypted_secrets ORDER BY id")
+            .fetch_all(pool)
+            .await,
+        "rows",
+    )
+}
+
+/// CP5B-03: rotation runbook end to end — dry run writes nothing, a row the keyring cannot open
+/// is skipped (not fatal) and keeps the verdict failing, and after the pass the old key can be
+/// dropped from the keyring with every secret still readable.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5b03_two_key_rotation_retires_the_old_key(pool: PgPool) {
+    let ws = workspace(&pool).await;
+    let old = keyring("old");
+    let gone = ok(Keyring::parse(Some(GONE), Some("gone")), "gone keyring");
+    let mut conn = ok(pool.acquire().await, "conn");
+    let mut store = async |kr: &Keyring, ws: Option<Uuid>, purpose: Purpose, plain: &[u8]| {
+        ok(
+            crypto::store_secret(&mut conn, kr, ws, purpose, plain, None).await,
+            "store",
+        )
+    };
+    let seed = store(&old, None, Purpose::TotpSeed, b"dummy-seed").await;
+    let token = store(&old, Some(ws), Purpose::JiraApiToken, b"dummy-token").await;
+    let orphan = store(&gone, Some(ws), Purpose::LarkAppSecret, b"dummy-orphan").await;
+    drop(conn);
+
+    let new = keyring("new");
+    let before = sealed_with(&pool).await;
+    let plan = ok(crypto::reseal(&pool, &new, true).await, "dry run");
+    assert_eq!(
+        (plan.resealed, plan.failed, plan.remaining),
+        (2, 1, 3),
+        "dry run counts"
+    );
+    assert_eq!(sealed_with(&pool).await, before, "dry run wrote");
+    assert!(plan.verdict(true).is_err(), "unopenable row must block");
+
+    let pass = ok(crypto::reseal(&pool, &new, false).await, "reseal");
+    assert_eq!((pass.resealed, pass.failed, pass.remaining), (2, 1, 1));
+    assert!(pass.verdict(false).is_err(), "old-key row left");
+    let left: Vec<_> = sealed_with(&pool)
+        .await
+        .into_iter()
+        .filter(|(_, k, _)| k != "new")
+        .map(|(id, k, _)| (id, k))
+        .collect();
+    assert_eq!(left, vec![(orphan, "gone".to_owned())]);
+
+    // Runbook: the unreadable credential is re-entered by its owner; here it is removed.
+    ok(
+        sqlx::query("DELETE FROM encrypted_secrets WHERE id = $1")
+            .bind(orphan)
+            .execute(&pool)
+            .await,
+        "delete orphan",
+    );
+    let done = ok(crypto::reseal(&pool, &new, false).await, "reseal again");
+    assert_eq!(
+        done.verdict(false),
+        Ok("reseal: resealed=0 failed=0 remaining=0".to_owned())
+    );
+
+    let only_new = ok(Keyring::parse(Some(NEW_ONLY), Some("new")), "new only");
+    let got = ok(
+        crypto::load_secret(&pool, &only_new, seed, None, Purpose::TotpSeed).await,
+        "seed",
+    );
+    assert_eq!(got.expose(), b"dummy-seed");
+    let got = ok(
+        crypto::load_secret(&pool, &only_new, token, Some(ws), Purpose::JiraApiToken).await,
+        "token",
+    );
+    assert_eq!(got.expose(), b"dummy-token");
 }
