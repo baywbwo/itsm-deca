@@ -56,6 +56,8 @@ pub enum Purpose {
     JiraApiToken,
     /// CP5b: Lark custom-app secret (exchanged for a tenant_access_token).
     LarkAppSecret,
+    /// CP5c: OIDC client secret of a company IdP (client_secret_basic at the token endpoint).
+    OidcClientSecret,
 }
 
 impl Purpose {
@@ -68,6 +70,7 @@ impl Purpose {
             Self::SmtpPassword => "smtp_password",
             Self::JiraApiToken => "jira_api_token",
             Self::LarkAppSecret => "lark_app_secret",
+            Self::OidcClientSecret => "oidc_client_secret",
         }
     }
 }
@@ -294,6 +297,7 @@ fn purpose_from_db(s: &str) -> Option<Purpose> {
         "smtp_password" => Purpose::SmtpPassword,
         "jira_api_token" => Purpose::JiraApiToken,
         "lark_app_secret" => Purpose::LarkAppSecret,
+        "oidc_client_secret" => Purpose::OidcClientSecret,
         _ => return None,
     })
 }

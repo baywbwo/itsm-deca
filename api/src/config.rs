@@ -19,8 +19,57 @@ pub enum AccessMode {
     /// Limited UAT: direct Superadmin entry with a persistent banner, dummy data only.
     UatSuperadmin,
     Password,
-    /// Office SSO. Not implemented yet, so it can never start.
+    /// Legacy value, refused at start: company SSO runs under `password` with `ITSM_AUTH=sso|both`.
     Sso,
+}
+
+/// CP5c `ITSM_AUTH=password|sso|both` (default `password`; only with `ITSM_ACCESS_MODE=password`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethods {
+    /// Local username + password only (current behaviour).
+    Password,
+    /// Company OIDC only; the password form stays open for break-glass platform admins.
+    Sso,
+    /// Company OIDC and local passwords.
+    Both,
+}
+
+impl AuthMethods {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuthMethods::Password => "password",
+            AuthMethods::Sso => "sso",
+            AuthMethods::Both => "both",
+        }
+    }
+
+    pub fn oidc(self) -> bool {
+        self != AuthMethods::Password
+    }
+}
+
+/// CP5c sign-in configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub methods: AuthMethods,
+    /// `ITSM_PUBLIC_URL`: the origin users open (`https://itsm.example.co.id`), required when OIDC
+    /// is on. The redirect URI registered at each IdP is `<origin>/api/v1/auth/oidc/callback`.
+    pub public_url: Option<String>,
+    /// `ITSM_OIDC_LAB=on|off` (default off, refused in production): allows `http://` and
+    /// loopback/private IdP addresses, for a local stub IdP only.
+    pub oidc_lab: bool,
+}
+
+/// Path of the OIDC redirect URI under [`AuthConfig::public_url`].
+pub const OIDC_CALLBACK_PATH: &str = "/api/v1/auth/oidc/callback";
+
+impl AuthConfig {
+    /// The redirect URI sent to the IdP; `None` when OIDC is off.
+    pub fn redirect_uri(&self) -> Option<String> {
+        self.public_url
+            .as_deref()
+            .map(|origin| format!("{origin}{OIDC_CALLBACK_PATH}"))
+    }
 }
 
 impl AccessMode {
@@ -41,7 +90,9 @@ pub enum ConfigError {
     Invalid { name: &'static str },
     #[error("production tidak boleh memakai mode uji Superadmin")]
     UatInProduction,
-    #[error("mode akses SSO belum tersedia; server menolak start")]
+    #[error(
+        "ITSM_ACCESS_MODE=sso tidak dipakai lagi; pakai ITSM_ACCESS_MODE=password dengan ITSM_AUTH=sso"
+    )]
     SsoUnavailable,
     /// CP5B-04: a key secret given as a plain env var in production (visible to `docker
     /// inspect`, `/proc/<pid>/environ` and crash dumps).
@@ -112,6 +163,8 @@ pub struct Config {
     /// `ITSM_KEYRING`) + `ITSM_KEYRING_ACTIVE`, loaded whenever set (independent of MFA). Absent = credentials cannot be saved and live
     /// connections cannot be activated (clear 503 `keyring_missing`); set but malformed = no start.
     pub keyring: Option<std::sync::Arc<crate::crypto::Keyring>>,
+    /// CP5c sign-in methods (see [`AuthConfig`]).
+    pub auth: AuthConfig,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -396,6 +449,7 @@ impl Config {
                     })?,
             },
         };
+        let auth = parse_auth(&optional, environment, access_mode)?;
         let keyring = match (keyring_raw, keyring_active.as_deref()) {
             (None, None) => None,
             (keyring, active) => Some(std::sync::Arc::new(
@@ -421,8 +475,70 @@ impl Config {
             mfa,
             integrations,
             keyring,
+            auth,
         })
     }
+}
+
+fn parse_auth(
+    optional: &dyn Fn(&str) -> Option<String>,
+    environment: Environment,
+    access_mode: AccessMode,
+) -> Result<AuthConfig, ConfigError> {
+    let methods = match (optional("ITSM_AUTH").as_deref(), access_mode) {
+        (None | Some("password"), _) => AuthMethods::Password,
+        (Some("sso"), AccessMode::Password) => AuthMethods::Sso,
+        (Some("both"), AccessMode::Password) => AuthMethods::Both,
+        _ => return Err(ConfigError::Invalid { name: "ITSM_AUTH" }),
+    };
+    let oidc_lab = match (optional("ITSM_OIDC_LAB").as_deref(), environment) {
+        (None | Some("off"), _) => false,
+        (Some("on"), Environment::Uat) => true,
+        _ => {
+            return Err(ConfigError::Invalid {
+                name: "ITSM_OIDC_LAB",
+            });
+        }
+    };
+    let public_url = match (optional("ITSM_PUBLIC_URL"), methods.oidc()) {
+        (None, false) => None,
+        (None, true) => return Err(ConfigError::Missing("ITSM_PUBLIC_URL")),
+        (Some(v), _) => Some(parse_public_url(&v, oidc_lab).ok_or(ConfigError::Invalid {
+            name: "ITSM_PUBLIC_URL",
+        })?),
+    };
+    Ok(AuthConfig {
+        methods,
+        public_url,
+        oidc_lab,
+    })
+}
+
+/// An origin only: `https://host[:port]` (one trailing `/` is dropped), lower-case DNS host, no
+/// user info, path, query or fragment. `http://` only with the OIDC lab flag (UAT).
+fn parse_public_url(v: &str, lab: bool) -> Option<String> {
+    let v = v.strip_suffix('/').unwrap_or(v);
+    let (scheme, rest) = v.split_once("://")?;
+    match scheme {
+        "https" => {}
+        "http" if lab => {}
+        _ => return None,
+    }
+    let host = match rest.rsplit_once(':') {
+        Some((h, p)) => {
+            p.parse::<u16>().ok().filter(|p| *p > 0)?;
+            h
+        }
+        None => rest,
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-'))
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-']);
+    host_ok.then(|| v.to_owned())
 }
 
 fn keyring_error(e: crate::crypto::KeyringError, source: &'static str) -> ConfigError {
@@ -679,6 +795,122 @@ mod tests {
             assert_eq!(
                 Config::from_map(&vars(&v)).err(),
                 Some(ConfigError::SsoUnavailable)
+            );
+        }
+    }
+
+    #[test]
+    fn auth_methods_default_to_password_and_oidc_needs_a_public_origin() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.auth.methods == AuthMethods::Password
+            && c.auth.public_url.is_none() && !c.auth.oidc_lab && c.auth.redirect_uri().is_none())
+        );
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        for (value, want) in [("sso", AuthMethods::Sso), ("both", AuthMethods::Both)] {
+            let mut v = prod.clone();
+            v.push(("ITSM_AUTH", value));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Missing("ITSM_PUBLIC_URL"))
+            );
+            v.push(("ITSM_PUBLIC_URL", "https://itsm.example.co.id/"));
+            let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+            assert!(
+                matches!(&cfg, Ok(c) if c.auth.methods == want && c.auth.methods.oidc()
+                && c.auth.public_url.as_deref() == Some("https://itsm.example.co.id")
+                && c.auth.redirect_uri().as_deref()
+                    == Some("https://itsm.example.co.id/api/v1/auth/oidc/callback"))
+            );
+        }
+        // The lab flag (UAT only) allows a plain-http origin for a local stub IdP.
+        let mut v = base();
+        v[1] = ("ITSM_ACCESS_MODE", "password");
+        v.push(("ITSM_AUTH", "both"));
+        v.push(("ITSM_OIDC_LAB", "on"));
+        v.push(("ITSM_PUBLIC_URL", "http://127.0.0.1:8080"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.auth.oidc_lab));
+
+        let uat_pw = {
+            let mut v = base();
+            v[1] = ("ITSM_ACCESS_MODE", "password");
+            v
+        };
+        for (env, extra, name) in [
+            // OIDC is a password-mode feature; the UAT Superadmin entry stays as it is.
+            (&base(), vec![("ITSM_AUTH", "sso")], "ITSM_AUTH"),
+            (&uat_pw, vec![("ITSM_AUTH", "oidc")], "ITSM_AUTH"),
+            (&uat_pw, vec![("ITSM_AUTH", "SSO")], "ITSM_AUTH"),
+            (&prod, vec![("ITSM_OIDC_LAB", "on")], "ITSM_OIDC_LAB"),
+            (&uat_pw, vec![("ITSM_OIDC_LAB", "yes")], "ITSM_OIDC_LAB"),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "http://itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &uat_pw,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "http://itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example/app"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://u@itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://ITSM.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example:0"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example?x=1"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+        ] {
+            let mut v = env.clone();
+            v.extend(extra);
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{v:?}"
             );
         }
     }
