@@ -39,8 +39,8 @@ a.kpi2:hover { border-color: var(--sapphire); }
 .sbar > b, .qbars > li > b { text-align: right; font-weight: 800; color: var(--ink); }
 .q-lbl { display: grid; color: var(--ink-2); font-weight: 700; }
 .q-lbl small { font-weight: 400; color: var(--muted); font-size: 11px; }
-.track { height: 8px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
-.fill { height: 100%; border-radius: inherit; background: var(--sapphire); }
+.track { display: block; height: 8px; border-radius: 999px; background: var(--line-soft); overflow: hidden; }
+.fill { display: block; height: 100%; border-radius: inherit; background: var(--sapphire); }
 .fill.ok { background: var(--eco); }
 .fill.warn { background: #e9a23b; }
 
