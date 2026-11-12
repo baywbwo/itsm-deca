@@ -28,6 +28,8 @@ export type Boot =
   | { status: 'no_access'; meta: Meta }
   /** US-1.4: only the change-password screen (and logout) until the password is changed. */
   | { status: 'must_change'; meta: Meta; session: Session }
+  | { status: 'mfa_setup'; meta: Meta; session: Session }
+  | { status: 'mfa_relogin'; meta: Meta; session: Session }
   | { status: 'error'; error: unknown };
 
 /**
@@ -46,8 +48,14 @@ export async function loadBoot(api: Api, signal: AbortSignal): Promise<Boot> {
     if (meta.accessMode === 'password') return { status: 'no_access', meta };
     session = await api.enterUat(signal);
   }
+  if (session.mfaRequired && !session.mfaEnrolled) return { status: 'mfa_setup', meta, session };
   if (session.mustChangePassword) return { status: 'must_change', meta, session };
-  const workspaces = await api.listWorkspaces(signal);
+  let workspaces: Workspace[];
+  try { workspaces = await api.listWorkspaces(signal); }
+  catch (e) {
+    if (session.mfaRequired && e instanceof ApiError && e.status === 403) return { status: 'mfa_relogin', meta, session };
+    throw e;
+  }
   return { status: 'ready', meta, session, workspaces };
 }
 

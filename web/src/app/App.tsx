@@ -7,7 +7,7 @@ import { Icon, type IconName } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
-import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { AccountMenu, ChangePasswordScreen, LoginScreen, MfaSetupScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
 import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
@@ -60,6 +60,9 @@ export function App({ api }: { api: Api }) {
   }
   if (boot.status === 'no_access') {
     return <LoginScreen api={api} meta={boot.meta} notice={notice} onSuccess={loggedIn} />;
+  }
+  if (boot.status === 'mfa_setup' || boot.status === 'mfa_relogin') {
+    return <MfaSetupScreen api={api} reauthenticate={boot.status === 'mfa_relogin'} onDone={retry} />;
   }
   if (boot.status === 'must_change') {
     return <ChangePasswordScreen api={api} session={boot.session} username={username} onChanged={retry}

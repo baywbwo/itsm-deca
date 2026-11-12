@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import logoUrl from '../assets/logo-qash.svg';
-import { ApiError, loginErrorText, rateLimitText, type Api } from '../api/client';
+import { ApiError, MfaChallenge, loginErrorText, rateLimitText, type Api } from '../api/client';
 import type { Meta, Session } from '../api/types';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
@@ -56,6 +56,9 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
   notice: LoginNotice | null;
   onSuccess: (username: string) => void;
 }) {
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [factor, setFactor] = useState('');
+  const [recovery, setRecovery] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -67,12 +70,15 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
     setBusy(true);
     setError('');
     try {
-      await api.login(username, password);
+      if (challenge) await api.loginMfa(challenge, factor.trim(), recovery);
+      else await api.login(username, password);
       setPassword('');
       onSuccess(username);
     } catch (err) {
       setPassword('');
-      setError(loginErrorText(err));
+      setFactor('');
+      if (err instanceof MfaChallenge) setChallenge(err.challengeId);
+      else setError(challenge ? 'Kode tidak valid atau verifikasi kedaluwarsa. Coba kode baru atau kembali ke login.' : loginErrorText(err));
     } finally {
       setBusy(false);
     }
@@ -90,10 +96,15 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
       )}
       {meta.accessMode === 'password' ? (
         <form className="auth-form" onSubmit={(e) => void login(e)}>
-          <TextField label="Nama pengguna" name="username" autoComplete="username" required maxLength={254}
+          {!challenge && <><TextField label="Nama pengguna" name="username" autoComplete="username" required maxLength={254}
             value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy} />
           <TextField label="Kata sandi" name="password" type="password" autoComplete="current-password" required
-            maxLength={1024} value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} />
+            maxLength={1024} value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} /></>}
+          {challenge && <><p>Verifikasi dua langkah diperlukan untuk akun ini.</p>
+            <TextField label={recovery ? 'Kode pemulihan' : 'Kode authenticator'} name="factor" autoComplete="one-time-code" required
+              maxLength={64} value={factor} onChange={e => setFactor(e.target.value)} disabled={busy} />
+            <Button type="button" disabled={busy} onClick={() => { setRecovery(!recovery); setFactor(''); setError(''); }}>{recovery ? 'Gunakan authenticator' : 'Gunakan kode pemulihan'}</Button>
+            <Button type="button" disabled={busy} onClick={() => { setChallenge(null); setFactor(''); setError(''); }}>Kembali ke login</Button></>}
           {error && <p role="alert" className="auth-error">{error}</p>}
           <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Masuk'}</Button>
         </form>
@@ -324,4 +335,43 @@ export function LogoutAllDialog({ api, open, onClose, onDone }: {
       {error && <p role="alert" className="auth-error">{error}</p>}
     </Dialog>
   );
+}
+
+
+/** MFA gates boot before protected workspace requests; secrets remain in component memory. */
+export function MfaSetupScreen({ api, reauthenticate, onDone }: { api: Api; reauthenticate: boolean; onDone: () => void }) {
+  const [enrollment, setEnrollment] = useState<{ enrollmentId: string; otpauthUri: string; expiresAt: string } | null>(null);
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function act(work: () => Promise<void>) {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await work(); } catch (e) {
+      setError(e instanceof ApiError && e.status === 429 ? rateLimitText(e) : 'Verifikasi belum berhasil. Periksa kode dan waktu di authenticator, lalu coba lagi.');
+    } finally { setBusy(false); }
+  }
+  const secret = enrollment ? new URL(enrollment.otpauthUri).searchParams.get('secret') : '';
+  return <AuthLayout><h1>{reauthenticate ? 'Verifikasi ulang akun' : 'Aktifkan verifikasi dua langkah'}</h1>
+    <p className="muted">Akun administrator memerlukan authenticator sebelum mengakses perusahaan dan tiket.</p>
+    {reauthenticate ? <p>Sesi ini dibuat sebelum verifikasi MFA. Silakan keluar, lalu masuk kembali menggunakan kata sandi dan kode authenticator.</p> :
+      codes ? <><h2>Simpan kode pemulihan</h2><p>Kode berikut hanya ditampilkan sekali. Simpan di tempat aman; masing-masing dapat digunakan satu kali.</p>
+        <pre style={{whiteSpace:'pre-wrap',userSelect:'all'}}>{codes.join('\n')}</pre>
+        <label><input type="checkbox" checked={saved} onChange={e => setSaved(e.target.checked)} /> Saya sudah menyimpan kode pemulihan</label>
+        <Button variant="primary" disabled={!saved} onClick={() => { setCodes(null); onDone(); }}>Lanjut ke aplikasi</Button></> :
+      enrollment ? <form className="auth-form" onSubmit={e => { e.preventDefault(); void act(async () => {
+        const result = await api.confirmMfaEnrollment(enrollment.enrollmentId, code.trim());
+        setCode(''); setEnrollment(null); setCodes(result.recoveryCodes);
+      }); }}><p>Tambahkan akun di aplikasi authenticator dengan kunci berikut (TOTP, 6 digit, interval 30 detik).</p>
+        <code style={{overflowWrap:'anywhere',userSelect:'all'}}>{secret}</code>
+        <p className="tiny muted">Jangan membagikan kunci ini. Jika kedaluwarsa, buat kunci baru.</p>
+        <TextField label="Kode authenticator" name="code" autoComplete="one-time-code" inputMode="numeric" pattern="[0-9]{6}" required maxLength={6} value={code} onChange={e => setCode(e.target.value)} disabled={busy} />
+        <Button type="submit" variant="primary" disabled={busy}>Verifikasi dan aktifkan</Button>
+        <Button type="button" disabled={busy} onClick={() => void act(async () => { setEnrollment(await api.startMfaEnrollment()); setCode(''); })}>Buat kunci baru</Button>
+      </form> : <Button variant="primary" disabled={busy} onClick={() => void act(async () => setEnrollment(await api.startMfaEnrollment()))}>Siapkan authenticator</Button>}
+    {error && <p role="alert" className="auth-error">{error}</p>}
+    {!codes && <Button disabled={busy} onClick={() => void act(async () => { await api.logout(); onDone(); })}>Keluar</Button>}
+  </AuthLayout>;
 }
