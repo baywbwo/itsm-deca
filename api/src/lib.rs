@@ -3,6 +3,7 @@
 pub mod authz;
 pub mod clamd;
 pub mod config;
+pub mod crypto;
 pub mod db;
 pub mod denied_audit;
 pub mod domain;
