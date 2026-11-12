@@ -259,6 +259,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description US-1.2. The caller's MFA state. Allowed in a pre-MFA session. Never returns the seed or codes. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        get: operations["getMyMfa"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mfa/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.2. Starts a TOTP enrolment: a new 20-byte seed, stored only encrypted (purpose totp_seed). An unconfirmed earlier enrolment is replaced. 409 mfa_already_enrolled once confirmed. Allowed in a pre-MFA session. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        post: operations["startMfaEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.2. Proves the authenticator with a first valid code, activates MFA, marks this session MFA-verified and returns 10 recovery codes once. A wrong code is 422 validation_failed (field code) and keeps the session. 410 mfa_enrollment_expired after 10 minutes. Audited as mfa_enroll. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        post: operations["confirmMfaEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/mfa/recovery-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Step-up re-authentication follows in CP4b. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        post: operations["regenerateRecoveryCodes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users": {
         parameters: {
             query?: never;
@@ -1122,8 +1190,31 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Local password login for one deployment */
+        /**
+         * Local password login for one deployment
+         * @description Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user.
+         */
         post: operations["passwordLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/login/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Second login step (TOTP or recovery code)
+         * @description US-1.2. Password mode only. Exactly one of code (6 digits, RFC 6238 SHA1/30 s, +-1 step) or recoveryCode. The challenge is single-use and expires after 5 minutes (410 mfa_challenge_expired). A code at or below the last accepted step is a replay and is refused. 5 wrong codes lock TOTP for 15 minutes; a recovery code still works while locked and clears the lock. Every refusal is the generic 401 mfa_invalid. Audited as mfa_verify / recovery_code_used / lockout without codes.
+         */
+        post: operations["loginWithMfa"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1272,12 +1363,17 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
                 /** @description rate_limited only: seconds until the next request is accepted (same value as the Retry-After header). */
                 retryAfterSeconds?: number;
+                /**
+                 * Format: uuid
+                 * @description mfa_required only: the single-use second-step challenge for POST /api/v1/login/mfa (expires after 5 minutes).
+                 */
+                challengeId?: string;
             };
         };
         Meta: {
@@ -1320,6 +1416,30 @@ export interface components {
             mustChangePassword: boolean;
             /** @description CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then. */
             platformAdmin: boolean;
+            /** @description US-1.2: password mode, the user has a confirmed TOTP authenticator. Always false in UAT Superadmin mode. */
+            mfaEnrolled: boolean;
+            /** @description US-1.2: MFA is mandatory for this user (platform_admin, or a live admin.*, integration.* or ai.manage grant). While required and not verified, the session is pre-MFA: only session, CSRF refresh, logout-all, meta and the /me/mfa enrolment routes answer; everything else is 403 forbidden. */
+            mfaRequired: boolean;
+        };
+        MfaStatus: {
+            enrolled: boolean;
+            required: boolean;
+            recoveryCodesLeft: number;
+        };
+        MfaEnrollment: {
+            /** Format: uuid */
+            enrollmentId: string;
+            /** @description otpauth://totp URI (SHA1, 6 digits, 30 s) holding the seed. Shown once; never returned again or logged. */
+            otpauthUri: string;
+            /**
+             * Format: date-time
+             * @description Confirm before this (10 minutes).
+             */
+            expiresAt: string;
+        };
+        RecoveryCodes: {
+            /** @description Ten single-use codes, shown once. Only HMAC-SHA256 digests are stored; any earlier batch is spent. */
+            recoveryCodes: string[];
         };
         SessionIssued: components["schemas"]["Session"] & {
             /** @description Returned once; keep in memory only. */
@@ -3396,6 +3516,156 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
+    getMyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description MFA state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaStatus"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    startMfaEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enrolment started; the URI is shown once */
+            201: {
+                headers: {
+                    /** @description Always no-store: the body is shown once. */
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MfaEnrollment"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_already_enrolled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    confirmMfaEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                enrollment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description MFA active; recovery codes shown once */
+            200: {
+                headers: {
+                    /** @description Always no-store: the body is shown once. */
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_already_enrolled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description mfa_enrollment_expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    regenerateRecoveryCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New batch; shown once */
+            201: {
+                headers: {
+                    /** @description Always no-store: the body is shown once. */
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_not_enrolled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
     listUsers: {
         parameters: {
             query?: {
@@ -5321,10 +5591,75 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidRequest"];
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    loginWithMfa: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-ITSM-Login": "1";
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    challengeId: string;
+                    code?: string;
+                    /** @description Case, spaces and dashes are ignored. */
+                    recoveryCode?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Authenticated; session cookie set */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionIssued"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            /** @description mfa_invalid (wrong, replayed, locked, unknown or used challenge) or unauthenticated (missing login header) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_challenge_expired */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
         };
     };
 }

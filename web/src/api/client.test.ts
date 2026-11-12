@@ -28,7 +28,7 @@ describe('api client', () => {
     const s = await api.enterUat();
     expect(seen[0]?.headers).toEqual({ 'X-ITSM-UAT-Entry': '1' });
     // CP3a/CP3b: an absent mustChangePassword or platformAdmin (UAT entry, older responses) reads as false.
-    expect(s).toEqual({ ...session, mustChangePassword: false, platformAdmin: false });
+    expect(s).toEqual({ ...session, mustChangePassword: false, platformAdmin: false, mfaEnrolled: false, mfaRequired: false });
     expect('csrfToken' in s).toBe(false);
     expect(api.csrfHeaders()).toEqual({ 'X-CSRF-Token': 'tok' });
   });

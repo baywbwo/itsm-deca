@@ -742,7 +742,13 @@
                   "username_taken",
                   "email_taken",
                   "user_inactive",
-                  "last_admin"
+                  "last_admin",
+                  "mfa_required",
+                  "mfa_invalid",
+                  "mfa_challenge_expired",
+                  "mfa_enrollment_expired",
+                  "mfa_already_enrolled",
+                  "mfa_not_enrolled"
                 ]
               },
               "message": {
@@ -756,6 +762,11 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "rate_limited only: seconds until the next request is accepted (same value as the Retry-After header)."
+              },
+              "challengeId": {
+                "type": "string",
+                "format": "uuid",
+                "description": "mfa_required only: the single-use second-step challenge for POST /api/v1/login/mfa (expires after 5 minutes)."
               }
             }
           }
@@ -890,7 +901,9 @@
           "banner",
           "uatSuperadmin",
           "mustChangePassword",
-          "platformAdmin"
+          "platformAdmin",
+          "mfaEnrolled",
+          "mfaRequired"
         ],
         "properties": {
           "user": {
@@ -912,6 +925,76 @@
           "platformAdmin": {
             "type": "boolean",
             "description": "CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then."
+          },
+            "mfaEnrolled": {
+              "type": "boolean",
+              "description": "US-1.2: password mode, the user has a confirmed TOTP authenticator. Always false in UAT Superadmin mode."
+            },
+            "mfaRequired": {
+              "type": "boolean",
+              "description": "US-1.2: MFA is mandatory for this user (platform_admin, or a live admin.*, integration.* or ai.manage grant). While required and not verified, the session is pre-MFA: only session, CSRF refresh, logout-all, meta and the /me/mfa enrolment routes answer; everything else is 403 forbidden."
+            }
+        }
+      },
+      "MfaStatus": {
+        "type": "object",
+        "required": [
+          "enrolled",
+          "required",
+          "recoveryCodesLeft"
+        ],
+        "properties": {
+          "enrolled": {
+            "type": "boolean"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "recoveryCodesLeft": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          }
+        }
+      },
+      "MfaEnrollment": {
+        "type": "object",
+        "required": [
+          "enrollmentId",
+          "otpauthUri",
+          "expiresAt"
+        ],
+        "properties": {
+          "enrollmentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "otpauthUri": {
+            "type": "string",
+            "description": "otpauth://totp URI (SHA1, 6 digits, 30 s) holding the seed. Shown once; never returned again or logged."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Confirm before this (10 minutes)."
+          }
+        }
+      },
+      "RecoveryCodes": {
+        "type": "object",
+        "required": [
+          "recoveryCodes"
+        ],
+        "properties": {
+          "recoveryCodes": {
+            "type": "array",
+            "minItems": 10,
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$"
+            },
+            "description": "Ten single-use codes, shown once. Only HMAC-SHA256 digests are stored; any earlier batch is spent."
           }
         }
       },
@@ -6882,6 +6965,262 @@
         }
       }
     },
+    "/api/v1/me/mfa": {
+      "get": {
+        "operationId": "getMyMfa",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "US-1.2. The caller's MFA state. Allowed in a pre-MFA session. Never returns the seed or codes. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "responses": {
+          "200": {
+            "description": "MFA state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/enrollment": {
+      "post": {
+        "operationId": "startMfaEnrollment",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "US-1.2. Starts a TOTP enrolment: a new 20-byte seed, stored only encrypted (purpose totp_seed). An unconfirmed earlier enrolment is replaced. 409 mfa_already_enrolled once confirmed. Allowed in a pre-MFA session. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "responses": {
+          "201": {
+            "description": "Enrolment started; the URI is shown once",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store: the body is shown once.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaEnrollment"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "mfa_already_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm": {
+      "post": {
+        "operationId": "confirmMfaEnrollment",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "US-1.2. Proves the authenticator with a first valid code, activates MFA, marks this session MFA-verified and returns 10 recovery codes once. A wrong code is 422 validation_failed (field code) and keeps the session. 410 mfa_enrollment_expired after 10 minutes. Audited as mfa_enroll. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "parameters": [
+          {
+            "name": "enrollment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[0-9]{6}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MFA active; recovery codes shown once",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store: the body is shown once.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodes"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "mfa_already_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "mfa_enrollment_expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/me/mfa/recovery-codes": {
+      "post": {
+        "operationId": "regenerateRecoveryCodes",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Step-up re-authentication follows in CP4b. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "responses": {
+          "201": {
+            "description": "New batch; shown once",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store: the body is shown once.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodes"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "mfa_not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
     "/api/v1/users": {
       "get": {
         "operationId": "listUsers",
@@ -10234,6 +10573,7 @@
     "/api/v1/login": {
       "post": {
         "operationId": "passwordLogin",
+        "description": "Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user.",
         "summary": "Local password login for one deployment",
         "security": [],
         "parameters": [
@@ -10274,7 +10614,14 @@
             "$ref": "#/components/responses/InvalidRequest"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
@@ -10284,6 +10631,109 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/login/mfa": {
+      "post": {
+        "operationId": "loginWithMfa",
+        "summary": "Second login step (TOTP or recovery code)",
+        "description": "US-1.2. Password mode only. Exactly one of code (6 digits, RFC 6238 SHA1/30 s, +-1 step) or recoveryCode. The challenge is single-use and expires after 5 minutes (410 mfa_challenge_expired). A code at or below the last accepted step is a replay and is refused. 5 wrong codes lock TOTP for 15 minutes; a recovery code still works while locked and clears the lock. Every refusal is the generic 401 mfa_invalid. Audited as mfa_verify / recovery_code_used / lockout without codes.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-ITSM-Login",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "challengeId"
+                ],
+                "properties": {
+                  "challengeId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "code": {
+                    "type": "string",
+                    "pattern": "^[0-9]{6}$"
+                  },
+                  "recoveryCode": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Case, spaces and dashes are ignored."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated; session cookie set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionIssued"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "description": "mfa_invalid (wrong, replayed, locked, unknown or used challenge) or unauthenticated (missing login header)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "410": {
+            "description": "mfa_challenge_expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
           }
         }
       }

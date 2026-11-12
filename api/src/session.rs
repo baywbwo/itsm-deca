@@ -37,6 +37,27 @@ const MUST_CHANGE_ALLOWED: &[&str] = &[
     "/api/v1/session/logout-all",
     "/api/v1/meta",
 ];
+pub const LOGIN_MFA_PATH: &str = "/api/v1/login/mfa";
+const ENROLLMENT_PATH: &str = "/api/v1/me/mfa/enrollment";
+/// US-1.2 / TM-02 (b): a pre-MFA session (MFA mandatory, not yet verified) may only read its MFA
+/// state, enrol, confirm the enrolment, and use the session/meta paths.
+const MFA_PENDING_ALLOWED: &[&str] = &[
+    "/api/v1/me/mfa",
+    ENROLLMENT_PATH,
+    "/api/v1/session",
+    "/api/v1/session/csrf",
+    "/api/v1/session/logout-all",
+    "/api/v1/meta",
+];
+
+fn mfa_pending_allows(path: &str) -> bool {
+    MFA_PENDING_ALLOWED.contains(&path)
+        || path
+            .strip_prefix(ENROLLMENT_PATH)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|rest| rest.strip_suffix("/confirm"))
+            .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
 
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -45,6 +66,8 @@ pub struct Session {
     pub uat_superadmin: bool,
     /// US-1.4: until the password is changed only the account paths are reachable.
     pub must_change_password: bool,
+    /// US-1.2: MFA is mandatory for this user and this session has not passed it yet.
+    pub mfa_pending: bool,
     csrf_hash: Vec<u8>,
 }
 
@@ -113,14 +136,25 @@ pub async fn issue(
     user_id: Uuid,
     access_mode: &str,
 ) -> Result<IssuedSession, AppError> {
+    issue_with_mfa(pool, user_id, access_mode, false).await
+}
+
+/// Like [`issue`]; `mfa_verified` marks a session created after a passed second factor.
+pub async fn issue_with_mfa(
+    pool: &PgPool,
+    user_id: Uuid,
+    access_mode: &str,
+    mfa_verified: bool,
+) -> Result<IssuedSession, AppError> {
     let token = random_token().map_err(AppError::internal)?;
     let csrf_token = random_token().map_err(AppError::internal)?;
     sqlx::query(
         "INSERT INTO sessions (token_hash, csrf_hash, user_id, access_mode, expires_at, \
-                               last_seen_at, idle_expires_at, credential_version) \
+                               last_seen_at, idle_expires_at, credential_version, mfa_verified_at) \
          VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), now(), \
                  now() + make_interval(mins => $6), \
-                 (SELECT credential_version FROM local_credentials WHERE user_id = $3))",
+                 (SELECT credential_version FROM local_credentials WHERE user_id = $3), \
+                 CASE WHEN $7 THEN now() END)",
     )
     .bind(digest(&token))
     .bind(digest(&csrf_token))
@@ -128,6 +162,7 @@ pub async fn issue(
     .bind(access_mode)
     .bind(SESSION_TTL_HOURS)
     .bind(SESSION_IDLE_MINUTES)
+    .bind(mfa_verified)
     .execute(pool)
     .await?;
     Ok(IssuedSession { token, csrf_token })
@@ -152,12 +187,14 @@ pub async fn rotate_csrf(pool: &PgPool, session_id: Uuid) -> Result<String, AppE
 }
 
 async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppError> {
-    let row: Option<(Uuid, Uuid, Vec<u8>, bool, bool)> = sqlx::query_as(
+    let row: Option<(Uuid, Uuid, Vec<u8>, bool, bool, bool)> = sqlx::query_as(
         "SELECT s.id, s.user_id, s.csrf_hash, \
                 EXISTS (SELECT 1 FROM platform_grants g \
                         WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin'), \
                 coalesce((SELECT c.must_change_password FROM local_credentials c \
-                          WHERE c.user_id = s.user_id), false) \
+                          WHERE c.user_id = s.user_id), false), \
+                (s.access_mode = 'password' AND s.mfa_verified_at IS NULL \
+                 AND itsm_mfa_required(s.user_id)) \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
            AND (s.idle_expires_at IS NULL OR s.idle_expires_at > now()) \
@@ -199,10 +236,11 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
         }
     }
     Ok(row.map(
-        |(id, user_id, csrf_hash, grant, must_change_password)| Session {
+        |(id, user_id, csrf_hash, grant, must_change_password, mfa_pending)| Session {
             id,
             user_id,
             must_change_password,
+            mfa_pending,
             // The grant is honoured only while the server runs in UAT Superadmin mode;
             // the session's access_mode was matched above.
             uat_superadmin: grant
@@ -242,7 +280,7 @@ pub async fn session_layer(
 ) -> Response {
     let unsafe_method = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     let is_uat_entry = req.uri().path() == UAT_ENTRY_PATH;
-    let is_login = req.uri().path() == "/api/v1/login";
+    let is_login = matches!(req.uri().path(), "/api/v1/login" | LOGIN_MFA_PATH);
     let is_csrf_refresh = req.uri().path() == CSRF_REFRESH_PATH;
 
     let session = match read_cookie(req.headers(), cookie_name(state.config.cookie_secure)) {
@@ -282,10 +320,17 @@ pub async fn session_layer(
         }
     }
 
-    if session.as_ref().is_some_and(|s| s.must_change_password)
-        && !MUST_CHANGE_ALLOWED.contains(&req.uri().path())
-    {
-        return AppError::Forbidden.into_response();
+    // MFA first (TM-02 b), then the forced password change (US-1.4).
+    if let Some(s) = &session {
+        let path = req.uri().path();
+        let refused = if s.mfa_pending {
+            !mfa_pending_allows(path)
+        } else {
+            s.must_change_password && !MUST_CHANGE_ALLOWED.contains(&path)
+        };
+        if refused {
+            return AppError::Forbidden.into_response();
+        }
     }
 
     if let Some(s) = session {
@@ -347,12 +392,36 @@ mod tests {
     }
 
     #[test]
+    fn pre_mfa_allowlist_is_exact() {
+        for ok in [
+            "/api/v1/me/mfa",
+            "/api/v1/me/mfa/enrollment",
+            "/api/v1/me/mfa/enrollment/0b0c/confirm",
+            "/api/v1/session",
+            "/api/v1/meta",
+        ] {
+            assert!(mfa_pending_allows(ok), "{ok}");
+        }
+        for no in [
+            "/api/v1/users",
+            "/api/v1/account/password",
+            "/api/v1/me/mfa/recovery-codes",
+            "/api/v1/me/mfa/enrollment//confirm",
+            "/api/v1/me/mfa/enrollment/a/b/confirm",
+            "/api/v1/me/mfa/enrollmentx",
+        ] {
+            assert!(!mfa_pending_allows(no), "{no}");
+        }
+    }
+
+    #[test]
     fn csrf_compare_rejects_missing_and_wrong_tokens() {
         let s = Session {
             id: Uuid::nil(),
             user_id: Uuid::nil(),
             uat_superadmin: false,
             must_change_password: false,
+            mfa_pending: false,
             csrf_hash: digest("right"),
         };
         let mut h = HeaderMap::new();

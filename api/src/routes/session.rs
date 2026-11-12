@@ -64,6 +64,11 @@ pub struct SessionView {
     must_change_password: bool,
     /// CP3b: the client shows the "Pengguna" admin page only when true (password mode only).
     platform_admin: bool,
+    /// US-1.2: a confirmed TOTP factor exists (password mode only).
+    mfa_enrolled: bool,
+    /// US-1.2: MFA is mandatory for this user's grants; until this session passes it, only the
+    /// MFA enrolment paths are reachable (pre-MFA session).
+    mfa_required: bool,
 }
 
 #[derive(Serialize)]
@@ -116,6 +121,8 @@ pub async fn uat_enter(State(state): State<AppState>) -> Result<Response, AppErr
             uat_superadmin: true,
             must_change_password: false,
             platform_admin: false,
+            mfa_enrolled: false,
+            mfa_required: false,
         },
         csrf_token: issued.csrf_token,
     };
@@ -138,8 +145,14 @@ pub async fn current(
         .bind(s.user_id)
         .fetch_one(&state.pool)
         .await?;
-    let platform_admin = state.config.access_mode == AccessMode::Password
-        && super::users::is_platform_admin(&state.pool, s.user_id).await?;
+    let password_mode = state.config.access_mode == AccessMode::Password;
+    let platform_admin =
+        password_mode && super::users::is_platform_admin(&state.pool, s.user_id).await?;
+    let (mfa_enrolled, mfa_required) = if password_mode {
+        super::mfa::status(&mut *state.pool.acquire().await?, s.user_id).await?
+    } else {
+        (false, false)
+    };
     Ok(Json(SessionView {
         user: UserView {
             id: s.user_id,
@@ -149,6 +162,8 @@ pub async fn current(
         uat_superadmin: s.uat_superadmin,
         must_change_password: s.must_change_password,
         platform_admin,
+        mfa_enrolled,
+        mfa_required,
     }))
 }
 

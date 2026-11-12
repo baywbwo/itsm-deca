@@ -71,6 +71,17 @@ pub enum AppError {
     /// Nothing was processed; `Retry-After` says when the next request is accepted.
     #[error("rate_limited")]
     RateLimited { retry_after_secs: u64 },
+    /// US-1.2: the password was right but a second factor is due; no session was issued.
+    /// `challenge_id` is single-use and short-lived (POST /login/mfa).
+    #[error("mfa_required")]
+    MfaRequired { challenge_id: uuid::Uuid },
+    /// Wrong, reused or locked second factor, or an unknown/spent challenge. Deliberately generic.
+    #[error("mfa_invalid")]
+    MfaInvalid,
+    #[error("mfa_challenge_expired")]
+    MfaChallengeExpired,
+    #[error("mfa_enrollment_expired")]
+    MfaEnrollmentExpired,
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -175,6 +186,26 @@ impl AppError {
                 "rate_limited",
                 "Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi; permintaan ini tidak diproses.",
             ),
+            AppError::MfaRequired { .. } => (
+                StatusCode::UNAUTHORIZED,
+                "mfa_required",
+                "Masukkan kode dari aplikasi autentikator untuk menyelesaikan masuk.",
+            ),
+            AppError::MfaInvalid => (
+                StatusCode::UNAUTHORIZED,
+                "mfa_invalid",
+                "Kode verifikasi tidak dapat diterima.",
+            ),
+            AppError::MfaChallengeExpired => (
+                StatusCode::GONE,
+                "mfa_challenge_expired",
+                "Waktu verifikasi habis. Masuk ulang dengan sandi.",
+            ),
+            AppError::MfaEnrollmentExpired => (
+                StatusCode::GONE,
+                "mfa_enrollment_expired",
+                "Pendaftaran autentikator kedaluwarsa. Mulai ulang pendaftaran.",
+            ),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dependency_unavailable",
@@ -243,6 +274,9 @@ impl IntoResponse for AppError {
             }
             AppError::RateLimited { retry_after_secs } => json!({
                 "error": { "code": code, "message": message, "retryAfterSeconds": retry_after_secs }
+            }),
+            AppError::MfaRequired { challenge_id } => json!({
+                "error": { "code": code, "message": message, "challengeId": challenge_id }
             }),
             _ => json!({ "error": { "code": code, "message": message } }),
         };

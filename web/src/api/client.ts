@@ -265,7 +265,7 @@ export function createApi(transport: Transport) {
   }
   const toSession = (v: Session): Session => ({
     user: v.user, banner: v.banner, uatSuperadmin: v.uatSuperadmin, mustChangePassword: v.mustChangePassword === true,
-    platformAdmin: v.platformAdmin === true,
+    platformAdmin: v.platformAdmin === true, mfaEnrolled: v.mfaEnrolled === true, mfaRequired: v.mfaRequired === true,
   });
 
   const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);

@@ -173,11 +173,45 @@ pub async fn login(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // US-1.2: an enrolled user gets a challenge instead of a session (401 mfa_required). A user
+    // who must use MFA but has not enrolled gets a pre-MFA session that can only enrol.
+    let (mfa_enrolled, mfa_required) = super::mfa::status(&mut tx, user_id).await?;
+    if mfa_enrolled {
+        if state.config.mfa.is_none() {
+            tracing::warn!(error.kind = "mfa_keys_missing", "mfa login without keys");
+            return Err(AppError::Unavailable);
+        }
+        let challenge_id = super::mfa::create_challenge(&mut tx, user_id).await?;
+        tx.commit().await?;
+        return Err(AppError::MfaRequired { challenge_id });
+    }
     auth_event(&mut tx, Some(user_id), &username, "login", "success", None).await?;
     tx.commit().await?;
-    let issued = session::issue(&state.pool, user_id, "password").await?;
+    session_issued(
+        &state,
+        StatusCode::CREATED,
+        user_id,
+        display_name,
+        must_change,
+        false,
+        mfa_required,
+    )
+    .await
+}
+
+/// Issues a password-mode session and answers with the session body, cookie and CSRF token.
+pub(crate) async fn session_issued(
+    state: &AppState,
+    status: StatusCode,
+    user_id: Uuid,
+    display_name: String,
+    must_change: bool,
+    mfa_verified: bool,
+    mfa_required: bool,
+) -> Result<Response, AppError> {
+    let issued = session::issue_with_mfa(&state.pool, user_id, "password", mfa_verified).await?;
     let platform_admin = super::users::is_platform_admin(&state.pool, user_id).await?;
-    Ok((StatusCode::CREATED,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"platformAdmin":platform_admin,"csrfToken":issued.csrf_token}))).into_response())
+    Ok((status,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"platformAdmin":platform_admin,"mfaEnrolled":mfa_verified,"mfaRequired":mfa_required,"csrfToken":issued.csrf_token}))).into_response())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

@@ -8,6 +8,7 @@ pub mod health;
 pub mod intake;
 pub mod integrations;
 pub mod members;
+pub mod mfa;
 pub mod password;
 pub mod reports;
 pub mod saved_views;
@@ -30,6 +31,7 @@ use crate::AppState;
 pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("post", "/api/v1/login"),
+    ("post", "/api/v1/login/mfa"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
@@ -37,6 +39,10 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/session/csrf"),
     ("post", "/api/v1/session/logout-all"),
     ("post", "/api/v1/account/password"),
+    ("get", "/api/v1/me/mfa"),
+    ("post", "/api/v1/me/mfa/enrollment"),
+    ("post", "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm"),
+    ("post", "/api/v1/me/mfa/recovery-codes"),
     ("get", "/api/v1/users"),
     ("post", "/api/v1/users"),
     ("patch", "/api/v1/users/{user_id}"),
@@ -199,6 +205,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/login", post(password::login))
+        .route("/api/v1/login/mfa", post(mfa::login_mfa))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route("/api/v1/meta", get(session::meta))
         .route("/api/v1/uat/session", post(session::uat_enter))
@@ -209,6 +216,16 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/session/logout-all", post(session::logout_all))
         .route("/api/v1/account/password", post(password::change_password))
+        .route("/api/v1/me/mfa", get(mfa::get_status))
+        .route("/api/v1/me/mfa/enrollment", post(mfa::start_enrollment))
+        .route(
+            "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm",
+            post(mfa::confirm_enrollment),
+        )
+        .route(
+            "/api/v1/me/mfa/recovery-codes",
+            post(mfa::regenerate_recovery_codes),
+        )
         .route("/api/v1/users", get(users::list).merge(post(users::create)))
         .route("/api/v1/users/{user_id}", patch(users::update))
         .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))

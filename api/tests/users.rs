@@ -16,6 +16,16 @@ fn state(pool: &PgPool, mode: &str) -> AppState {
         ("ITSM_ACCESS_MODE", mode),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
+        // Synthetic test-only MFA key material (US-1.2): admins must enrol before administering.
+        (
+            "ITSM_KEYRING",
+            "t1:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+        ),
+        ("ITSM_KEYRING_ACTIVE", "t1"),
+        (
+            "ITSM_MFA_RECOVERY_PEPPER",
+            "dGVzdC1wZXBwZXItdGVzdC1wZXBwZXItdGVzdC1wZXBwZXI=",
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v.into()))
@@ -170,7 +180,38 @@ async fn call(
 async fn admin(pool: &PgPool) -> (String, String) {
     let (status, cookie, csrf) = login(pool, "admin@example.test", ADMIN_PASSWORD).await;
     assert_eq!(status, StatusCode::CREATED);
-    (cookie, csrf)
+    let a = (cookie, csrf);
+    enrol_mfa(pool, &a).await;
+    a
+}
+/// US-1.2: an administrator's first session is pre-MFA; enrolling verifies it.
+async fn enrol_mfa(pool: &PgPool, a: &(String, String)) {
+    let (status, body) = call(
+        pool,
+        "POST",
+        "/api/v1/me/mfa/enrollment",
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let uri = body["otpauthUri"].as_str().expect("uri");
+    let secret = uri
+        .split(['?', '&'])
+        .find_map(|p| p.strip_prefix("secret="))
+        .expect("secret");
+    let seed = itsm_api::mfa::base32_decode(secret).expect("base32");
+    let code = itsm_api::mfa::code_at(&seed, itsm_api::mfa::now_step());
+    let id = body["enrollmentId"].as_str().expect("id");
+    let (status, body) = call(
+        pool,
+        "POST",
+        &format!("/api/v1/me/mfa/enrollment/{id}/confirm"),
+        json!({"code": code}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 async fn create_user(pool: &PgPool, a: &(String, String), username: &str) -> (Uuid, String) {
     let (status, body) = call(
@@ -648,6 +689,10 @@ async fn us_1_3_initial_admin_from_init_password_can_administer_users(pool: PgPo
     let a = (cookie, csrf);
     let (_, session) = call(&pool, "GET", "/api/v1/session", Value::Null, (&a.0, &a.1)).await;
     assert_eq!(session["platformAdmin"], true);
+    assert_eq!(session["mfaRequired"], true);
+    let (status, _) = call(&pool, "GET", "/api/v1/users", Value::Null, (&a.0, &a.1)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "pre-MFA until enrolled");
+    enrol_mfa(&pool, &a).await;
     let (status, _) = call(&pool, "GET", "/api/v1/users", Value::Null, (&a.0, &a.1)).await;
     assert_eq!(status, StatusCode::OK);
     let (id, _) = create_user(&pool, &a, "pengguna.pertama").await;

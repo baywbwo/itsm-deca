@@ -196,3 +196,52 @@ async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
     );
     assert_eq!(kept, 1);
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
+    let uid = user(&pool).await;
+    let shape = "SELECT (SELECT count(*) FROM pg_tables WHERE tablename IN \
+                  ('user_mfa_totp','mfa_recovery_codes','mfa_login_challenges')) \
+               + (SELECT count(*) FROM pg_proc WHERE proname = 'itsm_mfa_required') \
+               + (SELECT count(*) FROM pg_constraint WHERE conname = 'auth_events_event_check' \
+                    AND pg_get_constraintdef(oid) LIKE '%recovery_codes_issue%')";
+    let up: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "up");
+    assert_eq!(up, 5);
+    ok(db::MIGRATOR.undo(&pool, 20).await, "undo to 0020");
+    let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
+    assert_eq!(down, 0);
+    let st = sql_state(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome) \
+             VALUES ($1, 'recovery_codes_issue', 'success')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "recovery_codes_issue on 0020",
+    );
+    assert_eq!(st, "23514");
+    ok(db::MIGRATOR.run(&pool).await, "re-apply");
+    let again: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "again");
+    assert_eq!(again, 5);
+    ok(
+        sqlx::query(
+            "INSERT INTO mfa_recovery_codes (user_id, batch_id, code_hash) \
+             VALUES ($1, gen_random_uuid(), decode(repeat('ab', 32), 'hex'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "recovery code row",
+    );
+    // A user's second factor is never dropped silently: down is refused once MFA data exists.
+    assert!(db::MIGRATOR.undo(&pool, 20).await.is_err());
+    let kept: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes WHERE user_id = $1")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await,
+        "kept",
+    );
+    assert_eq!(kept, 1);
+}
