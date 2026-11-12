@@ -1,7 +1,7 @@
 //! R1 I-1 CP2d: platform user administration (US-1.3 create, US-1.5 password reset,
 //! US-1.7 deactivate). Only callers with the `platform_admin` grant; refusals leave a platform
 //! denied-audit row. Temporary passwords are shown once and never stored or logged in clear.
-use super::password::{HASH_SLOTS, auth_event, hash_password};
+use super::password::{HASH_SLOTS, auth_event_by, hash_password};
 use super::ticket_list::body;
 use crate::{AppState, config::AccessMode, error::AppError, session::Session};
 use axum::{
@@ -139,7 +139,16 @@ pub async fn create(
     .execute(&mut *tx)
     .await
     .map_err(unique("local_credentials_username_key", "username_taken"))?;
-    auth_event(&mut tx, Some(id), &username, "user_create", "success", None).await?;
+    auth_event_by(
+        &mut tx,
+        Some(s.user_id),
+        Some(id),
+        &username,
+        "user_create",
+        "success",
+        None,
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(actor = %s.user_id, user_id = %id, "user created");
     Ok((
@@ -196,8 +205,9 @@ pub async fn reset_password(
     .execute(&mut *tx)
     .await?;
     revoke_all(&mut tx, id).await?;
-    auth_event(
+    auth_event_by(
         &mut tx,
+        Some(s.user_id),
         Some(id),
         &username,
         "password_reset_issue",
@@ -275,7 +285,16 @@ pub async fn update(
         .execute(&mut *tx)
         .await?;
     revoke_all(&mut tx, id).await?;
-    auth_event(&mut tx, Some(id), "", "user_deactivate", "success", None).await?;
+    auth_event_by(
+        &mut tx,
+        Some(s.user_id),
+        Some(id),
+        "",
+        "user_deactivate",
+        "success",
+        None,
+    )
+    .await?;
     tx.commit().await?;
     tracing::info!(actor = %s.user_id, user_id = %id, "user deactivated");
     Ok(Json(json!({"id": id, "active": false})).into_response())

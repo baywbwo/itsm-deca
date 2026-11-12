@@ -189,13 +189,17 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
             .await?;
         }
         None => {
-            // US-1.6: an idle-expired session is revoked once and audited without the token.
+            // US-1.6: an expired session is revoked once and audited without the token;
+            // the absolute limit wins over idle when both have passed.
             sqlx::query(
-                "WITH r AS (UPDATE sessions SET revoked_at = now(), revoked_reason = 'idle' \
-                 WHERE token_hash = $1 AND revoked_at IS NULL AND idle_expires_at <= now() \
-                 RETURNING user_id) \
+                "WITH r AS (UPDATE sessions SET revoked_at = now(), revoked_reason = \
+                   CASE WHEN expires_at <= now() THEN 'expired' ELSE 'idle' END \
+                 WHERE token_hash = $1 AND revoked_at IS NULL \
+                   AND (expires_at <= now() OR idle_expires_at <= now()) \
+                 RETURNING user_id, revoked_reason) \
                  INSERT INTO auth_events (user_id, event, outcome, failure_code) \
-                 SELECT user_id, 'logout', 'success', 'session_idle' FROM r",
+                 SELECT user_id, 'session_expire', 'success', \
+                   CASE revoked_reason WHEN 'expired' THEN 'absolute' ELSE 'idle' END FROM r",
             )
             .bind(digest(token))
             .execute(&state.pool)

@@ -374,7 +374,7 @@ async fn us_1_6_session_expires_after_30_minutes_idle_and_is_revoked_and_audited
         .expect("reason");
     assert_eq!(reason.as_deref(), Some("idle"));
     let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE failure_code='session_idle'")
+        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE event='session_expire' AND failure_code='idle' AND actor_id IS NULL")
             .fetch_one(&pool)
             .await
             .expect("n");
@@ -394,6 +394,20 @@ async fn us_1_6_session_absolute_limit_is_12_hours(pool: PgPool) {
     // Activity keeps idle alive but never beyond the absolute limit.
     sqlx::query("UPDATE sessions SET created_at=now()-interval '12 hours 1 second', expires_at=now()-interval '1 second', idle_expires_at=now()+interval '30 minutes'").execute(&pool).await.expect("abs");
     assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+    let reason: Option<String> = sqlx::query_scalar("SELECT revoked_reason FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .expect("reason");
+    assert_eq!(reason.as_deref(), Some("expired"));
+    // Audited once: a second request on the revoked cookie adds no event.
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM auth_events WHERE event='session_expire' AND failure_code='absolute' AND actor_id IS NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("n");
+    assert_eq!(n, 1);
 }
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
 async fn us_1_4_session_with_old_credential_version_is_rejected(pool: PgPool) {

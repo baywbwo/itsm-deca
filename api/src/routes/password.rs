@@ -39,9 +39,23 @@ fn verify(hash: &str, password: &str) -> bool {
             .is_ok()
     })
 }
-/// Appends an auth audit row. Unknown usernames are kept only as a SHA-256 digest; no secrets.
+/// Appends an auth audit row for the user's own action (no actor).
 pub(crate) async fn auth_event(
     tx: &mut sqlx::PgConnection,
+    user_id: Option<Uuid>,
+    username: &str,
+    event: &str,
+    outcome: &str,
+    failure_code: Option<&str>,
+) -> Result<(), AppError> {
+    auth_event_by(tx, None, user_id, username, event, outcome, failure_code).await
+}
+
+/// Appends an auth audit row; `actor` is the admin acting on `user_id` (US-1.3/1.5/1.7).
+/// Unknown usernames are kept only as a SHA-256 digest; no secrets.
+pub(crate) async fn auth_event_by(
+    tx: &mut sqlx::PgConnection,
+    actor: Option<Uuid>,
     user_id: Option<Uuid>,
     username: &str,
     event: &str,
@@ -52,8 +66,8 @@ pub(crate) async fn auth_event(
     let username_hash = user_id
         .is_none()
         .then(|| Sha256::digest(username.as_bytes()).to_vec());
-    sqlx::query("INSERT INTO auth_events(user_id,username_hash,event,outcome,failure_code) VALUES($1,$2,$3,$4,$5)")
-        .bind(user_id).bind(username_hash).bind(event).bind(outcome).bind(failure_code)
+    sqlx::query("INSERT INTO auth_events(user_id,username_hash,event,outcome,failure_code,actor_id) VALUES($1,$2,$3,$4,$5,$6)")
+        .bind(user_id).bind(username_hash).bind(event).bind(outcome).bind(failure_code).bind(actor)
         .execute(tx).await?;
     Ok(())
 }

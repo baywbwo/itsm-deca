@@ -260,7 +260,7 @@ async fn us_1_3_admin_creates_user_with_one_time_temporary_password(pool: PgPool
     let (status, _) = call(&pool, "POST", "/api/v1/users", role, (&a.0, &a.1)).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_create' AND outcome='success'", id).await,
+        count(&pool, "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_create' AND outcome='success' AND actor_id=(SELECT created_by FROM users WHERE id=$1)", id).await,
         1
     );
 }
@@ -356,7 +356,7 @@ async fn us_1_5_password_reset_issues_temporary_password_and_revokes_sessions(po
         StatusCode::CREATED
     );
     assert_eq!(
-        count(&pool, "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='password_reset_issue' AND outcome='success'", id).await,
+        count(&pool, "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='password_reset_issue' AND outcome='success' AND actor_id=(SELECT created_by FROM users WHERE id=$1)", id).await,
         1
     );
     let missing = format!("/api/v1/users/{}/password-reset", Uuid::new_v4());
@@ -411,7 +411,7 @@ async fn us_1_7_deactivate_revokes_sessions_keeps_history_and_protects_last_admi
     assert_eq!(
         count(
             &pool,
-            "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_create'",
+            "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_create' AND actor_id IS NOT NULL",
             id
         )
         .await,
@@ -420,7 +420,7 @@ async fn us_1_7_deactivate_revokes_sessions_keeps_history_and_protects_last_admi
     assert_eq!(
         count(
             &pool,
-            "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_deactivate'",
+            "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_deactivate' AND actor_id=(SELECT created_by FROM users WHERE id=$1)",
             id
         )
         .await,

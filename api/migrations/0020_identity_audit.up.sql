@@ -1,0 +1,13 @@
+-- R1 I-1 CP2e: admin actor on auth audit, session expiry as its own event/reason.
+ALTER TABLE auth_events ADD COLUMN actor_id uuid REFERENCES users (id) ON DELETE RESTRICT;
+CREATE INDEX auth_events_actor_idx ON auth_events (actor_id, occurred_at DESC) WHERE actor_id IS NOT NULL;
+
+ALTER TABLE auth_events DROP CONSTRAINT auth_events_event_check;
+ALTER TABLE auth_events ADD CONSTRAINT auth_events_event_check
+    CHECK (event IN ('login','logout','logout_all','mfa_enroll','mfa_verify','mfa_reset',
+        'recovery_code_used','password_change','password_reset_issue','password_reset_use',
+        'user_create','user_deactivate','lockout','step_up','session_expire'));
+
+ALTER TABLE sessions DROP CONSTRAINT sessions_revoked_reason_check;
+ALTER TABLE sessions ADD CONSTRAINT sessions_revoked_reason_check
+    CHECK (revoked_reason IN ('logout','logout_all','password_change','admin_revoke','idle','mfa_reset','expired'));

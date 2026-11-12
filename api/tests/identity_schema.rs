@@ -146,3 +146,53 @@ async fn migration_0019_rolls_back_and_reapplies(pool: PgPool) {
     );
     assert_eq!(still, 1);
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
+    let uid = user(&pool).await;
+    let shape = "SELECT (SELECT count(*) FROM information_schema.columns \
+                  WHERE table_name = 'auth_events' AND column_name = 'actor_id') \
+               + (SELECT count(*) FROM pg_constraint \
+                  WHERE conname IN ('auth_events_event_check','sessions_revoked_reason_check') \
+                    AND (pg_get_constraintdef(oid) LIKE '%session_expire%' \
+                         OR pg_get_constraintdef(oid) LIKE '%expired%'))";
+    let up: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "up");
+    assert_eq!(up, 3);
+    ok(db::MIGRATOR.undo(&pool, 19).await, "undo to 0019");
+    let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
+    assert_eq!(down, 0);
+    // 0019 audit stays intact and still rejects the 0020-only event.
+    let st = sql_state(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'session_expire', 'success')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "session_expire on 0019",
+    );
+    assert_eq!(st, "23514");
+    ok(db::MIGRATOR.run(&pool).await, "re-apply");
+    let again: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "again");
+    assert_eq!(again, 3);
+    ok(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, actor_id, event, outcome) \
+             VALUES ($1, $1, 'user_deactivate', 'success')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "actor row",
+    );
+    // Append-only audit cannot be rewritten, so down is refused once 0020 data exists.
+    assert!(db::MIGRATOR.undo(&pool, 19).await.is_err());
+    let kept: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE actor_id = $1")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await,
+        "kept",
+    );
+    assert_eq!(kept, 1);
+}
