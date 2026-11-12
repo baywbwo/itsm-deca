@@ -67,7 +67,7 @@ impl CallError {
     /// Fixed Indonesian sentence for notes and outbox errors (never provider text).
     pub fn note(self) -> String {
         match self {
-            CallError::Refused => "Alamat penyedia ditolak: hanya https ke alamat publik yang diizinkan (bukan localhost atau jaringan privat).".to_owned(),
+            CallError::Refused => "Alamat penyedia ditolak: hanya https ke alamat resmi penyedia (Jira *.atlassian.net, Lark open.larksuite.com/open.feishu.cn), bukan jaringan privat.".to_owned(),
             CallError::Connect => "Penyedia tidak dapat dihubungi (DNS atau koneksi gagal).".to_owned(),
             CallError::Timeout => "Penyedia tidak menjawab dalam batas waktu.".to_owned(),
             CallError::Status(401 | 403) => {
@@ -116,6 +116,35 @@ pub fn normalize_base_url(raw: &str, lab: bool) -> Option<String> {
         Some(p) => format!("{}://{host}:{p}", url.scheme()),
         None => format!("{}://{host}", url.scheme()),
     })
+}
+
+/// Hosts a provider may be called at outside lab mode (CP5B-02): Jira Cloud tenants
+/// (`<name>.atlassian.net`, exactly one label) and the two Lark Open Platform regions.
+pub fn allowed_host(provider: &str, host: &str) -> bool {
+    match provider {
+        "jira" => host.strip_suffix(".atlassian.net").is_some_and(|label| {
+            (1..=63).contains(&label.len())
+                && label
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        }),
+        "lark" => matches!(host, "open.larksuite.com" | "open.feishu.cn"),
+        _ => false,
+    }
+}
+
+/// [`normalize_base_url`] plus, outside lab mode, the provider allowlist on the default https
+/// port only: a stored credential is never sent to any other host or port.
+pub fn provider_base_url(provider: &str, raw: &str, lab: bool) -> Option<String> {
+    let base = normalize_base_url(raw, lab)?;
+    if lab {
+        return Some(base);
+    }
+    let url = Url::parse(&base).ok()?;
+    let ok = url.port().is_none() && url.host_str().is_some_and(|h| allowed_host(provider, h));
+    ok.then_some(base)
 }
 
 fn v4_public(ip: Ipv4Addr) -> bool {
@@ -168,10 +197,16 @@ pub struct Target {
 }
 
 impl Target {
-    /// Validates the base URL, resolves it and checks every address, then builds a client pinned
-    /// to those addresses. Call inside the operation's time budget (DNS can hang).
-    pub async fn prepare(raw_base: &str, lab: bool, timeout: Duration) -> Result<Self, CallError> {
-        let base = normalize_base_url(raw_base, lab).ok_or(CallError::Refused)?;
+    /// Validates the base URL against the provider allowlist (again, for settings stored before
+    /// it existed), resolves it and checks every address, then builds a client pinned to those
+    /// addresses. Call inside the operation's time budget (DNS can hang).
+    pub async fn prepare(
+        provider: &str,
+        raw_base: &str,
+        lab: bool,
+        timeout: Duration,
+    ) -> Result<Self, CallError> {
+        let base = provider_base_url(provider, raw_base, lab).ok_or(CallError::Refused)?;
         let url = Url::parse(&base).map_err(|_| CallError::Refused)?;
         let host = url.host_str().ok_or(CallError::Refused)?.to_owned();
         let port = url.port_or_known_default().ok_or(CallError::Refused)?;
@@ -706,12 +741,57 @@ mod tests {
 
     #[tokio::test]
     async fn loopback_target_is_refused_outside_lab_before_any_request() {
-        let r = Target::prepare("https://127.0.0.1:9", false, Duration::from_secs(1)).await;
+        let r = Target::prepare("jira", "https://127.0.0.1:9", false, Duration::from_secs(1)).await;
         assert_eq!(r.err(), Some(CallError::Refused));
-        let r = Target::prepare("https://localhost:9", false, Duration::from_secs(1)).await;
+        let r = Target::prepare("jira", "https://localhost:9", false, Duration::from_secs(1)).await;
         assert_eq!(r.err(), Some(CallError::Refused));
-        let r = Target::prepare("http://8.8.8.8", false, Duration::from_secs(1)).await;
+        let r = Target::prepare("jira", "http://8.8.8.8", false, Duration::from_secs(1)).await;
         assert_eq!(r.err(), Some(CallError::Refused));
+    }
+
+    /// CP5B-02: outside lab mode only the provider's own hosts on the default https port pass,
+    /// in `configure` and again before any request (no DNS lookup for other names).
+    #[tokio::test]
+    async fn cp5b02_only_provider_hosts_on_port_443_outside_lab() {
+        for (provider, good) in [
+            ("jira", "https://acme.atlassian.net"),
+            ("jira", "https://ACME-ops2.atlassian.net/"),
+            ("jira", "https://acme.atlassian.net:443"),
+            ("lark", "https://open.larksuite.com"),
+            ("lark", "https://open.feishu.cn"),
+        ] {
+            assert!(
+                provider_base_url(provider, good, false).is_some(),
+                "{provider} {good}"
+            );
+        }
+        for (provider, bad) in [
+            ("jira", "https://evil.example"),
+            ("jira", "https://atlassian.net"),
+            ("jira", "https://a.b.atlassian.net"),
+            ("jira", "https://acme.atlassian.net.evil.example"),
+            ("jira", "https://evilatlassian.net"),
+            ("jira", "https://-acme.atlassian.net"),
+            ("jira", "https://acme.atlassian.net."),
+            ("jira", "https://acme.atlassian.net:8443"),
+            ("jira", "http://acme.atlassian.net"),
+            ("jira", "https://open.larksuite.com"),
+            ("lark", "https://acme.atlassian.net"),
+            ("lark", "https://open.larksuite.com:8443"),
+            ("lark", "https://x.open.larksuite.com"),
+            ("lark", "https://8.8.8.8"),
+            ("other", "https://acme.atlassian.net"),
+        ] {
+            assert_eq!(
+                provider_base_url(provider, bad, false),
+                None,
+                "{provider} {bad}"
+            );
+            let r = Target::prepare(provider, bad, false, Duration::from_secs(1)).await;
+            assert_eq!(r.err(), Some(CallError::Refused), "{provider} {bad}");
+        }
+        // Lab mode (UAT only) keeps local stubs reachable.
+        assert!(provider_base_url("jira", "http://127.0.0.1:9000", true).is_some());
     }
 
     #[test]

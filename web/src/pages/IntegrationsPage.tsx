@@ -4,6 +4,7 @@ import type {
   IntegrationConnection, IntegrationIdName, IntegrationList, JiraOptions, ProviderCode, Workspace,
 } from '../api/types';
 import { instantLabel } from '../app/format';
+import { credentialRetargeted } from '../app/integrations';
 import { Badge, type BadgeTone } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
@@ -286,7 +287,7 @@ function draftOf(c: IntegrationConnection): SettingsDraft {
 }
 
 const FIELD_ERROR: Record<string, string> = {
-  baseUrl: 'Alamat harus https dan bukan alamat jaringan internal, tanpa path (mis. https://kantor.atlassian.net).',
+  baseUrl: 'Alamat harus https ke penyedia resmi, tanpa port atau path: Jira https://<nama>.atlassian.net; Lark https://open.larksuite.com atau https://open.feishu.cn.',
   email: 'Email akun Jira tidak valid.',
   projectKey: 'Project key 2–31 huruf besar/angka, diawali huruf (mis. OPS).',
   issueTypeId: 'ID tipe isu berupa angka dari Jira.',
@@ -363,7 +364,9 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
       }
       : { appId: draft.appId.trim(), baseUrl: draft.baseUrl.trim() || null, version: c.version };
     const n = await run('settings', 'Pengaturan', () => api.configureIntegration(workspace.id, c.id, body),
-      (n) => `Pengaturan ${label} tersimpan${n.state === 'draft' && c.state !== 'draft' ? '; uji ulang sebelum diaktifkan' : ''}. Tercatat di audit.`);
+      (n) => `Pengaturan ${label} tersimpan${stored && n.credential.state !== 'stored'
+        ? `; ${SECRET_LABEL[c.provider]} dihapus karena alamat atau akun berubah, masukkan ulang`
+        : n.state === 'draft' && c.state !== 'draft' ? '; uji ulang sebelum diaktifkan' : ''}. Tercatat di audit.`);
     if (n) setDraft(draftOf(n));
   }
   async function saveSecret() {
@@ -405,6 +408,7 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
   const canActivate = c.state === 'tested' && modeOk && !liveBlock;
   const canDisable = c.state !== 'disabled';
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(c));
+  const retarget = stored && credentialRetargeted(c.provider, draftOf(c), draft);
   const steps: { id: string; label: string; done: boolean }[] = [
     { id: 'save', label: '1. Atur', done: ready && (!live || stored) },
     { id: 'test', label: '2. Uji', done: (c.state === 'tested' || c.state === 'active') && c.lastTestOk !== false },
@@ -491,6 +495,12 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
               </>
             )}
           </form>
+          {retarget && (
+            <p className="hintline" role="status">
+              Alamat, email atau App ID berubah: {SECRET_LABEL[c.provider]} yang tersimpan akan dihapus saat pengaturan disimpan dan
+              harus dimasukkan ulang oleh pemegang hak kelola kredensial.
+            </p>
+          )}
           {c.provider === 'jira' && (
             <fieldset className="int-map">
               <legend>Pemetaan prioritas &amp; status</legend>

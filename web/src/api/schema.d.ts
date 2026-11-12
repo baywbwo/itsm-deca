@@ -1410,7 +1410,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Save connection settings and mappings (non-secret) */
+        /**
+         * Save connection settings and mappings (non-secret)
+         * @description Changing the target account or address (Jira baseUrl/email, Lark baseUrl/appId) deletes the stored credential in the same transaction; it must be entered again by a holder of integration.credentials. Outside lab mode baseUrl must be https on port 443 at <name>.atlassian.net (Jira) or open.larksuite.com / open.feishu.cn (Lark); anything else is 422 baseUrl.
+         */
         put: operations["configureIntegration"];
         post?: never;
         delete?: never;

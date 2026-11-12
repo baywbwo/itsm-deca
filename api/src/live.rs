@@ -240,8 +240,8 @@ async fn secret(state: &AppState, ws: Uuid, conn: &LiveConn) -> Result<SecretByt
         })
 }
 
-async fn target(state: &AppState, base: &str) -> Result<Target, Failure> {
-    Ok(Target::prepare(base, state.config.integrations.lab, budget(state)).await?)
+async fn target(state: &AppState, provider: &str, base: &str) -> Result<Target, Failure> {
+    Ok(Target::prepare(provider, base, state.config.integrations.lab, budget(state)).await?)
 }
 
 async fn jira(
@@ -254,7 +254,7 @@ async fn jira(
         return Err(Failure::NotConfigured);
     }
     let token = secret(state, ws, conn).await?;
-    let t = target(state, &s.base_url).await?;
+    let t = target(state, "jira", &s.base_url).await?;
     Ok((Jira::new(t, &s.email, token.expose())?, s))
 }
 
@@ -264,7 +264,7 @@ async fn lark(state: &AppState, ws: Uuid, conn: &LiveConn) -> Result<Lark, Failu
         return Err(Failure::NotConfigured);
     }
     let app_secret = secret(state, ws, conn).await?;
-    let t = target(state, &s.base_url).await?;
+    let t = target(state, "lark", &s.base_url).await?;
     Ok(Lark::connect(t, &s.app_id, app_secret.expose()).await?)
 }
 

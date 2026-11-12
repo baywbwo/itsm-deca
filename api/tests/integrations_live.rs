@@ -1133,3 +1133,239 @@ async fn migration_0024_rolls_back_and_reapplies(pool: PgPool) {
     );
     assert_eq!(kept, 1);
 }
+
+async fn put_config(st: &AppState, ws: Uuid, t: &Tok, c: &Value, body: Value) -> Resp {
+    let mut body = body;
+    body["version"] = c["version"].clone();
+    send(
+        st,
+        "PUT",
+        &ws_uri(ws, &format!("integrations/{}/config", s(&c["id"]))),
+        t,
+        None,
+        Some(&body),
+    )
+    .await
+}
+
+async fn grant_manage_only(pool: &PgPool, fx: &Fx) {
+    ok(
+        sqlx::query(
+            "INSERT INTO workspace_grants (workspace_id, membership_id, grant_code, granted_by) \
+             SELECT workspace_id, id, 'integration.manage', $3 FROM workspace_memberships \
+             WHERE workspace_id = $1 AND user_id = $2",
+        )
+        .bind(fx.a)
+        .bind(fx.lead)
+        .bind(fx.admin)
+        .execute(pool)
+        .await,
+        "grant integration.manage",
+    );
+}
+
+async fn secrets_in(pool: &PgPool, ws: Uuid) -> i64 {
+    ok(
+        sqlx::query_scalar("SELECT count(*) FROM encrypted_secrets WHERE workspace_id = $1")
+            .bind(ws)
+            .fetch_one(pool)
+            .await,
+        "secrets",
+    )
+}
+
+async fn last_configure_audit(pool: &PgPool, ws: Uuid) -> Value {
+    ok(
+        sqlx::query_scalar(
+            "SELECT safe_change FROM audit_events WHERE workspace_id = $1 \
+             AND action = 'integration.configure' ORDER BY occurred_at DESC LIMIT 1",
+        )
+        .bind(ws)
+        .fetch_one(pool)
+        .await,
+        "configure audit",
+    )
+}
+
+/// CP5B-01: a holder of `integration.manage` without `integration.credentials` points Jira at
+/// another host. The stored token is deleted in the same transaction, so Test, options and the
+/// intake user search send nothing anywhere until a credential holder enters it again.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5b01_new_target_deletes_the_stored_credential(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let st = state(&pool, LIVE);
+    let (evil, evil_base) = stub().await;
+    let (stub, base) = stub().await;
+    let admin = tok(&pool, fx.admin).await;
+    let c = configure(&st, fx.a, &admin, "jira", &base, JIRA_TOKEN).await;
+    let before = secrets_in(&pool, fx.a).await;
+    let calls_before = stub.lock().map(|g| g.calls.len()).unwrap_or_default();
+
+    grant_manage_only(&pool, &fx).await;
+    let lead = tok(&pool, fx.lead).await;
+    let list = send(&st, "GET", &ws_uri(fx.a, "integrations"), &lead, None, None).await;
+    assert_eq!(list.json["canManageCredentials"], false, "{}", list.json);
+    let jira = json!({"baseUrl": evil_base, "email": JIRA_EMAIL, "projectKey": "OPS",
+                      "issueTypeId": "10001", "priorityMap": {"urgent": "1"}, "statusMap": {"resolved": "10003"}});
+    let r = put_config(&st, fx.a, &lead, &c, jira.clone()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    let item = r.json["item"].clone();
+    assert_eq!(item["state"], "draft");
+    assert_eq!(item["credential"]["state"], "missing", "{item}");
+    assert_eq!(
+        secrets_in(&pool, fx.a).await,
+        before - 1,
+        "old ciphertext deleted"
+    );
+    let audit = last_configure_audit(&pool, fx.a).await;
+    assert_eq!(audit["credentialCleared"], true, "{audit}");
+
+    // Nothing leaves for the new host (nor the old one) without a credential.
+    let r = step(&st, fx.a, &lead, &item, "test").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["lastTestOk"], false);
+    assert!(
+        s(&r.json["item"]["lastTestNote"]).contains("Kredensial belum"),
+        "{}",
+        r.json
+    );
+    let r = send(
+        &st,
+        "GET",
+        &ws_uri(fx.a, &format!("integrations/{}/options", s(&c["id"]))),
+        &lead,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    assert_eq!(evil.lock().map(|g| g.calls.len()).unwrap_or(1), 0);
+    assert_eq!(
+        stub.lock().map(|g| g.calls.len()).unwrap_or_default(),
+        calls_before
+    );
+
+    // A credential holder enters it again for the new target; a mapping-only change keeps it,
+    // a different account (email) deletes it again.
+    let c = configure(&st, fx.a, &admin, "jira", &base, JIRA_TOKEN).await;
+    let mut mapping = jira.clone();
+    mapping["baseUrl"] = json!(base);
+    mapping["issueTypeId"] = json!("10002");
+    let r = put_config(&st, fx.a, &lead, &c, mapping.clone()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["credential"]["state"], "stored");
+    assert_eq!(
+        last_configure_audit(&pool, fx.a).await["credentialCleared"],
+        false
+    );
+    let mut account = mapping;
+    account["email"] = json!("lain@example.test");
+    let r = put_config(&st, fx.a, &lead, &r.json["item"], account).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["credential"]["state"], "missing");
+
+    // Lark: the App ID is part of the target; an empty address equals the international default.
+    let l = configure(&st, fx.a, &admin, "lark", "", LARK_SECRET).await;
+    let r = put_config(
+        &st,
+        fx.a,
+        &lead,
+        &l,
+        json!({"appId": LARK_APP, "baseUrl": "https://open.larksuite.com"}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(
+        r.json["item"]["credential"]["state"], "stored",
+        "same effective address"
+    );
+    let r = put_config(
+        &st,
+        fx.a,
+        &lead,
+        &r.json["item"],
+        json!({"appId": "cli_lain02"}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["credential"]["state"], "missing");
+    assert!(!r.raw.contains(LARK_SECRET) && !r.raw.contains(JIRA_TOKEN));
+}
+
+/// CP5B-02: outside lab mode only the providers' own hosts on port 443 are accepted.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5b02_configure_accepts_only_provider_hosts_on_443(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let prod_like = state(
+        &pool,
+        Opts {
+            lab: false,
+            keyring: true,
+        },
+    );
+    let admin = tok(&pool, fx.admin).await;
+    let jira = connection(&prod_like, fx.a, &admin, "jira").await;
+    for bad in [
+        "https://evil.example",
+        "https://acme.atlassian.net:8443",
+        "https://acme.atlassian.net.evil.example",
+        "https://a.b.atlassian.net",
+        "https://open.larksuite.com",
+        "https://8.8.8.8",
+    ] {
+        let r = put_config(
+            &prod_like,
+            fx.a,
+            &admin,
+            &jira,
+            json!({"baseUrl": bad, "email": JIRA_EMAIL, "projectKey": "OPS"}),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{bad}: {}",
+            r.json
+        );
+        assert_eq!(r.json["error"]["field"], "baseUrl");
+    }
+    let r = put_config(&prod_like, fx.a, &admin, &jira,
+        json!({"baseUrl": "https://Kantor.atlassian.net/", "email": JIRA_EMAIL, "projectKey": "OPS"})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(
+        r.json["item"]["settings"]["baseUrl"],
+        "https://kantor.atlassian.net"
+    );
+
+    let lark = connection(&prod_like, fx.a, &admin, "lark").await;
+    for bad in [
+        "https://open.larksuite.com:8443",
+        "https://kantor.atlassian.net",
+        "https://evil.example",
+    ] {
+        let r = put_config(
+            &prod_like,
+            fx.a,
+            &admin,
+            &lark,
+            json!({"appId": LARK_APP, "baseUrl": bad}),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{bad}: {}",
+            r.json
+        );
+        assert_eq!(r.json["error"]["field"], "baseUrl");
+    }
+    let r = put_config(
+        &prod_like,
+        fx.a,
+        &admin,
+        &lark,
+        json!({"appId": LARK_APP, "baseUrl": "https://open.feishu.cn"}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+}

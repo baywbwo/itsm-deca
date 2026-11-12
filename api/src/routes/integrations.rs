@@ -33,7 +33,7 @@ use crate::config::IntegrationsMode;
 use crate::crypto;
 use crate::error::AppError;
 use crate::live::{self, JiraSettings, LarkSettings, TICKET_STATUSES};
-use crate::providers::{IdName, normalize_base_url};
+use crate::providers::{IdName, provider_base_url};
 use crate::routes::sync::audit_entity;
 use crate::routes::ticket_list::{body, correlation};
 use crate::routes::workspaces::parse_id;
@@ -548,7 +548,7 @@ fn validated(
     let mut m = serde_json::Map::new();
     let base = trimmed(&b.base_url);
     if provider == "jira" {
-        let base = normalize_base_url(base, lab).ok_or(AppError::Validation("baseUrl"))?;
+        let base = provider_base_url("jira", base, lab).ok_or(AppError::Validation("baseUrl"))?;
         let email = trimmed(&b.email);
         let email_ok = (3..=254).contains(&email.len())
             && email.contains('@')
@@ -588,7 +588,8 @@ fn validated(
         );
     } else {
         if !base.is_empty() {
-            let base = normalize_base_url(base, lab).ok_or(AppError::Validation("baseUrl"))?;
+            let base =
+                provider_base_url("lark", base, lab).ok_or(AppError::Validation("baseUrl"))?;
             m.insert("baseUrl".into(), base.into());
         }
         let app_id = trimmed(&b.app_id);
@@ -621,8 +622,26 @@ fn validated(
 
 const TARGET_KEYS: [&str; 5] = ["baseUrl", "email", "projectKey", "issueTypeId", "appId"];
 
+/// What a stored credential is bound to (CP5B-01): the address it is sent to and the account it
+/// belongs to. A Lark connection without `baseUrl` uses the international default.
+fn credential_target(provider: &str, m: &serde_json::Map<String, Value>) -> [String; 3] {
+    let text = |k: &str| {
+        m.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut base = text("baseUrl");
+    if provider == "lark" && base.is_empty() {
+        base = live::LARK_DEFAULT_BASE.to_owned();
+    }
+    [base, text("email"), text("appId")]
+}
+
 /// Saves the provider settings (no secret). A changed target (or mode) sends the connection back
-/// to `draft`; a mapping-only change keeps its state.
+/// to `draft`; a mapping-only change keeps its state. A new address or account deletes the stored
+/// credential in the same transaction (CP5B-01): only a holder of `integration.credentials` may
+/// decide where a secret is sent, so it has to be entered again for the new target.
 pub async fn configure(
     State(state): State<AppState>,
     s: Session,
@@ -649,6 +668,9 @@ pub async fn configure(
         .into_iter()
         .collect();
     let target_changed = cur.mode != mode || changed.iter().any(|k| TARGET_KEYS.contains(k));
+    let cleared = cur.credential_secret_id.filter(|_| {
+        credential_target(&cur.provider, &old) != credential_target(&cur.provider, &fresh)
+    });
     let mut next = fresh.clone();
     if let Some(sim) = old.get("simulatedOutcome") {
         next.insert("simulatedOutcome".into(), sim.clone());
@@ -665,7 +687,10 @@ pub async fn configure(
     };
     sqlx::query(
         "UPDATE integration_connections SET config = $3, mode = $4, state = $5, \
-           last_test_ok = CASE WHEN $6 THEN NULL ELSE last_test_ok END, version = version + 1 \
+           last_test_ok = CASE WHEN $6 THEN NULL ELSE last_test_ok END, \
+           credential_secret_id = CASE WHEN $7 THEN NULL ELSE credential_secret_id END, \
+           credential_updated_at = CASE WHEN $7 THEN NULL ELSE credential_updated_at END, \
+           version = version + 1 \
          WHERE workspace_id = $1 AND id = $2",
     )
     .bind(ws)
@@ -674,8 +699,16 @@ pub async fn configure(
     .bind(mode)
     .bind(to)
     .bind(target_changed)
+    .bind(cleared.is_some())
     .execute(&mut *tx)
     .await?;
+    if let Some(old_secret) = cleared {
+        sqlx::query("DELETE FROM encrypted_secrets WHERE workspace_id = $1 AND id = $2")
+            .bind(ws)
+            .bind(old_secret)
+            .execute(&mut *tx)
+            .await?;
+    }
     let audit_event_id = audit_entity(
         &mut tx,
         ws,
@@ -684,7 +717,8 @@ pub async fn configure(
         "integration_connection",
         id,
         serde_json::json!({
-            "changed": changed, "targetChanged": target_changed, "from": cur.state, "to": to,
+            "changed": changed, "targetChanged": target_changed,
+            "credentialCleared": cleared.is_some(), "from": cur.state, "to": to,
             "mode": mode, "version": b.version + 1
         }),
         &correlation(&headers),
