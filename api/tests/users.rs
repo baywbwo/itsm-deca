@@ -1014,3 +1014,112 @@ async fn cp4b_non_admin_gets_403_on_mfa_reset_and_unlock(pool: PgPool) {
         0
     );
 }
+
+/// TM-41 / A-9 after the main merge (CP-INT): changing an LLM provider or the MCP list needs a
+/// fresh step-up; reading and testing do not. Permission is checked first (403 before 401).
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp_int_ai_settings_changes_need_a_fresh_step_up(pool: PgPool) {
+    let (admin_id, _) = fixture(&pool).await;
+    let a = admin(&pool).await;
+    let membership: (Uuid, Uuid) = sqlx::query_as(
+        "SELECT workspace_id, id FROM workspace_memberships WHERE user_id=$1 AND active LIMIT 1",
+    )
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .expect("membership");
+    let ws = membership.0;
+    sqlx::query(
+        "INSERT INTO workspace_grants(workspace_id,membership_id,grant_code,granted_by) \
+         VALUES($1,$2,'integration.manage',$3)",
+    )
+    .bind(ws)
+    .bind(membership.1)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("grant");
+    let base = format!("/api/v1/workspaces/{ws}/ai-settings");
+    let provider = json!({"model":"gpt-synthetic","baseUrl":"https://llm.example.test/v1","keyEnv":"SYNTHETIC_LLM_KEY"});
+    let (status, body) = call(
+        &pool,
+        "PUT",
+        &format!("{base}/providers/openai"),
+        provider.clone(),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &format!("{base}/mcp-servers"),
+        json!({"name":"Synthetic MCP","transport":"http","endpoint":"https://mcp.example.test"}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let server = body["id"].as_str().expect("id").to_owned();
+
+    expire_step_up(&pool, admin_id).await;
+    let mut changed = provider;
+    changed["baseUrl"] = json!("https://exfil.example.test/v1");
+    changed["version"] = json!(1);
+    for (method, path, body) in [
+        ("PUT", format!("{base}/providers/openai"), changed),
+        (
+            "POST",
+            format!("{base}/mcp-servers"),
+            json!({"name":"Stale MCP","transport":"http","endpoint":"https://mcp2.example.test"}),
+        ),
+        (
+            "PATCH",
+            format!("{base}/mcp-servers/{server}"),
+            json!({"enabled":true,"version":1}),
+        ),
+    ] {
+        let (status, body) = call(&pool, method, &path, body, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(body["error"]["code"], "step_up_required", "{method} {path}");
+    }
+    let (base_url, version): (Option<String>, i32) = sqlx::query_as(
+        "SELECT base_url, version FROM ai_providers WHERE workspace_id=$1 AND provider='openai'",
+    )
+    .bind(ws)
+    .fetch_one(&pool)
+    .await
+    .expect("provider");
+    assert_eq!(
+        (base_url.as_deref(), version),
+        (Some("https://llm.example.test/v1"), 1)
+    );
+    let mcp: (i64, bool) =
+        sqlx::query_as("SELECT count(*), bool_or(enabled) FROM mcp_servers WHERE workspace_id=$1")
+            .bind(ws)
+            .fetch_one(&pool)
+            .await
+            .expect("mcp");
+    assert_eq!(mcp, (1, false));
+    let (status, _) = call(&pool, "GET", &base, Value::Null, (&a.0, &a.1)).await;
+    assert_eq!(status, StatusCode::OK, "reading needs no step-up");
+
+    // Without integration.manage the answer is 403 even with a stale step-up (403 before 401).
+    sqlx::query(
+        "UPDATE workspace_grants SET revoked_at=now(), revoked_by=$2 \
+         WHERE membership_id=$1 AND grant_code='integration.manage'",
+    )
+    .bind(membership.1)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("revoke");
+    let (status, body) = call(
+        &pool,
+        "PUT",
+        &format!("{base}/providers/openai"),
+        json!({"model":"x","version":1}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

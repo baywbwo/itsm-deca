@@ -11369,6 +11369,16 @@
               }
             }
           },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Versi tidak cocok"
           },
@@ -11378,7 +11388,8 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it."
       }
     },
     "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}/test": {
@@ -11460,13 +11471,24 @@
               }
             }
           },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Isian tidak valid"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it."
       }
     },
     "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}": {
@@ -11513,6 +11535,16 @@
               }
             }
           },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Tidak ditemukan"
           },
@@ -11522,7 +11554,8 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it."
       }
     },
     "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}/test": {

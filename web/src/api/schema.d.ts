@@ -1304,7 +1304,10 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Simpan konfigurasi penyedia LLM (tanpa rahasia) */
+        /**
+         * Simpan konfigurasi penyedia LLM (tanpa rahasia)
+         * @description Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it.
+         */
         put: operations["saveAiProvider"];
         post?: never;
         delete?: never;
@@ -1339,7 +1342,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Tambah MCP server */
+        /**
+         * Tambah MCP server
+         * @description Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it.
+         */
         post: operations["createMcpServer"];
         delete?: never;
         options?: never;
@@ -1360,7 +1366,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Ubah MCP server */
+        /**
+         * Ubah MCP server
+         * @description Needs a step-up (POST /session/step-up) in the last 5 minutes (TM-41); UAT Superadmin skips it.
+         */
         patch: operations["updateMcpServer"];
         trace?: never;
     };
@@ -6128,6 +6137,15 @@ export interface operations {
                     "application/json": components["schemas"]["AiProviderView"];
                 };
             };
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Versi tidak cocok */
             409: {
                 headers: {
@@ -6197,6 +6215,15 @@ export interface operations {
                     "application/json": components["schemas"]["McpServerView"];
                 };
             };
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Isian tidak valid */
             422: {
                 headers: {
@@ -6229,6 +6256,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpServerView"];
+                };
+            };
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Tidak ditemukan */

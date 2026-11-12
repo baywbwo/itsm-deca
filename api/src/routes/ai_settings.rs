@@ -5,6 +5,10 @@
 //! berdasarkan keberadaan variabel saat proses berjalan dan tidak pernah mengembalikan nilainya.
 //! Semua operasi butuh grant eksplisit `integration.manage`, memeriksa `version` (409) dan
 //! menulis baris audit dalam transaksi yang sama.
+//!
+//! TM-41 / A-9: perubahan konfigurasi (penyedia: base URL, model, sumber kunci; daftar MCP) butuh
+//! step-up TOTP ≤5 menit setelah cek izin (403 dulu, lalu 401 `step_up_required`). Membaca dan
+//! menguji koneksi tidak mengubah konfigurasi, jadi tidak butuh step-up.
 
 use axum::Json;
 use axum::extract::rejection::JsonRejection;
@@ -252,6 +256,7 @@ pub async fn save_provider(
     payload: Result<Json<ProviderBody>, JsonRejection>,
 ) -> Result<Json<ProviderView>, AppError> {
     let access = require_manage(&state, &s, &raw_ws).await?;
+    authz::require_step_up(&state, &s)?;
     let code = provider_code(&raw_provider)?;
     let b = body(payload)?;
     let model = match b.model.as_deref() {
@@ -446,6 +451,7 @@ pub async fn create_mcp(
     payload: Result<Json<McpBody>, JsonRejection>,
 ) -> Result<Json<McpView>, AppError> {
     let access = require_manage(&state, &s, &raw_ws).await?;
+    authz::require_step_up(&state, &s)?;
     let b = body(payload)?;
     let (name, transport, endpoint, command) = mcp_parts(&b)?;
     let auth_env = match b.auth_env.as_deref() {
@@ -509,6 +515,7 @@ pub async fn update_mcp(
     payload: Result<Json<McpPatch>, JsonRejection>,
 ) -> Result<Json<McpView>, AppError> {
     let access = require_manage(&state, &s, &raw_ws).await?;
+    authz::require_step_up(&state, &s)?;
     let id = parse_id(&raw_id)?;
     let b = body(payload)?;
     let name = match b.name.as_deref() {
