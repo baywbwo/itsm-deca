@@ -70,6 +70,9 @@ a.kpi2:hover { border-color: var(--sapphire); }
 .ptable tbody tr:hover { background: #f8fafd; }
 .ptable tbody tr:last-child td { border-bottom: 0; }
 .tno { font-weight: 800; color: var(--sapphire); text-decoration: none; }
+/* CP-UI2b Perlu perhatian: the subject wraps so the four columns fit a phone (prototype 11). */
+table.attn td:nth-child(2) { white-space: normal; }
+table.attn .tsub { max-width: none; }
 a.tno:hover, button.tno:hover { text-decoration: underline; }
 button.tno { border: 0; background: none; padding: 0; font: inherit; font-weight: 800; color: var(--sapphire); cursor: pointer; }
 .tsub { display: block; font-weight: 700; color: var(--ink); white-space: normal; max-width: 420px; }
@@ -182,6 +185,8 @@ ol.tl > li p { margin: 0; }
   .dhead .acts > * { flex: 1 1 auto; }
   dl.kv { grid-template-columns: 96px minmax(0, 1fr); }
   .chip-rows { padding: 10px 12px; }
+  table.attn th, table.attn td { padding-left: 8px; padding-right: 8px; }
+  table.attn td:first-child, table.attn th:first-child { padding-left: 12px; }
   .toolbar-tools { margin-left: 0; width: 100%; }
   .list-card .ticket-toolbar .toolbar-search { max-width: none; flex-basis: 100%; }
   .ppager .r { margin-left: 0; width: 100%; }

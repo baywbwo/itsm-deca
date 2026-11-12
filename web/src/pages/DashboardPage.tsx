@@ -379,7 +379,7 @@ function AttentionTable({ api, d }: { api: Api; d: Dashboard }) {
   }
   return (
     <div className="ptable" role="region" aria-label="Tiket perlu perhatian" tabIndex={0}>
-      <table>
+      <table className="attn">
         <caption className="sr-only">Tiket aktif tanpa PIC · paling lama diterima dulu · {num(s.items.length)} dari {num(s.total)}</caption>
         <thead><tr><th scope="col">Nomor</th><th scope="col">Subjek</th><th scope="col">Status</th><th scope="col">Umur</th></tr></thead>
         <tbody>
