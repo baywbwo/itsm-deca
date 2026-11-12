@@ -8,6 +8,7 @@ import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../comp
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
 import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { MfaEnrolScreen, StepUpDialog } from '../pages/MfaScreens';
 import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
@@ -60,6 +61,10 @@ export function App({ api }: { api: Api }) {
   }
   if (boot.status === 'no_access') {
     return <LoginScreen api={api} meta={boot.meta} notice={notice} onSuccess={loggedIn} />;
+  }
+  if (boot.status === 'mfa_enrol') {
+    return <MfaEnrolScreen api={api} session={boot.session} onDone={retry}
+      onLogout={() => { void api.logout().finally(retry); }} />;
   }
   if (boot.status === 'must_change') {
     return <ChangePasswordScreen api={api} session={boot.session} username={username} onChanged={retry}
@@ -268,6 +273,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
               </Popover>
               <AccountMenu api={api} session={session} role={role} passwordMode={meta.accessMode === 'password'}
                 username={username} onLoggedOutAll={onLoggedOutAll} onLogout={logout} onNotice={setToast} />
+              <StepUpDialog api={api} />
             </div>
           </header>
           <div className="content">

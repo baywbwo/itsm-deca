@@ -368,13 +368,14 @@ pub async fn mfa_reset(
 }
 
 /// PD-1: clears the password and TOTP lockout of a user before it runs out. Audited as
-/// `user_unlock`. Sessions are untouched.
+/// `user_unlock`. Sessions are untouched. Needs a fresh step-up (04-fsd, S-12).
 pub async fn unlock(
     State(state): State<AppState>,
     s: Session,
     Path(raw): Path<String>,
 ) -> Result<Response, AppError> {
     platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
     let id = user_id(&raw)?;
     let mut tx = state.pool.begin().await?;
     let username: String =

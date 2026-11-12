@@ -56,6 +56,9 @@ import type {
   UserListItem,
   Workspace,
   WorkspacePermissions,
+  MfaStatus,
+  MfaEnrollment,
+  RecoveryCodes,
 } from './types';
 
 type Obj = Record<string, unknown>;
@@ -457,7 +460,7 @@ const isTemp = (v: unknown) => isStr(v) && v.length > 0;
 export const isUserListItem = (v: unknown): v is UserListItem =>
   isObj(v) && isStr(v.id) && isStrOrNull(v.username) && isStr(v.displayName) && isStrOrNull(v.email) &&
   isBool(v.active) && isBool(v.mustChangePassword) && isBool(v.locked) && isBool(v.platformAdmin) &&
-  isStr(v.createdAt) && isStrOrNull(v.deactivatedAt);
+  isBool(v.mfaEnrolled) && isStr(v.createdAt) && isStrOrNull(v.deactivatedAt);
 
 export const isUserList = (v: unknown): v is UserList =>
   isObj(v) && isArr(v.items, isUserListItem) && isStrOrNull(v.nextCursor);
@@ -469,3 +472,13 @@ export const isUserCreated = (v: unknown): v is UserCreated =>
 export const isTemporaryPassword = (v: unknown): v is TemporaryPassword => isObj(v) && isTemp(v.temporaryPassword);
 
 export const isUserDeactivated = (v: unknown): v is UserDeactivated => isObj(v) && isStr(v.id) && v.active === false;
+
+// CP4c (US-1.2): MFA state, enrolment and one-time recovery codes. Shapes only; values are never logged.
+export const isMfaStatus = (v: unknown): v is MfaStatus =>
+  isObj(v) && isBool(v.enrolled) && isBool(v.required) && isNum(v.recoveryCodesLeft);
+
+export const isMfaEnrollment = (v: unknown): v is MfaEnrollment =>
+  isObj(v) && isStr(v.enrollmentId) && isStr(v.otpauthUri) && v.otpauthUri.startsWith('otpauth://totp/') && isStr(v.expiresAt);
+
+export const isRecoveryCodes = (v: unknown): v is RecoveryCodes =>
+  isObj(v) && isArr(v.recoveryCodes, isStr) && (v.recoveryCodes as unknown[]).length === 10;

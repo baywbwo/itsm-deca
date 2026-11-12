@@ -353,3 +353,29 @@ fieldset.brand-presets { display: grid; gap: 8px; }
 .req { color: var(--danger-ink, #a22b2b); margin-left: 2px; }
 .intake-chrono-foot { gap: 8px; flex-wrap: wrap; align-items: flex-start; }
 .intake-chrono-foot .field-hint { flex: 1 1 260px; min-width: 0; }
+
+/* CP4c MFA: enrolment key, one-time recovery codes, step-up and Keamanan akun. */
+.mfa-steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 13px; color: var(--ink-2); }
+.mfa-secret { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--line-soft); min-width: 0; }
+.mfa-secret p { margin: 0; }
+.mfa-secret-key code { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; letter-spacing: .06em; color: var(--ink); overflow-wrap: anywhere; }
+.mfa-uri summary { cursor: pointer; font-size: 12.5px; color: var(--ink-2); }
+.mfa-uri { display: grid; gap: 6px; }
+.mfa-uri[open] { gap: 8px; }
+.mfa-uri-text { display: block; font-size: 11.5px; overflow-wrap: anywhere; word-break: break-all; color: var(--muted); }
+.mfa-uri .btn { justify-self: start; }
+.recovery-codes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; margin: 12px 0; padding-left: 24px; }
+.recovery-codes code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; letter-spacing: .03em; }
+.step-up-form { margin: 0; }
+.step-up-form p { margin: 0; }
+.account-security { display: grid; gap: 12px; min-width: 0; }
+.account-security .auth-form { margin: 0; }
+.security-facts { display: grid; gap: 8px; margin: 0; }
+.security-facts > div { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+.security-facts dt { color: var(--muted); font-size: 13px; }
+.security-facts dd { margin: 0; font-weight: 600; font-size: 13px; }
+.security-confirm { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.security-confirm p { margin: 0; }
+@media (max-width: 560px) {
+  .recovery-codes { grid-template-columns: 1fr; }
+}

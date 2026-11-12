@@ -26,6 +26,8 @@ export type Boot =
   | { status: 'loading' }
   | { status: 'ready'; meta: Meta; session: Session; workspaces: Workspace[] }
   | { status: 'no_access'; meta: Meta }
+  /** US-1.2 (TM-02 b): a role that needs MFA without an authenticator may only enrol (and log out). */
+  | { status: 'mfa_enrol'; meta: Meta; session: Session }
   /** US-1.4: only the change-password screen (and logout) until the password is changed. */
   | { status: 'must_change'; meta: Meta; session: Session }
   | { status: 'error'; error: unknown };
@@ -46,6 +48,8 @@ export async function loadBoot(api: Api, signal: AbortSignal): Promise<Boot> {
     if (meta.accessMode === 'password') return { status: 'no_access', meta };
     session = await api.enterUat(signal);
   }
+  // MFA first, then the forced password change: the server checks them in that order.
+  if (meta.accessMode === 'password' && session.mfaRequired && !session.mfaEnrolled) return { status: 'mfa_enrol', meta, session };
   if (session.mustChangePassword) return { status: 'must_change', meta, session };
   const workspaces = await api.listWorkspaces(signal);
   return { status: 'ready', meta, session, workspaces };

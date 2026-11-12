@@ -1271,7 +1271,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description CP4b. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). No step-up (04b E1). Idempotent. Requires the CSRF token. Audited as user_unlock with actor. */
+        /** @description CP4b/CP4c. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required (04-fsd, S-12); the guard runs after the permission check, so a caller without the right still gets 403. Idempotent. Requires the CSRF token. Audited as user_unlock with actor. */
         post: operations["unlockUser"];
         delete?: never;
         options?: never;
@@ -1532,7 +1532,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -6079,7 +6079,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];

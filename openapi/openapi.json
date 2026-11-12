@@ -748,7 +748,10 @@
                   "mfa_challenge_expired",
                   "mfa_enrollment_expired",
                   "mfa_already_enrolled",
-                  "mfa_not_enrolled"
+                  "mfa_not_enrolled",
+                  "step_up_required",
+                  "mfa_required_for_role",
+                  "self_mfa_reset"
                 ]
               },
               "message": {
@@ -11270,13 +11273,20 @@
             }
           }
         ],
-        "description": "CP4b. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). No step-up (04b E1). Idempotent. Requires the CSRF token. Audited as user_unlock with actor.",
+        "description": "CP4b/CP4c. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required (04-fsd, S-12); the guard runs after the permission check, so a caller without the right still gets 403. Idempotent. Requires the CSRF token. Audited as user_unlock with actor.",
         "responses": {
           "204": {
             "description": "Lockout cleared"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"

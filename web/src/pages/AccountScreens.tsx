@@ -16,12 +16,14 @@ import {
   type PasswordErrors,
   type PasswordField,
 } from '../app/account';
+import { isTotp, loginMfaError, normalizeTotp } from '../app/mfa';
+import { AccountSecurityDialog } from './MfaScreens';
 
 /** A message carried to the login screen: why the person is back here. */
 export interface LoginNotice { title: string; text: string }
 
 /** Split layout of the owner reference (design/reference-owner-v1/01-login.png). */
-function AuthLayout({ children }: { children: ReactNode }) {
+export function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <div className="auth-screen">
       <section className="auth-hero" aria-label="Tentang aplikasi">
@@ -60,32 +62,99 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // US-1.2 second step: the challenge from a 401 mfa_required, kept only in memory.
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [code, setCode] = useState('');
+  const [stepNotice, setStepNotice] = useState<string | null>(null);
 
   async function login(e: FormEvent) {
     e.preventDefault();
     if (busy) return;
     setBusy(true);
     setError('');
+    setStepNotice(null);
     try {
       await api.login(username, password);
       setPassword('');
       onSuccess(username);
     } catch (err) {
       setPassword('');
+      if (err instanceof ApiError && err.code === 'mfa_required' && err.challengeId) {
+        setChallenge(err.challengeId); setUseRecovery(false); setCode('');
+        return;
+      }
       setError(loginErrorText(err));
     } finally {
       setBusy(false);
     }
   }
 
+  async function verify(e: FormEvent) {
+    e.preventDefault();
+    if (busy || !challenge) return;
+    const value = code.trim();
+    if (!useRecovery && !isTotp(value)) { setError('Masukkan 6 digit kode dari aplikasi autentikator.'); return; }
+    if (useRecovery && !value) { setError('Masukkan recovery code.'); return; }
+    setBusy(true);
+    setError('');
+    try {
+      await api.loginMfa(challenge, useRecovery ? { recoveryCode: value } : { code: normalizeTotp(value) });
+      setCode(''); setChallenge(null);
+      onSuccess(username);
+    } catch (err) {
+      setCode('');
+      const r = loginMfaError(err);
+      if (r.restart) { setChallenge(null); setStepNotice(r.text); } else setError(r.text);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const back = () => { setChallenge(null); setCode(''); setError(''); };
+
+  if (challenge) {
+    return (
+      <AuthLayout>
+        <h1>Verifikasi dua langkah</h1>
+        <p className="muted">{useRecovery
+          ? 'Masukkan salah satu recovery code yang Anda simpan saat mengaktifkan MFA. Tiap kode hanya berlaku sekali.'
+          : 'Buka aplikasi autentikator lalu masukkan kode 6 digit untuk akun ini.'}</p>
+        <form className="auth-form" onSubmit={(e) => void verify(e)} noValidate>
+          {useRecovery ? (
+            <TextField key="recovery" label="Recovery code" name="recoveryCode" autoComplete="off" autoCapitalize="characters"
+              spellCheck={false} maxLength={64} value={code} onChange={(e) => setCode(e.target.value)} disabled={busy}
+              hint="Format XXXX-XXXX-XXXX-XXXX." autoFocus />
+          ) : (
+            <TextField key="totp" label="Kode autentikator" name="code" inputMode="numeric" autoComplete="one-time-code"
+              maxLength={7} value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} autoFocus />
+          )}
+          {error && <p role="alert" className="auth-error">{error}</p>}
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Verifikasi'}</Button>
+          <Button variant="ghost" disabled={busy} onClick={() => { setUseRecovery((v) => !v); setCode(''); setError(''); }}>
+            {useRecovery ? 'Pakai kode autentikator' : 'Pakai recovery code'}
+          </Button>
+          <Button variant="ghost" disabled={busy} onClick={back}>Kembali</Button>
+        </form>
+        <p className="tiny muted auth-help">Kehilangan perangkat dan recovery code? Hubungi admin platform untuk reset MFA.</p>
+      </AuthLayout>
+    );
+  }
+
   return (
     <AuthLayout>
       <h1>Masuk ke workspace</h1>
       <p className="muted">Gunakan akun internal yang diberikan administrator.</p>
-      {notice && (
+      {notice && !stepNotice && (
         <div className="auth-notice" role="status">
           <strong>{notice.title}</strong>
           <span>{notice.text}</span>
+        </div>
+      )}
+      {stepNotice && (
+        <div className="auth-notice" role="status">
+          <strong>Verifikasi dua langkah</strong>
+          <span>{stepNotice}</span>
         </div>
       )}
       {meta.accessMode === 'password' ? (
@@ -249,6 +318,7 @@ export function AccountMenu({ api, session, role, passwordMode, username, onLogg
 }) {
   const [confirming, setConfirming] = useState(false);
   const [changing, setChanging] = useState(false);
+  const [security, setSecurity] = useState(false);
   return (
     <>
       <Popover className="account-menu" label="Menu akun"
@@ -265,6 +335,7 @@ export function AccountMenu({ api, session, role, passwordMode, username, onLogg
             {passwordMode && (
               <>
                 <Button onClick={() => { close(); setChanging(true); }}>Ganti kata sandi</Button>
+                <Button onClick={() => { close(); setSecurity(true); }}>Keamanan akun</Button>
                 <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
               </>
             )}
@@ -274,6 +345,7 @@ export function AccountMenu({ api, session, role, passwordMode, username, onLogg
       </Popover>
       <ChangePasswordDialog api={api} open={changing} username={username} onClose={() => setChanging(false)}
         onDone={() => { setChanging(false); onNotice(PASSWORD_CHANGED_TEXT); }} />
+      <AccountSecurityDialog api={api} open={security} onClose={() => setSecurity(false)} onNotice={onNotice} />
       <LogoutAllDialog api={api} open={confirming} onClose={() => setConfirming(false)} onDone={onLoggedOutAll} />
     </>
   );
