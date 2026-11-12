@@ -143,7 +143,7 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
 
   return (
     <AuthLayout>
-      <h1>Masuk ke workspace</h1>
+      <h1>Masuk ke ITSM</h1>
       <p className="muted">Gunakan akun internal yang diberikan administrator.</p>
       {notice && !stepNotice && (
         <div className="auth-notice" role="status">

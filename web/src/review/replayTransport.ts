@@ -191,7 +191,7 @@ export function replayTransport(f: Fixtures, latencyMs = 250, scenario: Scenario
         if (scenario === 'intake-degraded') return notRecorded('pengiriman ulang pada skenario ini');
       }
       const hit = f.responses[`POST ${path}#${variant}`];
-      if (!hit) return notRecorded('pembuatan tiket di workspace ini');
+      if (!hit) return notRecorded('pembuatan tiket di perusahaan ini');
       return { status: hit.status, body: structuredClone(hit.body), requestId: hit.requestId };
     }
     if (method === 'POST' && ASSIGN.test(path)) {

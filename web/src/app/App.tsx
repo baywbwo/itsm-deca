@@ -106,12 +106,10 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
   const scope = useScope(api, route.workspaceId, attempt);
   const [drawer, setDrawer] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const [pendingSwitch, setPendingSwitch] = useState<Workspace | null>(null);
-  // The workspace <select> that started a guarded switch: Cancel returns focus to it.
-  const switchOrigin = useRef<HTMLElement | null>(null);
   const pendingNav = usePendingNav();
-  // The switcher list; refreshed after a settings save so a rename or a new company shows
-  // without a reload. A failed refresh keeps the previous list (the save itself succeeded).
+  // CP5a: no workspace switcher. The server lists only the caller's company (UAT Superadmin:
+  // every company, for the UAT company admin). Refreshed after a UAT company save so a rename
+  // shows without a reload; a failed refresh keeps the previous list (the save itself succeeded).
   const [workspaces, setWorkspaces] = useState(bootWorkspaces);
   // Only the newest refresh may land: an older, slower answer must not bring back old names or branding.
   const listSeq = useRef(0);
@@ -121,10 +119,12 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
   }, [api]);
   const first = workspaces[0];
 
-  // No workspace in the URL: open the first one the server lists.
+  // The company is decided by the server: no workspace in the URL, or one the caller cannot open
+  // (old bookmark, another company), opens the caller's own company instead.
+  const routeListed = workspaces.some((w) => w.id === route.workspaceId);
   useEffect(() => {
-    if (!route.workspaceId && first) navigate(toHash({ workspaceId: first.id, page: route.page }), true);
-  }, [route.workspaceId, route.page, first]);
+    if (first && !routeListed) navigate(toHash({ workspaceId: first.id, page: route.page }), true);
+  }, [routeListed, route.page, first]);
 
   useEffect(() => {
     if (!toast) return;
@@ -182,39 +182,12 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
   useEffect(() => setNavGuard((from, to) =>
     leavesScope(from, to) && !!from.workspaceId && drafts.dirty(session.user.id, from.workspaceId)), [session.user.id]);
 
-  function switchWorkspace(id: string, origin: HTMLElement) {
-    const next = workspaces.find((w) => w.id === id);
-    if (!next || id === route.workspaceId) return;
-    // A dirty intake draft in the current workspace: keep it, discard it or stay (C13/O05).
-    if (route.workspaceId && drafts.dirty(session.user.id, route.workspaceId)) {
-      // The drawer stays open on mobile so Cancel can hand focus back to the same picker.
-      switchOrigin.current = origin;
-      setPendingSwitch(next);
-      return;
-    }
-    go(next);
-  }
-  function go(next: Workspace) {
-    setDrawer(false);
-    setPendingSwitch(null);
-    navigate(toHash({ workspaceId: next.id, page: route.page }), false, true);
-    setToast(`Workspace aktif: ${next.code} · ${next.name}`);
-  }
-
   // Answer to the leave guard: the mobile drawer closes like a normal nav pick.
   function leave(discard: boolean) {
     if (discard && route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
     setDrawer(false);
     resolvePendingNav(true);
   }
-
-  const workspaceSelect = (className: string, id: string) => (
-    <select id={id} className={className} value={listed?.id ?? ''}
-      onChange={(e) => switchWorkspace(e.target.value, e.currentTarget)}>
-      {!listed && <option value="">Pilih workspace</option>}
-      {workspaces.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
-    </select>
-  );
 
   const nav = (onPick?: () => void) => (
     <nav className="nav" aria-label="Navigasi utama">
@@ -255,12 +228,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
             <div className="top-left">
               <button type="button" className="iconbtn mobile-only" aria-label="Buka navigasi"
                 aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></button>
-              <div className="crumb">
-                <label className="sr-only" htmlFor="crumb-ws">Workspace</label>
-                {workspaceSelect('crumb-ws', 'crumb-ws')}
-                <span className="crumb-sep" aria-hidden="true">/</span>
-                <b>{crumbLabel(route)}</b>
-              </div>
+              <CompanyCrumb company={listed} page={crumbLabel(route)} />
               <span className="top-title" aria-hidden="true">{crumbLabel(route)}</span>
             </div>
             <div className="top-right">
@@ -288,30 +256,12 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
           </div>
         </main>
       </div>
-      <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
+      <Dialog open={drawer} onClose={() => setDrawer(false)} title="Navigasi" variant="drawer">
         <SideBrand />
-        <label className="drawer-field" htmlFor="drawer-ws">Workspace{workspaceSelect('', 'drawer-ws')}</label>
+        <DrawerCompany company={listed} />
         {canSearch && <TicketSearch onSearch={search} />}
         {nav(() => setDrawer(false))}
         <div className="side-foot"><Profile session={session} role={role} /></div>
-      </Dialog>
-      <Dialog open={!!pendingSwitch} onClose={() => setPendingSwitch(null)} title="Draf tiket belum terkirim"
-        initialFocus=".switch-cancel" returnFocus={switchOrigin}
-        footer={pendingSwitch && (
-          <>
-            <Button className="switch-cancel" onClick={() => setPendingSwitch(null)}>Batal</Button>
-            <Button onClick={() => {
-              if (route.workspaceId) drafts.discard(session.user.id, route.workspaceId);
-              go(pendingSwitch);
-            }}>Buang draf &amp; pindah</Button>
-            <Button variant="primary" onClick={() => go(pendingSwitch)}>Simpan draf &amp; pindah</Button>
-          </>
-        )}>
-        <p>Ada draf tiket di workspace <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
-          terkirim.</p>
-        <p className="tiny muted">Simpan: draf tetap di memori tab ini untuk akun Anda dan workspace tersebut, dan muncul
-          lagi saat Anda kembali. Draf tidak pernah dipindah ke workspace {pendingSwitch?.code ?? 'lain'} dan hilang saat
-          halaman dimuat ulang.</p>
       </Dialog>
       <Dialog open={pendingNav !== null} onClose={() => resolvePendingNav(false)} title="Tinggalkan draf tiket?"
         initialFocus=".nav-stay"
@@ -322,15 +272,35 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
             <Button variant="primary" onClick={() => leave(false)}>Lanjut, simpan draf</Button>
           </>
         )}>
-        <p>Ada draf tiket di workspace <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
+        <p>Ada draf tiket di <strong>{listed ? `${listed.code} · ${listed.name}` : 'ini'}</strong> yang belum
           terkirim. Anda akan membuka <strong>{pendingNav !== null ? navTargetLabel(pendingNav, workspaces) : ''}</strong>.</p>
         <p className="tiny muted">Lanjut, simpan draf: draf tetap di memori tab ini dan muncul lagi saat Anda membuka
-          Buat tiket di workspace ini. Draf tidak disimpan ke perangkat dan hilang saat halaman dimuat ulang.</p>
+          Buat tiket. Draf tidak disimpan ke perangkat dan hilang saat halaman dimuat ulang.</p>
       </Dialog>
       {toast && <div className="toast" role="status">{toast}</div>}
     </>
   );
 }
+
+/** CP5a: the company comes from the account (SSO per company), so the header names it as plain
+ * text: no dropdown, no switching. */
+export function CompanyCrumb({ company, page }: { company: Workspace | null; page: string }) {
+  return (
+    <div className="crumb">
+      {company && <><span className="crumb-ws" data-testid="crumb-company">{companyName(company)}</span>
+        <span className="crumb-sep" aria-hidden="true">/</span></>}
+      <b>{page}</b>
+    </div>
+  );
+}
+
+/** Mobile drawer counterpart of {@link CompanyCrumb}: a label, not a field. */
+export function DrawerCompany({ company }: { company: Workspace | null }) {
+  if (!company) return null;
+  return <p className="drawer-field drawer-company"><span className="tiny muted">Perusahaan</span><b>{companyName(company)}</b></p>;
+}
+
+const companyName = (w: Workspace) => w.brandName || w.name;
 
 function navTargetLabel(hash: string, workspaces: Workspace[]): string {
   const to = parseHash(hash);
@@ -402,7 +372,7 @@ function Content({ api, userId, mfaEnabled, scope, page, pages, query, uat, firs
   if (scope.status === 'idle') {
     return <NotFoundState />;
   }
-  if (scope.status === 'loading') return <LoadingState label="Memuat workspace…" />;
+  if (scope.status === 'loading') return <LoadingState label="Memuat data perusahaan…" />;
   if (scope.status === 'error') {
     const e = scope.error;
     if (e instanceof ApiError && e.status === 404) {
@@ -422,7 +392,7 @@ function Content({ api, userId, mfaEnabled, scope, page, pages, query, uat, firs
     }
     if (e instanceof ApiError && e.status === 403) return <ForbiddenState />;
     return (
-      <ErrorState title="Workspace belum dapat dimuat" body={errorText(e)}
+      <ErrorState title="Data perusahaan belum dapat dimuat" body={errorText(e)}
         requestId={e instanceof ApiError ? e.requestId : null} onRetry={onRetry} />
     );
   }

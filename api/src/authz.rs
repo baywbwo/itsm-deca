@@ -225,6 +225,21 @@ pub fn require_step_up(state: &AppState, s: &Session) -> Result<(), AppError> {
     }
 }
 
+/// CP5a (owner 2026-11-12): a user works in exactly one company. The server picks it from the
+/// user's memberships, never from client input: the oldest active membership in an active
+/// workspace (ties: workspace code, then membership id). Other memberships stay in the data but
+/// open nothing (404). When SSO arrives (CP5c) the company will come from the IdP claim and
+/// feed the same rule. SQL fragment; `$1` = user id.
+#[macro_export]
+macro_rules! home_membership_sql {
+    () => {
+        "(SELECT hm.id FROM workspace_memberships hm \
+          JOIN workspaces hw ON hw.id = hm.workspace_id \
+          WHERE hm.user_id = $1 AND hm.active AND hw.active \
+          ORDER BY hm.created_at, hw.code, hm.id LIMIT 1)"
+    };
+}
+
 /// The caller's verified access to one workspace for the current request.
 #[derive(Debug, Clone)]
 pub struct WorkspaceAccess {
@@ -322,16 +337,17 @@ pub async fn resolve(
     workspace_id: Uuid,
 ) -> Result<WorkspaceAccess, AppError> {
     let superadmin = superadmin_effective(state, s);
-    let row = sqlx::query_as::<_, AccessRow>(
+    let row = sqlx::query_as::<_, AccessRow>(concat!(
         "SELECT w.id, w.code, m.id AS membership_id, m.role, \
                 ARRAY(SELECT g.grant_code FROM workspace_grants g \
                       WHERE g.workspace_id = w.id AND g.membership_id = m.id \
                         AND g.revoked_at IS NULL ORDER BY g.grant_code) AS grants \
          FROM workspaces w \
          LEFT JOIN workspace_memberships m \
-                ON m.workspace_id = w.id AND m.user_id = $1 AND m.active \
-         WHERE w.active AND w.id = $3 AND (m.id IS NOT NULL OR $2)",
-    )
+                ON m.workspace_id = w.id AND m.user_id = $1 AND m.active AND m.id = ",
+        crate::home_membership_sql!(),
+        " WHERE w.active AND w.id = $3 AND (m.id IS NOT NULL OR $2)",
+    ))
     .bind(s.user_id)
     .bind(superadmin)
     .bind(workspace_id)

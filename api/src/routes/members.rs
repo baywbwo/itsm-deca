@@ -151,6 +151,7 @@ pub async fn add(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AppError::Validation("subject"))?;
+    one_company(&mut tx, user, ws).await?;
     // Existing (possibly inactive) membership: reactivate through PATCH, never a duplicate.
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, $3) \
@@ -184,6 +185,24 @@ pub async fn add(
     ))
 }
 
+/// CP5a: one company per user. An active membership elsewhere would never open (the server
+/// picks one home company, `home_membership_sql!`), so refuse it instead of keeping a dead row.
+async fn one_company(conn: &mut sqlx::PgConnection, user: Uuid, ws: Uuid) -> Result<(), AppError> {
+    let elsewhere: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM workspace_memberships m \
+         JOIN workspaces w ON w.id = m.workspace_id \
+         WHERE m.user_id = $1 AND m.active AND w.active AND m.workspace_id <> $2)",
+    )
+    .bind(user)
+    .bind(ws)
+    .fetch_one(&mut *conn)
+    .await?;
+    if elsewhere {
+        return Err(AppError::Conflict("user_in_other_company"));
+    }
+    Ok(())
+}
+
 fn not_self(access: &WorkspaceAccess, membership: Uuid) -> Result<(), AppError> {
     if access.membership_id == Some(membership) {
         tracing::info!(workspace_id = %access.workspace_id, "self administration denied");
@@ -214,8 +233,8 @@ pub async fn update(
     let r = role(&b.role)?;
     let ws = access.workspace_id;
     let mut tx = state.pool.begin().await?;
-    let (old_role, old_active, version): (String, bool, i32) = sqlx::query_as(
-        "SELECT role, active, version FROM workspace_memberships \
+    let (user, old_role, old_active, version): (Uuid, String, bool, i32) = sqlx::query_as(
+        "SELECT user_id, role, active, version FROM workspace_memberships \
          WHERE workspace_id = $1 AND id = $2 FOR UPDATE",
     )
     .bind(ws)
@@ -229,6 +248,9 @@ pub async fn update(
     }
     if old_role == r.code() && old_active == b.active {
         return Err(AppError::RuleViolation);
+    }
+    if b.active && !old_active {
+        one_company(&mut tx, user, ws).await?;
     }
     sqlx::query(
         "UPDATE workspace_memberships SET role = $3, active = $4, version = version + 1 \

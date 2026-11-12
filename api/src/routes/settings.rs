@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::authz::{self, Permission};
+use crate::config::AccessMode;
 use crate::error::AppError;
 use crate::routes::sync::audit_entity;
 use crate::routes::ticket_list::{body, correlation};
@@ -88,6 +89,17 @@ fn company_code(raw: &str) -> Result<String, AppError> {
 
 /// Capability named in platform denied audit rows for company administration.
 pub const PLATFORM_COMPANY_ADMIN: &str = "platform.companies";
+
+/// CP5a: company and workspace configuration is not edited from the app outside the UAT
+/// Superadmin mode (companies come from SSO later). Writes answer 404 there, like an unknown
+/// route, so nothing about the old editor is exposed.
+fn config_writes_available(state: &AppState) -> Result<(), AppError> {
+    if state.config.access_mode == AccessMode::UatSuperadmin {
+        Ok(())
+    } else {
+        Err(AppError::NotFound)
+    }
+}
 
 fn superadmin(state: &AppState, s: &Session) -> Result<(), AppError> {
     if authz::superadmin_effective(state, s) {
@@ -211,6 +223,7 @@ pub async fn update_settings(
     Path(raw): Path<String>,
     payload: Result<Json<SettingsPatch>, JsonRejection>,
 ) -> Result<Json<SettingsResult>, AppError> {
+    config_writes_available(&state)?;
     let access = authz::resolve(&state, &s, parse_id(&raw)?).await?;
     access.require(Permission::AdminSettings)?;
     let b = body(payload)?;
@@ -477,6 +490,7 @@ pub async fn create_company(
     headers: HeaderMap,
     payload: Result<Json<CompanyCreate>, JsonRejection>,
 ) -> Result<(StatusCode, Json<CompanyResult>), AppError> {
+    config_writes_available(&state)?;
     superadmin(&state, &s)?;
     authz::require_step_up(&state, &s)?;
     let b = body(payload)?;
@@ -574,6 +588,7 @@ pub async fn set_company_active(
     Path(raw): Path<String>,
     payload: Result<Json<CompanyActivation>, JsonRejection>,
 ) -> Result<Json<CompanyResult>, AppError> {
+    config_writes_available(&state)?;
     superadmin(&state, &s)?;
     authz::require_step_up(&state, &s)?;
     let company = parse_id(&raw)?;
@@ -651,6 +666,7 @@ pub async fn update_company(
     Path(raw): Path<String>,
     payload: Result<Json<CompanyProfilePatch>, JsonRejection>,
 ) -> Result<Json<CompanyUpdateResult>, AppError> {
+    config_writes_available(&state)?;
     superadmin(&state, &s)?;
     let company = parse_id(&raw)?;
     let b = body(payload)?;

@@ -27,12 +27,16 @@ fn ok<T, E: Display>(r: Result<T, E>, what: &str) -> T {
     }
 }
 
-fn state(pool: &PgPool) -> AppState {
+fn state(pool: &PgPool, mode: &str) -> AppState {
     let vars: HashMap<String, String> = [
         ("ITSM_ENV", "uat"),
-        ("ITSM_ACCESS_MODE", "uat_superadmin"),
+        ("ITSM_ACCESS_MODE", mode),
         ("DATABASE_URL", "postgres://unused-in-tests"),
-        ("ITSM_COOKIE_SECURE", "false"),
+        // Password mode refuses insecure cookies.
+        (
+            "ITSM_COOKIE_SECURE",
+            if mode == "password" { "true" } else { "false" },
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -85,13 +89,20 @@ struct Resp {
 struct Tok {
     token: String,
     csrf: String,
+    /// Access mode of the session and of the app it is sent to.
+    mode: &'static str,
 }
 
 async fn tok(pool: &PgPool, uid: Uuid) -> Tok {
-    let s = ok(session::issue(pool, uid, "uat_superadmin").await, "issue");
+    tok_in(pool, uid, "uat_superadmin").await
+}
+
+async fn tok_in(pool: &PgPool, uid: Uuid, mode: &'static str) -> Tok {
+    let s = ok(session::issue(pool, uid, mode).await, "issue");
     Tok {
         token: s.token,
         csrf: s.csrf_token,
+        mode,
     }
 }
 
@@ -105,7 +116,7 @@ async fn send(
 ) -> Resp {
     let mut r = Request::builder().method(method).uri(uri).header(
         header::COOKIE,
-        format!("{}={}", session::cookie_name(false), t.token),
+        format!("{}={}", session::cookie_name(t.mode == "password"), t.token),
     );
     if csrf {
         r = r.header(session::CSRF_HEADER, &t.csrf);
@@ -118,7 +129,7 @@ async fn send(
         ),
         None => ok(r.body(Body::empty()), "request"),
     };
-    let res = match app(state(pool)).oneshot(req).await {
+    let res = match app(state(pool, t.mode)).oneshot(req).await {
         Ok(r) => r,
         Err(e) => match e {},
     };
@@ -736,7 +747,7 @@ async fn catalog_editor_rules(pool: PgPool) {
     req = req.header("X-Correlation-Id", "d09-test");
     let body = json!({"subject": "Uji kategori nonaktif (dummy)", "chronology": "Kronologi uji (dummy)",
         "receivedAt": "2026-11-01T09:00:00+07:00", "intakeChannelId": ch, "categoryId": id});
-    let res = match app(state(&pool))
+    let res = match app(state(&pool, "uat_superadmin"))
         .oneshot(ok(req.body(Body::from(body.to_string())), "req"))
         .await
     {
@@ -1527,5 +1538,144 @@ async fn ai_suggestions_enforce_scope_csrf_and_input_before_provider(pool: PgPoo
         .await
         .status,
         StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5a_company_config_writes_are_404_outside_uat_and_reads_still_work(pool: PgPool) {
+    // With SSO per company the workspace configuration is not editable in production modes:
+    // reads stay, writes answer 404 (no hint that the route exists), nothing is written.
+    let f = fixture(&pool).await;
+    grant(&pool, f.a, f.lead, "admin.settings", f.admin).await;
+    let t = tok_in(&pool, f.lead, "password").await;
+    let r = get(&pool, &ws_uri(f.a, "settings"), &t).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    let v = r.json["settings"]["version"].clone();
+    let before = audit_count(&pool, f.a, "settings.update").await;
+    let body = json!({"workspaceName": "Tidak tersimpan", "companyName": "PT Tidak (dummy)",
+                      "timezone": "Asia/Jakarta", "reporterCode": "LPR-X", "version": v});
+    let r = write(&pool, "PATCH", &ws_uri(f.a, "settings"), &t, body).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.json);
+    assert_eq!(audit_count(&pool, f.a, "settings.update").await, before);
+    let r = get(&pool, &ws_uri(f.a, "settings"), &t).await;
+    assert_ne!(r.json["settings"]["workspaceName"], "Tidak tersimpan");
+
+    // Company writes: 404 in password mode even for the (ignored) UAT Superadmin account.
+    let company: Uuid = ok(
+        sqlx::query_scalar("SELECT company_id FROM workspaces WHERE id = $1")
+            .bind(f.a)
+            .fetch_one(&pool)
+            .await,
+        "company",
+    );
+    let admin = tok_in(&pool, f.admin, "password").await;
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/api/v1/companies".to_owned(),
+            json!({"code": "DUMX", "name": "PT Baru (dummy)", "timezone": "Asia/Jakarta", "reporterCode": null}),
+        ),
+        (
+            "PATCH",
+            format!("/api/v1/companies/{company}"),
+            json!({"active": false, "version": 1}),
+        ),
+        (
+            "PATCH",
+            format!("/api/v1/companies/{company}/profile"),
+            json!({"code": "DUMA", "workspaceName": "X", "companyName": "X", "timezone": "Asia/Jakarta",
+                    "reporterCode": null, "brandKey": null, "brandName": null, "version": 1}),
+        ),
+    ] {
+        for who in [&t, &admin] {
+            let r = write(&pool, method, &uri, who, body.clone()).await;
+            assert_eq!(
+                r.status,
+                StatusCode::NOT_FOUND,
+                "{method} {uri}: {}",
+                r.json
+            );
+        }
+    }
+    let n: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM companies WHERE name = 'PT Baru (dummy)'")
+            .fetch_one(&pool)
+            .await,
+        "count",
+    );
+    assert_eq!(n, 0);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5a_a_user_belongs_to_one_company(pool: PgPool) {
+    let f = fixture(&pool).await;
+    let admin = tok(&pool, f.admin).await;
+    let add = |ws: Uuid| {
+        let admin = &admin;
+        let pool = &pool;
+        async move {
+            write(
+                pool,
+                "POST",
+                &ws_uri(ws, "members"),
+                admin,
+                json!({"subject": "dummy:cs-bravo", "role": "cs"}),
+            )
+            .await
+        }
+    };
+    let r = add(f.a).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    let bravo_a = s(&r.json["item"]["membershipId"]);
+
+    // Second company while the first membership is active: 409, nothing added.
+    let r = add(f.b).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    assert_eq!(r.json["error"]["code"], "user_in_other_company");
+    let rows: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM workspace_memberships WHERE user_id = $1")
+            .bind(f.bravo)
+            .fetch_one(&pool)
+            .await,
+        "count",
+    );
+    assert_eq!(rows, 1);
+
+    // Moving companies = deactivate the old membership first; reactivating it is then refused.
+    let list = get(&pool, &ws_uri(f.a, "members"), &admin).await.json;
+    let v = member(&list, f.bravo)["version"].clone();
+    let r = write(
+        &pool,
+        "PATCH",
+        &ws_uri(f.a, &format!("members/{bravo_a}")),
+        &admin,
+        json!({"role": "cs", "active": false, "version": v}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    let r = add(f.b).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    let list = get(&pool, &ws_uri(f.a, "members"), &admin).await.json;
+    let v = member(&list, f.bravo)["version"].clone();
+    let r = write(
+        &pool,
+        "PATCH",
+        &ws_uri(f.a, &format!("members/{bravo_a}")),
+        &admin,
+        json!({"role": "cs", "active": true, "version": v}),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{}", r.json);
+    assert_eq!(r.json["error"]["code"], "user_in_other_company");
+
+    // The user now opens only the new company.
+    let bravo = tok(&pool, f.bravo).await;
+    assert_eq!(
+        get(&pool, &ws_uri(f.b, "settings"), &bravo).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&pool, &ws_uri(f.a, "settings"), &bravo).await.status,
+        StatusCode::NOT_FOUND
     );
 }

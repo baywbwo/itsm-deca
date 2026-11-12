@@ -141,7 +141,7 @@ export function useDashboard(
       // Defence in depth: never render numbers that belong to another scope, period or filter.
       if (d.workspaceId !== workspaceId || d.period.key !== p.period ||
         DASHBOARD_FILTERS.some((k) => d.filters[k] !== p.filters[k])) {
-        throw new ApiError(0, 'bad_response', 'Respons dashboard tidak cocok dengan workspace/periode/filter.');
+        throw new ApiError(0, 'bad_response', 'Respons dashboard tidak cocok dengan perusahaan/periode/filter.');
       }
       return d;
     });

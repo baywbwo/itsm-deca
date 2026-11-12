@@ -163,8 +163,8 @@ function DashboardError({ error, onRetry, onReset }: {
   onReset: (() => void) | null;
 }) {
   if (error instanceof ApiError && error.status === 400 && onReset) {
-    return <ErrorState title="Filter tidak valid untuk workspace ini"
-      body="Nilai filter pada alamat halaman tidak dikenali di workspace aktif. Tidak ada angka yang ditampilkan."
+    return <ErrorState title="Filter tidak valid untuk perusahaan ini"
+      body="Nilai filter pada alamat halaman tidak dikenali di perusahaan Anda. Tidak ada angka yang ditampilkan."
       requestId={error.requestId} onRetry={onReset} retryLabel="Reset filter" />;
   }
   if (error instanceof ApiError && error.status === 403) return <ForbiddenState />;

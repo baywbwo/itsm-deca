@@ -751,7 +751,8 @@
                   "mfa_not_enrolled",
                   "step_up_required",
                   "mfa_required_for_role",
-                  "self_mfa_reset"
+                  "self_mfa_reset",
+                  "user_in_other_company"
                 ]
               },
               "message": {
@@ -8108,6 +8109,7 @@
       "post": {
         "operationId": "addWorkspaceMember",
         "summary": "Add member by exact account subject (admin.members)",
+        "description": "CP5a: a user belongs to one company. 409 user_in_other_company when the account already has an active membership in another active company (deactivate it there first).",
         "security": [
           {
             "sessionCookie": [],
@@ -9595,6 +9597,7 @@
       "patch": {
         "operationId": "updateWorkspaceSettings",
         "summary": "Update settings (admin.settings grant)",
+        "description": "CP5a: available only in UAT Superadmin mode (company administration in UAT). In password/SSO mode the company configuration comes from the company itself and this write answers 404; the GET stays.",
         "security": [
           {
             "sessionCookie": [],
@@ -9739,7 +9742,7 @@
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "description": "undefined CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
+        "description": "CP5a: 404 outside UAT Superadmin mode. CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
       }
     },
     "/api/v1/companies/{company_id}": {
@@ -9800,13 +9803,14 @@
             "$ref": "#/components/responses/RateLimited"
           }
         },
-        "description": "CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
+        "description": "CP5a: 404 outside UAT Superadmin mode. CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
       }
     },
     "/api/v1/companies/{company_id}/profile": {
       "patch": {
         "operationId": "updateCompany",
         "summary": "Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed.",
+        "description": "CP5a: 404 outside UAT Superadmin mode.",
         "security": [
           {
             "sessionCookie": [],
@@ -10037,6 +10041,7 @@
       "patch": {
         "operationId": "updateWorkspaceMember",
         "summary": "Change role/active (admin.members; not self; deactivation revokes grants)",
+        "description": "CP5a: reactivating answers 409 user_in_other_company when the account is active in another company.",
         "security": [
           {
             "sessionCookie": [],

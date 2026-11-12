@@ -116,7 +116,7 @@ export function AssignDialog({ api, workspace, userId, permissions, ticket, onCl
                 <option key={m.userId} value={m.userId}>{m.displayName}{m.userId === userId ? ' (saya)' : ''}</option>
               ))}
             </select>
-            <span id={`${id}-to-hint`} className="field-hint">Hanya anggota aktif workspace {workspace.code}.</span>
+            <span id={`${id}-to-hint`} className="field-hint">Hanya anggota aktif perusahaan {workspace.code}.</span>
           </div>
           {needsReason && !unchanged && (
             <div className="field full">

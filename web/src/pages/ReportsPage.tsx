@@ -300,7 +300,7 @@ export function ReportsPage({ api, workspace, query = '', onNotice }: {
           </div>
         )}
         {runs.status === 'success' && (runs.data.items.length === 0
-          ? <div className="bd"><p className="empty-mini"><b>Belum ada ekspor</b>Ekspor operasional Excel / CSV yang dibuat di workspace ini muncul di sini.</p></div>
+          ? <div className="bd"><p className="empty-mini"><b>Belum ada ekspor</b>Ekspor operasional Excel / CSV yang dibuat di perusahaan ini muncul di sini.</p></div>
           : (
             <div className="ptable">
               <DataTable caption="Riwayat ekspor laporan" columns={runColumns(tz, (id) => api.reportContentUrl(workspace.id, id))}
@@ -330,7 +330,7 @@ function exportErrorText(e: unknown): { title: string; body: string; requestId: 
     if (isSessionReloadNeeded(e)) return { title: SESSION_RELOAD_TITLE, body: sessionReloadText(null), requestId };
     if (e.status === 429) return { title: 'Terlalu banyak permintaan', body: `${rateLimitText(e)} Ekspor belum dibuat; filter Anda tetap.`, requestId };
     if (e.status === 409) return { title: 'Permintaan ekspor bertabrakan', body: 'Kunci permintaan sudah dipakai untuk parameter lain. Klik ekspor lagi.', requestId };
-    if (e.status === 403) return { title: 'Akses ditolak', body: 'Anda tidak memiliki izin ekspor di workspace ini.', requestId };
+    if (e.status === 403) return { title: 'Akses ditolak', body: 'Anda tidak memiliki izin ekspor di perusahaan ini.', requestId };
     if (e.status === 422) return { title: 'Parameter tidak valid', body: e.message, requestId };
     if (e.code === 'network') return { title: 'Server tidak dapat dihubungi', body: 'Hasil ekspor belum diketahui. Coba lagi; permintaan yang sama tidak membuat file ganda.', requestId };
     if (e.code === 'dependency_unavailable') return { title: 'Ekspor gagal', body: `${e.message} Hasil ekspor belum diketahui; coba lagi tanpa membuat file ganda.`, requestId };

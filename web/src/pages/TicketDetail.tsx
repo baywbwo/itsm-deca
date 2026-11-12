@@ -213,7 +213,7 @@ function Card({ id, title, sub, tag, children }: { id: string; title: string; su
 
 function DetailError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   if (error instanceof ApiError && error.status === 404) {
-    return <EmptyState title="Tiket tidak ditemukan" body="Tiket ini tidak ada atau tidak dapat Anda akses di workspace aktif." />;
+    return <EmptyState title="Tiket tidak ditemukan" body="Tiket ini tidak ada atau tidak dapat Anda akses di perusahaan Anda." />;
   }
   if (error instanceof ApiError && error.status === 403) return <ForbiddenState />;
   return <ErrorState title="Detail belum dapat dimuat" body={`${message(error)} Tidak ada data lama yang dipakai.`}
