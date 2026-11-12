@@ -174,6 +174,17 @@ export class ApiError extends Error {
 }
 
 /**
+ * 401 mfa_required at password login (PR #18): the second step's challenge. Still an ApiError with
+ * code mfa_required, so callers that check the code keep working. Only reachable with ITSM_MFA=on.
+ */
+export class MfaChallenge extends ApiError {
+  constructor(challengeId: string, requestId: string | null = null) {
+    super(401, 'mfa_required', 'Verifikasi MFA diperlukan', requestId, null, null, challengeId);
+    this.name = 'MfaChallenge';
+  }
+}
+
+/**
  * 429 copy: when to try again. A rate-limited request was not processed, so the caller keeps the
  * input and leaves the retry to the person (mutations are never re-sent automatically).
  */
@@ -342,6 +353,9 @@ export function createApi(transport: Transport) {
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
       const { field, retryAfterSeconds: wait, challengeId } = res.body.error as { field?: unknown; retryAfterSeconds?: unknown; challengeId?: unknown };
+      if (res.status === 401 && res.body.error.code === 'mfa_required' && typeof challengeId === 'string') {
+        throw new MfaChallenge(challengeId, res.requestId);
+      }
       throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
         typeof field === 'string' ? field : null,
         typeof wait === 'number' && Number.isFinite(wait) ? wait : null,

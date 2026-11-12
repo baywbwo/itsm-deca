@@ -73,7 +73,7 @@ describe('CP4c boot (TM-02 b)', () => {
       return undefined;
     });
     const boot = await loadBoot(api, signal());
-    expect(boot.status).toBe('mfa_enrol');
+    expect(boot.status).toBe('mfa_setup');
     expect(paths()).not.toContain('GET /api/v1/workspaces');
   });
 

@@ -8,7 +8,7 @@ import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../comp
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
 import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
-import { MfaEnrolScreen, StepUpDialog } from '../pages/MfaScreens';
+import { MfaEnrolScreen, MfaReloginScreen, StepUpDialog } from '../pages/MfaScreens';
 import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
@@ -62,7 +62,10 @@ export function App({ api }: { api: Api }) {
   if (boot.status === 'no_access') {
     return <LoginScreen api={api} meta={boot.meta} notice={notice} onSuccess={loggedIn} />;
   }
-  if (boot.status === 'mfa_enrol') {
+  if (boot.status === 'mfa_relogin') {
+    return <MfaReloginScreen onLogout={() => { void api.logout().finally(retry); }} />;
+  }
+  if (boot.status === 'mfa_setup') {
     return <MfaEnrolScreen api={api} session={boot.session} onDone={retry}
       onLogout={() => { void api.logout().finally(retry); }} />;
   }

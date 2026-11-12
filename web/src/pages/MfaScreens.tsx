@@ -159,6 +159,17 @@ export function MfaEnrolScreen({ api, session, onDone, onLogout }: {
   );
 }
 
+/** PR #18: a session made before MFA verification cannot open workspaces; log in again with a code. */
+export function MfaReloginScreen({ onLogout }: { onLogout: () => void }) {
+  return (
+    <AuthLayout>
+      <h1>Verifikasi ulang akun</h1>
+      <p>Sesi ini dibuat sebelum verifikasi dua langkah. Keluar, lalu masuk kembali dengan kata sandi dan kode autentikator.</p>
+      <Button variant="primary" onClick={onLogout}>Keluar</Button>
+    </AuthLayout>
+  );
+}
+
 /**
  * A-9 step-up: registered with the API client while the shell is open. A request refused with
  * step_up_required opens this dialog; a successful code makes the client re-send that request

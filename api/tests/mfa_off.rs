@@ -142,6 +142,9 @@ async fn mfa_off_admin_logs_in_with_password_only_and_needs_no_step_up(pool: PgP
     // Not a pre-MFA session: routes outside the enrolment allow-list answer.
     let (status, body, _) = send(&pool, "GET", "/api/v1/users", Value::Null, auth).await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    // The boot request behind the deployed "Anda tidak memiliki izin" screen (PR #17): no 403.
+    let (status, body, _) = send(&pool, "GET", "/api/v1/workspaces", Value::Null, auth).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     // A sensitive action goes through without a step-up.
     let (status, body, _) = send(
