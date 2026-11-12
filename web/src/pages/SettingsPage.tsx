@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type {
-  CatalogEditor, CatalogEntry, CatalogKind, CompanyList, GrantCode, Member, MemberList, SettingsBody, Timezone,
+  CatalogEditor, CatalogEntry, CatalogKind, CompanyList, GrantCode, Member, MemberList, Timezone,
   Workspace, WorkspaceSettings,
 } from '../api/types';
 import { BRAND_PRESETS } from '../app/brand';
@@ -19,10 +19,10 @@ import {
   ConfirmDialog, GRANT_LABEL, ROLE_LABEL, Tabs, TZ_LABEL, useLoad, WriteAlert, writeError, type WriteError,
 } from './adminKit';
 
-type TabId = 'catalogs' | 'workspace' | 'members' | 'companies' | 'ai';
+type TabId = 'catalogs' | 'members' | 'companies' | 'ai';
 
 /**
- * O07/O09 Pengaturan (prototype 08: Katalog | Anggota & Grant | Workspace). Every tab reads its own server answer; edit controls appear only when the
+ * O07/O09 Pengaturan (prototype 08: Katalog | Anggota & Grant; the Workspace tab was taken down in CP5a, the company comes from the server). Every tab reads its own server answer; edit controls appear only when the
  * server says so (`canEdit`/`canManage`), and the server re-checks each write (default deny).
  */
 export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWorkspacesChanged = () => undefined }: {
@@ -34,11 +34,10 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   /** A save changed what the workspace switcher lists (name, new company, active). */
   onWorkspacesChanged?: () => void;
 }) {
-  // Katalog and Workspace both read with catalog.read; writes are decided by the server's `canEdit`.
+  // Katalog reads with catalog.read; writes are decided by the server's `canEdit`.
   const tabs: { id: TabId; label: string }[] = [
     ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Katalog' }] : []),
     ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota & Grant' }] : []),
-    ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
     ...(permissions.includes('integration.manage') ? [{ id: 'ai' as const, label: 'AI & MCP' }] : []),
   ];
@@ -48,12 +47,11 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   return (
     <>
       <PageHeader title="Pengaturan"
-        description={`Katalog, anggota & grant, dan identitas workspace ${workspace.code}${uat ? ' · perusahaan' : ''}`} />
+        description={`Katalog serta anggota & grant ${workspace.name}${uat ? ' · perusahaan' : ''}`} />
       <section className="pcard settings-card" aria-label="Bagian pengaturan">
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Bagian pengaturan" panelId={panelId} />
       <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab-${tab}`}>
         {tab === 'catalogs' && <CatalogTab api={api} workspace={workspace} onNotice={onNotice} />}
-        {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'ai' && <AiSettingsTab api={api} workspace={workspace} onNotice={onNotice} />}
@@ -74,7 +72,7 @@ function LoadFailure({ error, what, onRetry }: { error: unknown; what: string; o
 function ReadOnlyBanner({ what }: { what: string }) {
   return (
     <p className="banner spaced-bottom" role="note">
-      Mode baca saja. {what} hanya dapat diubah oleh anggota yang diberi hak eksplisit oleh pengelola workspace;
+      Mode baca saja. {what} hanya dapat diubah oleh anggota yang diberi hak eksplisit oleh pengelola perusahaan;
       peran Lead CS tidak otomatis menjadi admin.
     </p>
   );
@@ -117,7 +115,7 @@ function CatalogTab({ api, workspace, onNotice }: { api: Api; workspace: Workspa
           : (
             <>
               {!ed.canEdit && <div className="bd"><ReadOnlyBanner what="Katalog" /></div>}
-              {kind === 'priorities' && <p className="set-note cat-prio">Empat prioritas baku dibuat bersama workspace; label dan urutan dapat diubah, kode tidak ditambah.</p>}
+              {kind === 'priorities' && <p className="set-note cat-prio">Empat prioritas baku dibuat bersama perusahaan; label dan urutan dapat diubah, kode tidak ditambah.</p>}
               <div className="ptable">
                 <DataTable caption={`${label} di ${workspace.code}`} rows={ed.items} rowKey={(c) => c.id}
                   empty={{ title: `Belum ada ${label.toLowerCase()}`, body: 'Tambahkan entri pertama bila Anda memiliki hak pengaturan.' }}
@@ -199,7 +197,7 @@ function CatalogDialog({ api, workspace, editor, kindLabel, entry, onClose, onRe
             <TextField label="Kode" value={entry.code} disabled hint="Kode tidak berubah setelah dibuat." />
           ) : (
             <TextField label="Kode" required maxLength={40} value={code} disabled={busy}
-              hint="Huruf kecil, angka atau garis bawah; unik per workspace."
+              hint="Huruf kecil, angka atau garis bawah; unik per perusahaan."
               error={error?.field === 'code' ? 'Kode sudah dipakai atau tidak valid.' : undefined}
               onChange={(e) => setCode(e.target.value.toLowerCase())} />
           )}
@@ -226,103 +224,6 @@ function CatalogDialog({ api, workspace, editor, kindLabel, entry, onClose, onRe
   );
 }
 
-// ---------------------------------------------------------------- Workspace profile
-
-function WorkspaceTab({ api, workspace, onNotice, onChanged }: {
-  api: Api; workspace: Workspace; onNotice: (t: string) => void; onChanged: () => void;
-}) {
-  const res = useLoad((s) => api.getSettings(workspace.id, s), workspace.id);
-  if (res.error) return <div className="bd"><LoadFailure error={res.error} what="Profil workspace" onRetry={res.reload} /></div>;
-  if (!res.data) return <div className="bd"><LoadingState label="Memuat profil workspace…" /></div>;
-  return <WorkspaceForm key={res.data.settings.version} api={api} body={res.data} onReload={res.reload}
-    onSaved={(b) => { res.set(b); onChanged(); onNotice('Profil workspace tersimpan dan tercatat di audit.'); }} />;
-}
-
-function WorkspaceForm({ api, body, onReload, onSaved }: {
-  api: Api;
-  body: SettingsBody;
-  onReload: () => void;
-  onSaved: (b: SettingsBody) => void;
-}) {
-  const s = body.settings;
-  const [form, setForm] = useState({
-    workspaceName: s.workspaceName, companyName: s.companyName, timezone: s.timezone as Timezone,
-    reporterCode: s.reporterCode ?? '',
-  });
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<WriteError | null>(null);
-  const dirty = form.workspaceName !== s.workspaceName || form.companyName !== s.companyName ||
-    form.timezone !== s.timezone || form.reporterCode !== (s.reporterCode ?? '');
-
-  async function save() {
-    if (busy || !dirty) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await api.updateSettings(s.workspaceId, {
-        workspaceName: form.workspaceName.trim(), companyName: form.companyName.trim(), timezone: form.timezone,
-        reporterCode: form.reporterCode.trim() || null, version: s.version,
-      });
-      onSaved({ ...body, settings: r.settings });
-    } catch (e) {
-      setBusy(false);
-      setError(writeError(e, 'Profil workspace'));
-    }
-  }
-
-  const props: [string, string][] = [
-    ['Kode workspace', s.workspaceCode],
-    ['Kode perusahaan', s.companyCode],
-    ...(s.previousCodes.length > 0 ? [['Kode sebelumnya', s.previousCodes.join(', ')] as [string, string]] : []),
-    ['Status', s.active ? 'Aktif' : 'Nonaktif'],
-    ['Anggota aktif', String(s.memberCount)],
-  ];
-  return (
-    <section className="set-sec" aria-labelledby="ws-profile">
-      <div className="set-hd">
-        <h2 id="ws-profile">Profil workspace</h2>
-        <span className="sub">Identitas workspace dan kepala berkas ekspor · perubahan tercatat di audit</span>
-      </div>
-      <div className="bd">
-      {!body.canEdit && <ReadOnlyBanner what="Profil workspace" />}
-      {error && <WriteAlert error={error} onReload={onReload} />}
-      <dl className="kv set-kv">
-        {props.map(([k, v]) => <div key={k} className="props-row"><dt>{k}</dt><dd>{v}</dd></div>)}
-      </dl>
-      {body.canEdit ? (
-        <form className="formgrid" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-          <TextField label="Nama workspace" required maxLength={200} value={form.workspaceName} disabled={busy}
-            onChange={(e) => setForm({ ...form, workspaceName: e.target.value })} />
-          <TextField label="Nama perusahaan" required maxLength={200} value={form.companyName} disabled={busy}
-            onChange={(e) => setForm({ ...form, companyName: e.target.value })} />
-          <SelectField label="Zona waktu" value={form.timezone} disabled={busy}
-            onChange={(e) => setForm({ ...form, timezone: e.target.value as Timezone })}>
-            {body.timezones.map((t) => <option key={t} value={t}>{TZ_LABEL[t] ?? t}</option>)}
-          </SelectField>
-          <TextField label="Kode pelapor" maxLength={40} value={form.reporterCode} disabled={busy}
-            hint="Opsional. Isi hanya kode yang sudah diverifikasi kantor; tidak ada format yang ditebak."
-            error={error?.field === 'reporterCode' ? 'Periksa kode pelapor.' : undefined}
-            onChange={(e) => setForm({ ...form, reporterCode: e.target.value })} />
-          <div className="full row set-foot">
-            <Button type="submit" variant="primary" disabled={busy || !dirty} aria-busy={busy}>
-              {busy ? 'Menyimpan…' : 'Simpan profil'}
-            </Button>
-            {dirty && !busy && <span className="tiny muted">Ada perubahan yang belum disimpan.</span>}
-          </div>
-        </form>
-      ) : (
-        <dl className="kv set-kv">
-          <div className="props-row"><dt>Nama workspace</dt><dd>{s.workspaceName}</dd></div>
-          <div className="props-row"><dt>Nama perusahaan</dt><dd>{s.companyName}</dd></div>
-          <div className="props-row"><dt>Zona waktu</dt><dd>{TZ_LABEL[s.timezone] ?? s.timezone}</dd></div>
-          <div className="props-row"><dt>Kode pelapor</dt><dd>{s.reporterCode ?? 'Belum diisi'}</dd></div>
-        </dl>
-      )}
-      </div>
-    </section>
-  );
-}
-
 // ---------------------------------------------------------------- Members
 
 function MembersTab({ api, workspace, onNotice }: { api: Api; workspace: Workspace; onNotice: (t: string) => void }) {
@@ -344,7 +245,7 @@ function MembersTab({ api, workspace, onNotice }: { api: Api; workspace: Workspa
       {!list.canManage && <div className="bd"><ReadOnlyBanner what="Keanggotaan" /></div>}
       <div className="ptable">
       <DataTable caption={`Anggota workspace ${workspace.code}`} rows={list.items} rowKey={(m) => m.membershipId}
-        empty={{ title: 'Belum ada anggota', body: 'Workspace ini belum memiliki anggota.' }}
+        empty={{ title: 'Belum ada anggota', body: 'Perusahaan ini belum memiliki anggota.' }}
         columns={[
           { key: 'name', header: 'Nama', cell: (m) => <span className="cell-person"><span className="avatar" aria-hidden="true">{initials(m.displayName)}</span><b>{m.displayName}</b>{m.membershipId === list.myMembershipId ? ' (saya)' : ''}</span> },
           { key: 'role', header: 'Peran', cell: (m) => <Badge tone={m.role === 'lead_cs' ? 'blue' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge> },
@@ -455,7 +356,7 @@ function MemberDialog({ api, workspace, list, member, onClose, onChanged, onRelo
         <section className="spaced-bottom" aria-labelledby="mem-role">
           <h3 id="mem-role">Peran</h3>
           <div className="row">
-            <SelectField label="Peran di workspace" value={role} disabled={busy || !member.active}
+            <SelectField label="Peran di perusahaan" value={role} disabled={busy || !member.active}
               onChange={(e) => setRole(e.target.value as 'cs' | 'lead_cs')}>
               <option value="cs">CS</option>
               <option value="lead_cs">Lead CS</option>
@@ -579,8 +480,8 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
         <ConfirmDialog title={`${toggle.active ? 'Nonaktifkan' : 'Aktifkan'} ${toggle.companyName}?`}
           confirmLabel={toggle.active ? 'Nonaktifkan' : 'Aktifkan'}
           impact={toggle.active
-            ? `Workspace ${toggle.workspaceCode} tidak lagi dapat dibuka oleh anggotanya. Tiket, laporan dan histori tidak dihapus.${toggle.workspaceId === workspace.id ? ' Ini workspace yang sedang Anda buka.' : ''}`
-            : `Workspace ${toggle.workspaceCode} dapat dibuka kembali oleh anggotanya yang aktif.`}
+            ? `Perusahaan ${toggle.workspaceCode} tidak lagi dapat dibuka oleh anggotanya. Tiket, laporan dan histori tidak dihapus.${toggle.workspaceId === workspace.id ? ' Ini perusahaan yang sedang Anda buka.' : ''}`
+            : `Perusahaan ${toggle.workspaceCode} dapat dibuka kembali oleh anggotanya yang aktif.`}
           onClose={() => setToggle(null)}
           onConfirm={async () => {
             try {

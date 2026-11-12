@@ -41,11 +41,11 @@ export function ErrorState({ title, body, onRetry, retryLabel = 'Coba lagi', req
 export function ForbiddenState() {
   return (
     <EmptyState title="Akses ditolak"
-      body="Anda tidak memiliki izin untuk halaman ini di workspace aktif. Hubungi pengelola workspace bila akses diperlukan." />
+      body="Anda tidak memiliki izin untuk halaman ini di perusahaan Anda. Hubungi pengelola perusahaan bila akses diperlukan." />
   );
 }
 
 /** 404: unknown, foreign and malformed IDs look identical (no enumeration). */
 export function NotFoundState({ action }: { action?: ReactNode }) {
-  return <EmptyState title="Workspace tidak ditemukan" body="Workspace ini tidak ada atau tidak dapat Anda akses." action={action} />;
+  return <EmptyState title="Perusahaan tidak ditemukan" body="Perusahaan ini tidak ada atau tidak dapat Anda akses." action={action} />;
 }

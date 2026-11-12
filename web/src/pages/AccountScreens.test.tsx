@@ -16,7 +16,7 @@ const noop = () => undefined;
 describe('CP3a account screens', () => {
   it('login: labelled username/password fields, password autocomplete, no reason by default', () => {
     const html = renderToStaticMarkup(<LoginScreen api={api} meta={meta} notice={null} onSuccess={noop} />);
-    expect(html).toContain('Masuk ke workspace');
+    expect(html).toContain('Masuk ke ITSM');
     expect(html).toMatch(/<label for="([^"]+)">Nama pengguna<\/label><input id="\1"[^>]*autoComplete="username"/i);
     expect(html).toMatch(/<label for="([^"]+)">Kata sandi<\/label><input id="\1"[^>]*type="password"[^>]*autoComplete="current-password"/i);
     expect(html).not.toContain(SESSION_ENDED_TITLE);

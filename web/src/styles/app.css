@@ -108,8 +108,7 @@ textarea.field-control { min-height: 100px; resize: vertical; }
 .crumb { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--muted); }
 .crumb b { color: var(--ink); font-weight: 800; white-space: nowrap; }
 .crumb-sep { color: var(--faint); }
-.crumb-ws { appearance: none; border: 1px solid transparent; border-radius: 7px; background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%235f7186' stroke-width='3'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 6px center; padding: 4px 22px 4px 6px; max-width: 260px; min-height: 30px; font-size: 12px; font-weight: 700; color: var(--muted); text-overflow: ellipsis; }
-.crumb-ws:hover { border-color: var(--line); color: var(--ink); }
+.crumb-ws { display: inline-block; max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; vertical-align: bottom; padding: 4px 0; font-size: 12px; font-weight: 700; color: var(--muted); }
 .top-search { display: flex; align-items: center; gap: 8px; min-width: 250px; height: 36px; padding: 0 6px 0 11px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--canvas); color: var(--muted); }
 .top-search:focus-within { outline: 3px solid var(--focus); outline-offset: 2px; }
 .top-search input { flex: 1; min-width: 0; border: 0; background: none; padding: 6px 0; font-size: 12.5px; }
@@ -169,7 +168,7 @@ dialog.drawer .dialog-head .btn { color: #fff; }
 dialog.drawer .dialog-head .btn:hover { background: rgba(255, 255, 255, .1); }
 dialog.drawer .dialog-body { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px 18px; min-height: 100%; }
 .drawer-field { display: grid; gap: 6px; padding: 4px 8px 6px; font-size: 11px; font-weight: 800; color: var(--nav-caption); letter-spacing: .08em; text-transform: uppercase; }
-.drawer-field select { min-height: 38px; padding: 6px 8px; border-radius: var(--radius-control); border: 1px solid rgba(255, 255, 255, .25); background: var(--sapphire-800); color: #fff; font-size: 13px; letter-spacing: 0; text-transform: none; }
+.drawer-company b { font-size: 14px; font-weight: 700; color: #fff; letter-spacing: 0; text-transform: none; overflow-wrap: anywhere; }
 dialog.drawer .top-search { min-width: 0; margin: 4px 8px; background: #fff; }
 
 .gallery { display: grid; gap: 20px; }

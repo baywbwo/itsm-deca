@@ -345,32 +345,53 @@ async fn cs_and_lead_cs_get_role_permissions_and_no_admin_rights(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn grant_applies_only_in_its_own_workspace_and_roles_differ_per_workspace(pool: PgPool) {
+async fn legacy_second_membership_is_unreachable_and_home_company_is_deterministic(pool: PgPool) {
+    // CP5a: one company per user, picked by the server. A legacy account with two active
+    // memberships (only possible via direct DB writes now) opens only its oldest one; the
+    // other answers 404 like any foreign company, and its grants do not leak.
     let fx = fixture(&pool).await;
-    // Multi-workspace dummy account: Lead CS in DUMA, CS in DUMB.
     let multi = new_user(&pool, "dummy:multi", "Multi workspace (dummy)").await;
     let ma = add_member(&pool, fx.a, multi, "lead_cs").await;
-    add_member(&pool, fx.b, multi, "cs").await;
+    let mb = add_member(&pool, fx.b, multi, "cs").await;
+    // Same timestamp on both rows: the tie-break (workspace code, then id) still decides.
+    ok(
+        sqlx::query("UPDATE workspace_memberships SET created_at = now() WHERE id = ANY($1)")
+            .bind(vec![ma, mb])
+            .execute(&pool)
+            .await,
+        "same created_at",
+    );
     grant(&pool, fx.a, ma, "integration.recovery", fx.admin).await;
+    grant(&pool, fx.b, mb, "integration.manage", fx.admin).await;
     let t = login(&pool, multi).await;
 
     let a = perms(&pool, fx.a, &t).await;
     assert_eq!(a.json["role"], "lead_cs");
-    assert!(strings(&a.json["permissions"]).contains("integration.recovery"));
     assert_eq!(
         strings(&a.json["grants"]),
         BTreeSet::from(["integration.recovery".to_owned()])
     );
-    // Only the granted code: no credentials, no member admin.
-    assert!(!strings(&a.json["permissions"]).contains("integration.credentials"));
-    assert!(!strings(&a.json["permissions"]).contains("admin.members"));
-
+    assert!(!strings(&a.json["permissions"]).contains("integration.manage"));
     let b = perms(&pool, fx.b, &t).await;
-    assert_eq!(b.json["role"], "cs");
-    let bp = strings(&b.json["permissions"]);
-    assert!(!bp.contains("integration.recovery"));
-    assert!(!bp.contains("ticket.assign_any"));
-    assert_eq!(strings(&b.json["grants"]), BTreeSet::new());
+    assert_eq!(b.status, StatusCode::NOT_FOUND);
+    assert!(!b.raw.contains("integration.manage"));
+    let list = get(&pool, "/api/v1/workspaces", Some(&t)).await;
+    let ids: Vec<&str> = list.json["items"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|w| w["id"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(ids, vec![fx.a.to_string().as_str()]);
+
+    // The older membership is deactivated: the remaining one becomes the home company.
+    ok(
+        sqlx::query("UPDATE workspace_memberships SET active = false WHERE id = $1")
+            .bind(ma)
+            .execute(&pool)
+            .await,
+        "deactivate",
+    );
+    assert_eq!(perms(&pool, fx.a, &t).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(perms(&pool, fx.b, &t).await.json["role"], "cs");
 }
 
 // ---------- deny by default on a grant-gated operation ----------

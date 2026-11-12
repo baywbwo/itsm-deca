@@ -161,7 +161,7 @@ export function SavedViews({ api, workspaceId, params, onApply }: {
       </>}>
       {(close) => (
         <>
-          <p className="muted tiny">Hanya terlihat oleh Anda di workspace ini. Menyimpan tampilan, filter, urutan dan
+          <p className="muted tiny">Hanya terlihat oleh Anda di perusahaan ini. Menyimpan tampilan, filter, urutan dan
             kolom; teks pencarian tidak disimpan. Jangan isi nama dengan data pribadi.</p>
           <form className="saved-new" onSubmit={(e) => { e.preventDefault(); void save(); }}>
             <label className="period grow">

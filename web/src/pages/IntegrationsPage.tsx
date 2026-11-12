@@ -51,7 +51,7 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
   const [creating, setCreating] = useState<ProviderCode | null>(null);
   const header = (
     <PageHeader title="Integrasi"
-      description={`Jira & Lark · satu koneksi per penyedia per workspace ${workspace.code}`} />
+      description={`Jira & Lark · satu koneksi per penyedia per perusahaan ${workspace.code}`} />
   );
   if (res.error) {
     if (res.error instanceof ApiError && res.error.status === 403) return <>{header}<ForbiddenState /></>;
@@ -104,7 +104,7 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
             </div>
             <div className="bd">
               <p className="int-role">{PROVIDER_ROLE[p]}</p>
-              <p className="empty-mini">Belum ada koneksi {PROVIDER_LABEL[p]} di workspace ini. Koneksi baru dimulai sebagai draft.</p>
+              <p className="empty-mini">Belum ada koneksi {PROVIDER_LABEL[p]} di perusahaan ini. Koneksi baru dimulai sebagai draft.</p>
             </div>
           </section>
         ))}

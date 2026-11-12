@@ -27,7 +27,7 @@ export function writeError(e: unknown, what: string): WriteError {
           conflict: true, field: null,
         };
       case 403:
-        return { title: 'Tidak diizinkan', body: `Hak Anda di workspace ini tidak mencakup perubahan ini. Tidak ada yang berubah.${rid}`, conflict: false, field: null };
+        return { title: 'Tidak diizinkan', body: `Hak Anda di perusahaan ini tidak mencakup perubahan ini. Tidak ada yang berubah.${rid}`, conflict: false, field: null };
       case 404:
         return { title: 'Data tidak ditemukan', body: `Data ini tidak ada atau tidak dapat Anda akses. Muat ulang daftar.${rid}`, conflict: true, field: null };
       case 422:

@@ -421,7 +421,10 @@ export interface paths {
         };
         get: operations["listWorkspaceMembers"];
         put?: never;
-        /** Add member by exact account subject (admin.members) */
+        /**
+         * Add member by exact account subject (admin.members)
+         * @description CP5a: a user belongs to one company. 409 user_in_other_company when the account already has an active membership in another active company (deactivate it there first).
+         */
         post: operations["addWorkspaceMember"];
         delete?: never;
         options?: never;
@@ -870,7 +873,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update settings (admin.settings grant) */
+        /**
+         * Update settings (admin.settings grant)
+         * @description CP5a: available only in UAT Superadmin mode (company administration in UAT). In password/SSO mode the company configuration comes from the company itself and this write answers 404; the GET stays.
+         */
         patch: operations["updateWorkspaceSettings"];
         trace?: never;
     };
@@ -886,7 +892,7 @@ export interface paths {
         put?: never;
         /**
          * Create company + workspace (UAT superadmin only; no memberships)
-         * @description undefined CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
+         * @description CP5a: 404 outside UAT Superadmin mode. CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
          */
         post: operations["createCompany"];
         delete?: never;
@@ -910,7 +916,7 @@ export interface paths {
         head?: never;
         /**
          * Activate/deactivate a company (UAT superadmin only)
-         * @description CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
+         * @description CP5a: 404 outside UAT Superadmin mode. CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
          */
         patch: operations["setCompanyActive"];
         trace?: never;
@@ -928,7 +934,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed. */
+        /**
+         * Edit an existing company profile: company and workspace name, time zone, reporter code (UAT superadmin only). The code is immutable (ticket-number prefix); unknown fields such as code are rejected. auditEventId is null when nothing changed.
+         * @description CP5a: 404 outside UAT Superadmin mode.
+         */
         patch: operations["updateCompany"];
         trace?: never;
     };
@@ -980,7 +989,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Change role/active (admin.members; not self; deactivation revokes grants) */
+        /**
+         * Change role/active (admin.members; not self; deactivation revokes grants)
+         * @description CP5a: reactivating answers 409 user_in_other_company when the account is active in another company.
+         */
         patch: operations["updateWorkspaceMember"];
         trace?: never;
     };
@@ -1532,7 +1544,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;

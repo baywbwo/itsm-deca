@@ -1,5 +1,6 @@
-//! Workspace reads. Access = active membership in an active workspace, or the UAT
-//! Superadmin grant. Foreign or unknown IDs both answer 404 (no enumeration).
+//! Workspace reads. Access = the caller's one company (home membership picked by the server,
+//! `home_membership_sql!`), or the UAT Superadmin grant. Foreign or unknown IDs both answer 404
+//! (no enumeration). There is no client-side workspace switching (CP5a).
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -33,13 +34,16 @@ pub struct ListBody<T> {
     pub(crate) items: Vec<T>,
 }
 
-const WORKSPACE_SELECT: &str = "SELECT w.id, w.code, w.name, w.timezone, w.company_id, w.version, \
+const WORKSPACE_SELECT: &str = concat!(
+    "SELECT w.id, w.code, w.name, w.timezone, w.company_id, w.version, \
             c.brand_key, COALESCE(c.brand_name, c.name) AS brand_name, m.role AS my_role \
      FROM workspaces w \
      JOIN companies c ON c.id = w.company_id \
      LEFT JOIN workspace_memberships m \
-            ON m.workspace_id = w.id AND m.user_id = $1 AND m.active \
-     WHERE w.active AND (m.id IS NOT NULL OR $2)";
+            ON m.workspace_id = w.id AND m.user_id = $1 AND m.active AND m.id = ",
+    crate::home_membership_sql!(),
+    " WHERE w.active AND (m.id IS NOT NULL OR $2)",
+);
 
 pub(crate) fn parse_id(raw: &str) -> Result<Uuid, AppError> {
     Uuid::parse_str(raw).map_err(|_| AppError::NotFound)

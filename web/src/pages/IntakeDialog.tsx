@@ -236,10 +236,10 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const body = (
     <>
       <p className="muted tiny">Perusahaan pelapor: <strong>{workspace.code} · {workspace.name}</strong> · mengikuti
-        workspace aktif (tidak dapat diubah di sini)</p>
+        perusahaan Anda (tidak dapat diubah di sini)</p>
       {restored.current && (
         <p className="notice tiny" role="note">Draf belum terkirim dipulihkan. Draf hanya disimpan di memori tab ini
-          untuk akun dan workspace ini; hilang saat halaman dimuat ulang.</p>
+          untuk akun dan perusahaan ini; hilang saat halaman dimuat ulang.</p>
       )}
       <div ref={summaryRef} tabIndex={-1} aria-live="assertive">
         {errors.length > 1 && (
@@ -274,7 +274,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
           </div>
         )}
       </div>
-      {load.status === 'loading' && <div role="status"><p className="muted">Memuat pilihan workspace…</p><div className="skeleton" aria-hidden="true" /></div>}
+      {load.status === 'loading' && <div role="status"><p className="muted">Memuat pilihan…</p><div className="skeleton" aria-hidden="true" /></div>}
       {load.status === 'error' && (
         <div className="state-error" role="alert">
           <h3>Pilihan form belum dapat dimuat</h3>
@@ -331,7 +331,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                 {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
                   empty: 'Belum ditugaskan',
                   disabled: ownerChoices.length === 0,
-                  hint: canAny ? 'Anggota aktif workspace ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
+                  hint: canAny ? 'Anggota aktif perusahaan ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
                 })}
                 {select('receivingUnitId', 'Unit penerima', catalog(data.catalogs.receivingUnits))}
                 {select('regionId', 'Wilayah', catalog(data.catalogs.regions))}
@@ -370,7 +370,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                         aria-invalid={errorOf('jiraIssueKey') ? true : undefined}
                         aria-describedby={`${fid('jiraIssueKey')}-hint${errorOf('jiraIssueKey') ? ` ${fid('jiraIssueKey')}-error` : ''}`}
                         onChange={(e) => set('jiraIssueKey', e.target.value)} />
-                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue yang dikenal direktori Jira workspace ini.</span>
+                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue yang dikenal direktori Jira perusahaan ini.</span>
                       {errorOf('jiraIssueKey') && <span id={`${fid('jiraIssueKey')}-error`} className="field-error">{errorOf('jiraIssueKey')}</span>}
                     </div>
                   )}
@@ -408,7 +408,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
             {primaryButton}
             {cancelButton}
             {discardButton}
-            <span className="foot-note">Nomor tiket dibuat otomatis per workspace</span>
+            <span className="foot-note">Nomor tiket dibuat otomatis per perusahaan</span>
           </div>
         </div>
       </section>
@@ -435,7 +435,7 @@ function fresh(tz: string): IntakeDraft {
 }
 
 function providerHint(p: IntakeDirectory['jira']): string {
-  if (!p) return 'Belum dikonfigurasi untuk workspace ini.';
+  if (!p) return 'Belum dikonfigurasi untuk perusahaan ini.';
   if (p.state === 'disabled') return `${p.displayName} dinonaktifkan.`;
   return `${p.displayName} · simulasi, hasil terkonfigurasi: ${OUTCOME_LABEL[p.simulatedOutcome]}.`;
 }
@@ -466,7 +466,7 @@ function classify(e: unknown): Outcome {
     case 401:
       return { kind: 'definite', title: 'Sesi berakhir', message: 'Muat ulang halaman untuk masuk lagi. Draf di memori akan hilang saat dimuat ulang.' };
     case 404:
-      return { kind: 'definite', title: 'Workspace tidak ditemukan', message: `Workspace ini tidak ada atau tidak dapat Anda akses.${rid}` };
+      return { kind: 'definite', title: 'Perusahaan tidak ditemukan', message: `Perusahaan ini tidak ada atau tidak dapat Anda akses.${rid}` };
     default:
       return { kind: 'definite', title: 'Isian tidak valid', message: `${e.message} Tidak ada tiket yang dibuat.${rid}` };
   }
@@ -475,16 +475,16 @@ function classify(e: unknown): Outcome {
 function fieldMessage(field: string): string {
   switch (field) {
     case 'receivedAt': return 'Waktu diterima tidak boleh lebih dari 5 menit ke depan atau sebelum tahun 2000.';
-    case 'ownerUserId': return 'PIC harus anggota aktif workspace ini.';
-    case 'merchantId': return 'Merchant tidak dikenal di workspace ini.';
-    case 'jira.issueKey': return 'Issue tidak dikenal di koneksi Jira (simulasi) workspace ini.';
-    case 'jira.assigneeId': return 'Assignee Jira tidak terdaftar di koneksi workspace ini.';
-    case 'jira.mode': case 'jira': return 'Koneksi Jira workspace ini tidak tersedia.';
-    case 'larkDestinationId': return 'Channel Lark tidak tersedia di workspace ini.';
+    case 'ownerUserId': return 'PIC harus anggota aktif perusahaan ini.';
+    case 'merchantId': return 'Merchant tidak dikenal di perusahaan ini.';
+    case 'jira.issueKey': return 'Issue tidak dikenal di koneksi Jira (simulasi) perusahaan ini.';
+    case 'jira.assigneeId': return 'Assignee Jira tidak terdaftar di koneksi perusahaan ini.';
+    case 'jira.mode': case 'jira': return 'Koneksi Jira perusahaan ini tidak tersedia.';
+    case 'larkDestinationId': return 'Channel Lark tidak tersedia di perusahaan ini.';
     case 'subject': return 'Judul wajib diisi (maksimal 300 karakter).';
     case 'chronology': return 'Kronologi wajib diisi (maksimal 20.000 karakter).';
     case 'jira.title': return 'Judul issue Jira wajib diisi (maksimal 300 karakter).';
-    default: return 'Pilihan ini tidak aktif atau bukan milik workspace ini. Pilih ulang.';
+    default: return 'Pilihan ini tidak aktif atau bukan milik perusahaan ini. Pilih ulang.';
   }
 }
 
