@@ -6,6 +6,6 @@ it('preserves MFA challenge and submits second factor without pre-session CSRF',
  await expect(api.login('admin','password')).rejects.toBeInstanceOf(MfaChallenge);
  await expect(api.loginMfa('challenge-1','123456')).resolves.toMatchObject({mfaEnrolled:true});
  expect(seen.map(r=>r.path)).toEqual(['/api/v1/login','/api/v1/login/mfa']);
- expect(seen[1].body).toEqual({challengeId:'challenge-1',code:'123456'});
+ expect(seen[1]?.body).toEqual({challengeId:'challenge-1',code:'123456'});
  expect(api.hasCsrf()).toBe(true);
 });
