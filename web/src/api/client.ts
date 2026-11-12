@@ -149,6 +149,10 @@ export interface TransportResponse {
 export type Transport = (req: TransportRequest) => Promise<TransportResponse>;
 
 /** Failure with a stable code; `status` 0 means the network or the payload shape failed. */
+export class MfaChallenge extends Error {
+  constructor(readonly challengeId: string) { super("Verifikasi MFA diperlukan"); }
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -281,7 +285,7 @@ export function createApi(transport: Transport) {
     platformAdmin: v.platformAdmin === true, mfaEnrolled: v.mfaEnrolled === true, mfaRequired: v.mfaRequired === true,
   });
 
-  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);
+  const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login', '/api/v1/login/mfa']);
 
   // Shared by concurrent callers; each caller still stops at its own abort or timeout.
   function refreshCsrf(signal?: AbortSignal): Promise<string> {
@@ -314,6 +318,10 @@ export function createApi(transport: Transport) {
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
     const res = await send(req);
+    if (res.status === 401 && isErrorBody(res.body) && res.body.error.code === 'mfa_required') {
+      const challenge = (res.body.error as { challengeId?: unknown }).challengeId;
+      if (typeof challenge === 'string') throw new MfaChallenge(challenge);
+    }
     if (endsSession(res)) sessionEnded();
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
@@ -345,6 +353,21 @@ export function createApi(transport: Transport) {
       sessionActive = true;
       return toSession(issued);
     },
+    async loginMfa(challengeId: string, code: string, recovery = false): Promise<Session> {
+      const issued = await call({ method: 'POST', path: '/api/v1/login/mfa', headers: { 'X-ITSM-Login': '1' },
+        body: { challengeId, ...(recovery ? { recoveryCode: code } : { code }) } }, isSessionIssued);
+      csrfToken = issued.csrfToken;
+      sessionActive = true;
+      return toSession(issued);
+    },
+    startMfaEnrollment: () => call({ method: 'POST', path: '/api/v1/me/mfa/enrollment', headers: csrf() },
+      (v: unknown): v is { enrollmentId: string; otpauthUri: string; expiresAt: string } => !!v && typeof v === 'object' &&
+        'enrollmentId' in v && typeof v.enrollmentId === 'string' && 'otpauthUri' in v && typeof v.otpauthUri === 'string' &&
+        'expiresAt' in v && typeof v.expiresAt === 'string', 201),
+    confirmMfaEnrollment: (id: string, code: string) => call({ method: 'POST', path: `/api/v1/me/mfa/enrollment/${encodeURIComponent(id)}/confirm`,
+      headers: csrf(), body: { code } },
+      (v: unknown): v is { recoveryCodes: string[] } => !!v && typeof v === 'object' && 'recoveryCodes' in v &&
+        Array.isArray(v.recoveryCodes) && v.recoveryCodes.every(c => typeof c === 'string')),
     async logout(): Promise<void> {
       sessionActive = false;
       await call({ method: 'DELETE', path: '/api/v1/session', headers: csrf() }, isEmpty, 204);
