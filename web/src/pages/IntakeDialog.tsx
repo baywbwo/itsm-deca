@@ -486,9 +486,9 @@ function Receipt({ api, workspace, result, onClose, onAnother }: {
         <div className="props-row"><dt>Kanal</dt><dd>{t.channel?.label ?? '—'}</dd></div>
         <div className="props-row"><dt>Diterima</dt><dd>{instantLabel(t.receivedAt, workspace.timezone)}</dd></div>
       </dl>
-      <p className="spaced"><a href={href} onClick={onClose}>Lihat {t.displayNumber} di List tiket</a></p>
+      <p className="spaced"><a href={href} onClick={onClose}>Lihat {t.displayNumber} di daftar tiket</a></p>
       <IntegrationPanel api={api} workspaceId={workspace.id} ticketId={t.id} timezone={workspace.timezone} initial={result.integrations} />
-      <p className="tiny muted spaced">Catatan tindak lanjut, percakapan dan riwayat ada di detail tiket (buka dari List tiket).</p>
+      <p className="tiny muted spaced">Catatan tindak lanjut dan riwayat ada di detail tiket (buka dari daftar tiket).</p>
     </Dialog>
   );
 }

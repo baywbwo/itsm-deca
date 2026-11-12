@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import type { Dashboard } from '../api/types';
-import { barPercent, channelSlices, dataQuality, donutGradient, resolvedKpiLabel } from './dashboardView';
+import { attentionQuery, barPercent, channelSlices, dataQuality, donutGradient, resolvedKpiLabel } from './dashboardView';
+import { parseDashboardQuery, parseTicketQuery } from './routes';
 
 const dim = (id: string | null, label: string | null, count: number) =>
   ({ id, code: null, label, count, filter: {} }) as Dashboard['channels'][number];
+
+describe('CP-UI2b dashboard defaults', () => {
+  it('opens on this month', () => {
+    expect(parseDashboardQuery('').period).toBe('this_month');
+    expect(parseDashboardQuery('period=bogus').period).toBe('this_month');
+    expect(parseDashboardQuery('period=today').period).toBe('today');
+  });
+
+  it('Perlu perhatian reads the unassigned drilldown oldest first through the List', () => {
+    const q = attentionQuery({ status: ['new', 'open'], owner: 'unassigned', channel: 'c1' });
+    expect(q).toBe('status=new%2Copen&owner=unassigned&channel=c1&sort=received_at&order=asc');
+    const p = parseTicketQuery(q);
+    expect([p.filters.owner, p.filters.status, p.sort, p.order]).toEqual(['unassigned', 'new,open', 'received_at', 'asc']);
+  });
+});
 
 describe('CP-UI2 dashboard view', () => {
   it('names the resolved KPI after the selected period', () => {

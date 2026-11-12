@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
-  ConversationPanel,
   Note,
   AssignmentEvent,
   Catalogs,
@@ -43,6 +42,9 @@ type Load = { status: 'loading' } | { status: 'error'; error: unknown } | { stat
  * answered; `refresh` re-reads after a status/PIC change made in another dialog.
  * CP-UI2: owner prototype layout (header card with actions, two columns, no tabs; one column in
  * the peek and below 1080 px). D13: attachments stay out of scope (no Lampiran section).
+ * CP-UI2b (04-tiket-detail): left = Kronologi, Catatan internal, Riwayat siklus, then the audit
+ * trail folded in a closed <details>; right = Atribut (with transaction fields), PIC, related work.
+ * The customer conversation card is gone (no omnichannel adapter; one info line in Kronologi).
  */
 export function TicketDetailView({ api, workspace, ticketId, full, refresh, canAssign, onClose, onToggleFull, onChanged, onTransition, onAssign }: {
   api: Api;
@@ -61,6 +63,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
   const [attempt, setAttempt] = useState(0);
   const [audit, setAudit] = useState(0);
   const [escalate, setEscalate] = useState(0);
+  const [auditOpen, setAuditOpen] = useState(false);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -114,7 +117,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
                 {open && t.allowedActions.length > 0 && (
                   <Button variant="primary" onClick={() => onTransition(t)}><Icon name="check" size={16} /> Ubah status</Button>
                 )}
-                <Button variant="ghost" onClick={onToggleFull}>{full ? '↙ Side peek' : '↗ Halaman penuh'}</Button>
+                {!full && <Button variant="ghost" onClick={onToggleFull}>↗ Halaman penuh</Button>}
               </div>
             </header>
             {detail.can.readOnly && (
@@ -131,12 +134,20 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
                 <Card id={`cycle-${t.id}`} title="Riwayat siklus" sub="resolve & reopen">
                   <CycleTimeline workspace={workspace} detail={detail} />
                 </Card>
-                <Card id={`conv-${t.id}`} title="Percakapan pelanggan" sub="hanya baca">
-                  <Conversations api={api} workspace={workspace} ticketId={t.id} />
-                </Card>
-                <Card id={`audit-${t.id}`} title="Jejak audit" sub="terbaru di atas">
-                  <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} refresh={audit} />
-                </Card>
+                <details className="pcard audit-fold" open={auditOpen}
+                  onToggle={(e) => setAuditOpen((e.currentTarget as HTMLDetailsElement).open)}>
+                  <summary className="hd">
+                    <h3>Jejak audit</h3>
+                    <span className="sub">terbaru di atas</span>
+                    <span className="r"><Icon name="chevron" size={14} /></span>
+                  </summary>
+                  {/* Read only when opened: a closed fold costs no request. */}
+                  {auditOpen && (
+                    <div className="bd">
+                      <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} refresh={audit} />
+                    </div>
+                  )}
+                </details>
               </div>
               <div className="dcol">
                 <Card id={`attr-${t.id}`} title="Atribut">
@@ -146,7 +157,8 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
                     <dt>Unit</dt><dd>{p.receivingUnit?.label ?? '—'}</dd>
                     <dt>Wilayah</dt><dd>{p.region?.label ?? 'Belum dipetakan'}</dd>
                     <dt>Channel</dt><dd>{p.intakeChannel?.label ?? '—'}</dd>
-                    <dt>Prioritas</dt><dd>{p.priority?.label ?? '—'}</dd>
+                    <dt>Transaksi</dt><dd className={p.transactionActivity ? 'prewrap kv-text' : undefined}>{p.transactionActivity ?? '—'}</dd>
+                    {p.foreignBranchReference && <><dt>Ref. cabang LN</dt><dd>{p.foreignBranchReference}</dd></>}
                     <dt>Merchant</dt><dd>{p.merchant?.label ?? '—'} <Badge tone="waiting">CIF ditunda</Badge></dd>
                     <dt>Diterima</dt><dd>{instantLabel(p.receivedAt, tz)}</dd>
                     <dt>Diperbarui</dt><dd>{instantLabel(t.updatedAt, tz)}</dd>
@@ -315,20 +327,8 @@ function Summary({ api, workspace, detail, onSaved, onReload }: {
       <div>
         {notice && <p className="notice" role="status">{notice}</p>}
         <p className="prewrap">{p.chronology}</p>
+        <p className="tiny muted">Identitas CIF dan percakapan omnichannel belum tersambung; tidak ada pesan yang dikirim dari aplikasi ini.</p>
         {detail.can.editProperties && <div className="row"><Button className="btn-small" onClick={startEdit}>Edit properti</Button></div>}
-        <div className="sectionline">
-          <h3>Transaksi dan produk</h3>
-          <p className={p.transactionActivity ? 'prewrap' : 'muted'}>{p.transactionActivity ?? 'Belum diisi.'}</p>
-          <p className="tiny muted">Referensi cabang luar negeri: {p.foreignBranchReference ?? '—'}</p>
-        </div>
-        <div className="sectionline">
-          <h3>Penyebab dan hasil penanganan</h3>
-          <p className={p.cause ? 'prewrap' : 'muted'}>{p.cause ?? 'Belum ada hasil investigasi. Root cause tidak dipaksa saat intake.'}</p>
-        </div>
-        <div className="banner">
-          <h3>Konteks pelanggan dan percakapan</h3>
-          <p className="tiny">Identitas dari API CIF dan percakapan omnichannel belum tersambung. Nomor identitas tidak ditampilkan dan tidak perlu diketik ulang. Tidak ada pesan yang dikirim dari aplikasi ini.</p>
-        </div>
       </div>
     );
   }
@@ -643,6 +643,8 @@ function FollowUp({ api, workspace, detail, onAdded }: { api: Api; workspace: Wo
   const [error, setError] = useState<SaveError | null>(null);
   const [fieldErr, setFieldErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // CP-UI2b: the GPT assistant panel opens only on "Bantu tulis" (prototype); closed by default.
+  const [assist, setAssist] = useState(false);
   // One key per draft: resending the same text after a lost answer replays (200) instead of duplicating.
   const key = useRef(newKey());
   const ctl = useRef<AbortController | null>(null);
@@ -704,68 +706,30 @@ function FollowUp({ api, workspace, detail, onAdded }: { api: Api; workspace: Wo
         <form className="formgrid composer" aria-label="Tambah catatan internal" onSubmit={(e) => { e.preventDefault(); void add(); }}>
           {error && <div className="full state-error" role="alert"><h3>{error.title}</h3><p>{error.body}</p></div>}
           <div className="field full">
-            <label htmlFor={`${id}-note`}>Catatan penanganan *</label>
+            <label htmlFor={`${id}-note`} className="sr-only">Catatan penanganan (wajib)</label>
             <textarea id={`${id}-note`} className="field-control" value={text} maxLength={LIMITS.note} disabled={busy}
+              placeholder="Tulis catatan penanganan…"
               aria-invalid={fieldErr ? true : undefined} aria-describedby={fieldErr ? `${id}-note-err` : undefined}
               onChange={(e) => { setText(e.target.value); setFieldErr(null); setNotice(null); }} />
             {fieldErr && <span id={`${id}-note-err`} className="field-error">{fieldErr}</span>}
           </div>
-          <div className="full"><WordingAssistant key={`${workspace.id}:${detail.ticket.id}`} api={api} workspaceId={workspace.id} text={text}
-            mode="reply" disabled={busy} onApply={setText} /></div>
           <div className="full row between">
             <span className="tiny muted">Maks. {num(LIMITS.note)} karakter · catatan tidak dapat diubah setelah disimpan · jangan menulis identitas atau data rahasia nasabah</span>
-            <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
+            <span className="row">
+              <Button className="btn-small" aria-expanded={assist} aria-controls={`${id}-assist`} onClick={() => setAssist((v) => !v)}>
+                <span aria-hidden="true">✦</span> Bantu tulis
+              </Button>
+              <Button variant="primary" className="btn-small" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
+            </span>
+          </div>
+          <div className="full" id={`${id}-assist`} hidden={!assist}>
+            {assist && <WordingAssistant key={`${workspace.id}:${detail.ticket.id}`} api={api} workspaceId={workspace.id} text={text}
+              mode="reply" disabled={busy} onApply={setText} />}
           </div>
         </form>
       ) : (
         <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: catatan baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat menambah catatan.'}</p>
       )}
-    </div>
-  );
-}
-
-const DELIVERY_LABEL: Record<string, string> = {
-  received: 'Diterima', queued: 'Antre (belum terkirim)', sent: 'Terkirim ke provider', delivered: 'Sampai', failed: 'Gagal', unknown: 'Belum diketahui',
-};
-
-/** Customer conversation: read-only. No omnichannel adapter exists in this build, so nothing can be sent. */
-function Conversations({ api, workspace, ticketId }: { api: Api; workspace: Workspace; ticketId: string }) {
-  const [panel, setPanel] = useState<ConversationPanel | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    const c = new AbortController();
-    setError(null);
-    api.getTicketConversations(workspace.id, ticketId, c.signal).then(setPanel, (e: unknown) => { if (!isAbort(e)) setError(e); });
-    return () => c.abort();
-  }, [api, workspace.id, ticketId, attempt]);
-  const tz = workspace.timezone;
-  return (
-    <div>
-      {error ? <ErrorState title="Percakapan belum dapat dimuat" body={message(error)} onRetry={() => setAttempt((n) => n + 1)} />
-        : !panel ? <LoadingState label="Memuat percakapan…" rows={1} /> : (
-          <>
-            {!panel.adapterConfigured && (
-              <p className="banner" role="note">Kanal omnichannel belum tersambung. Percakapan hanya dapat dibaca; pesan tidak dapat dikirim dari sini.</p>
-            )}
-            {panel.conversations.length === 0 ? <p className="muted">Belum ada percakapan tercatat untuk tiket ini.</p>
-              : panel.conversations.map((cv) => (
-                <article key={cv.id} className="card" aria-label={`Percakapan ${cv.channelLabel}`}>
-                  <p className="tiny">{cv.channelLabel} · utas {cv.externalThreadId} <Badge tone="waiting">SIMULASI</Badge></p>
-                  <ol className="plain">
-                    {cv.messages.map((m) => (
-                      <li key={m.id} className="activity">
-                        <strong>{m.direction === 'inbound' ? 'Pelanggan' : 'Petugas'}</strong>
-                        <span className="tiny muted"> · {instantLabel(m.occurredAt, tz)} · {DELIVERY_LABEL[m.deliveryState] ?? m.deliveryState}</span>
-                        <p className="prewrap tiny">{m.body}</p>
-                      </li>
-                    ))}
-                  </ol>
-                </article>
-              ))}
-            {panel.truncated && <p className="tiny muted">Hanya percakapan terbaru yang ditampilkan.</p>}
-          </>
-        )}
     </div>
   );
 }
@@ -776,7 +740,10 @@ const KIND_LABEL: Record<AssignmentEvent['kind'], string> = {
   reassign: 'Dialihkan',
 };
 
-/** Riwayat siklus: creation, then every resolve/reopen recorded by the server (oldest first). */
+/**
+ * Riwayat siklus: creation, then every resolve/reopen recorded by the server (oldest first);
+ * CP-UI2b: the ticket's "Penyebab dan hasil penanganan" closes the list, only when it is filled.
+ */
 function CycleTimeline({ workspace, detail }: { workspace: Workspace; detail: TicketDetail }) {
   const tz = workspace.timezone;
   const p = detail.properties;
@@ -795,6 +762,12 @@ function CycleTimeline({ workspace, detail }: { workspace: Workspace; detail: Ti
         </li>
       ))}
       {detail.resolutions.length === 0 && <li className="empty-tl"><span className="tiny muted">Belum pernah diselesaikan.</span></li>}
+      {p.cause && (
+        <li className="ok">
+          <b>Penyebab &amp; hasil penanganan</b>
+          <p className="tiny prewrap">{p.cause}</p>
+        </li>
+      )}
     </ol>
   );
 }

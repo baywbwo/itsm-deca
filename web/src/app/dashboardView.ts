@@ -1,5 +1,21 @@
-import type { Dashboard, DashboardPeriodKey } from '../api/types';
+import type { Dashboard, DashboardPeriodKey, TicketFilter } from '../api/types';
 import { PERIOD_LABELS } from './format';
+import { filterToQuery } from './routes';
+
+/** CP-UI2b "Perlu perhatian": at most this many tickets on the dashboard (prototype shows 5-6). */
+export const ATTENTION_LIMIT = 6;
+
+/**
+ * CP-UI2b: "Perlu perhatian" = the prototype's "belum ada PIC, urut umur". It is the server's own
+ * "Belum ditugaskan" drilldown (active, no PIC, dashboard filters) read through the ticket List,
+ * oldest received first. The same query (without the limit) is the "Lihat semua" link.
+ */
+export function attentionQuery(unassigned: TicketFilter): string {
+  const q = new URLSearchParams(filterToQuery(unassigned));
+  q.set('sort', 'received_at');
+  q.set('order', 'asc');
+  return q.toString();
+}
 
 /** CP-UI2: "Selesai bulan ini" in the owner prototype; the label follows the selected period. */
 export function resolvedKpiLabel(period: DashboardPeriodKey): string {

@@ -76,7 +76,13 @@ button.tno { border: 0; background: none; padding: 0; font: inherit; font-weight
 .tmeta { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 /* Beats the older table.tickets cell rules: one-line cells, only the subject wraps (min 260 px). */
 .ptable table.tickets td, .ptable table.tickets td .badge { white-space: nowrap; }
-.ptable table.tickets td.subj { white-space: normal; min-width: 260px; }
+.ptable table.tickets td.subj { white-space: normal; min-width: 170px; }
+/* CP-UI2b: tighter rows like the prototype; category/channel may wrap so 9 columns fit at 1440 px. */
+.ptable table.tickets th { padding: 9px 10px; }
+.ptable table.tickets td { padding: 8px 10px; }
+.ptable table.tickets td:first-child, .ptable table.tickets th:first-child { padding-left: 16px; }
+.ptable table.tickets td.wrapcell { white-space: normal; min-width: 84px; max-width: 150px; }
+.ptable table.tickets .tsub { max-width: 300px; }
 .ptable .subj { white-space: normal; }
 .nowrap { white-space: nowrap; }
 .muted-cell { color: var(--muted); }
@@ -97,6 +103,12 @@ button.tno { border: 0; background: none; padding: 0; font: inherit; font-weight
 .list-card { overflow: hidden; }
 .list-card > .toolbar { margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
 .list-card > .notice { margin: 12px 16px 0; }
+/* CP-UI2b toolbar: search + three selects on the left, compact tools on the right (one row at 1440). */
+.list-card .ticket-toolbar .toolbar-search { flex: 1 1 200px; max-width: 320px; }
+.list-card .ticket-toolbar .toolbar-select .field-control { max-width: 180px; }
+.toolbar-tools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-left: auto; }
+.toolbar-tools .btn, .toolbar-tools .popover-trigger, .toolbar-tools .field-control { min-height: 34px; padding-top: 5px; padding-bottom: 5px; font-size: 12.5px; }
+.toolbar-tools .toolbar-sort .field-control { max-width: 150px; }
 .chip-rows { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
 .pchips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .pchip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--ink-2); padding: 5px 11px; min-height: 30px; font-size: 11.5px; font-weight: 800; cursor: pointer; }
@@ -158,6 +170,16 @@ ol.tl > li p { margin: 0; }
   .dhead .acts > * { flex: 1 1 auto; }
   dl.kv { grid-template-columns: 96px minmax(0, 1fr); }
   .chip-rows { padding: 10px 12px; }
+  .toolbar-tools { margin-left: 0; width: 100%; }
+  .list-card .ticket-toolbar .toolbar-search { max-width: none; flex-basis: 100%; }
   .ppager .r { margin-left: 0; width: 100%; }
   .ppager .r > * { flex: 1 1 0; }
 }
+
+/* CP-UI2b detail: audit trail folded (closed by default), transaction text in Atribut. */
+details.audit-fold > summary { cursor: pointer; list-style: none; }
+details.audit-fold > summary::-webkit-details-marker { display: none; }
+details.audit-fold:not([open]) > summary { border-bottom: 0; }
+details.audit-fold > summary .r svg { transition: transform .15s; transform: rotate(-90deg); }
+details.audit-fold[open] > summary .r svg { transform: none; }
+dl.kv dd.kv-text { font-weight: 400; font-size: 12px; }

@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type DragEvent } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   CatalogItem,
@@ -24,6 +24,8 @@ import {
   toHash,
   canonicalColumns,
   COLUMN_LABELS,
+  DEFAULT_TICKET_COLUMNS,
+  isDefaultColumns,
   TICKET_COLUMNS,
   type TicketColumn,
   type TicketFilterKey,
@@ -68,6 +70,9 @@ const SORT_LABELS: Record<TicketSort, string> = {
   received_at: 'Waktu diterima',
   number: 'Nomor tiket',
 };
+
+/** CP-UI2b: short labels for the compact sort control (its accessible name says "Urutkan"). */
+const SORT_SHORT: Record<TicketSort, string> = { updated_at: 'Diperbarui', received_at: 'Diterima', number: 'Nomor' };
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -212,7 +217,6 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
           ? `Daftar pengaduan ${workspace.name}`
           : `${num(total)} tiket · diurutkan berdasarkan ${SORT_LABELS[params.sort].toLowerCase()} ${params.order === 'asc' ? '(naik)' : '(turun)'}`}
         action={canCreate ? <Button variant="primary" onClick={() => setCreateOpen(true)}><Icon name="plus" size={16} /> Tiket baru</Button> : undefined} />
-      <ViewTabs view={params.view} onChange={(view) => go({ ...params, view })} panelId="ticket-panel" />
       <section className="pcard list-card" aria-label="Daftar dan filter tiket">
       <Toolbar api={api} workspaceId={workspace.id} params={params} options={options} tz={tz} statusLabel={statusLabel}
         searchRef={searchRef} onFilter={setFilter}
@@ -228,7 +232,7 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
           <Button variant="ghost" onClick={() => setNotice(null)}>Tutup</Button>
         </div>
       )}
-      <div id="ticket-panel" role="tabpanel" aria-label={params.view === 'list' ? 'List tiket' : 'Board status'}>
+      <div id="ticket-panel">
         {state.status === 'loading' && <TicketSkeleton view={params.view} />}
         {state.status === 'error' && (
           <TicketError error={state.error} onRetry={() => { searchRef.current?.focus(); reload(); }}
@@ -279,41 +283,13 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   );
 }
 
-/** C04: tablist with roving focus; switching keeps every filter (only `view` changes in the URL). */
-function ViewTabs({ view, onChange, panelId }: { view: TicketView; onChange: (v: TicketView) => void; panelId: string }) {
-  const tabs: readonly { id: TicketView; label: string }[] = [
-    { id: 'list', label: 'List tiket' },
-    { id: 'board', label: 'Board status' },
-  ];
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const onKey = (e: KeyboardEvent, i: number) => {
-    const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    const next = delta ? (i + delta + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    refs.current[next]?.focus();
-    onChange(tabs[next]!.id);
-  };
-  return (
-    <div className="tabs" role="tablist" aria-label="Tampilan tiket">
-      {tabs.map((t, i) => (
-        <button key={t.id} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`tab-${t.id}`}
-          aria-selected={view === t.id} aria-controls={panelId} tabIndex={view === t.id ? 0 : -1}
-          className={view === t.id ? 'active' : undefined} onClick={() => onChange(t.id)} onKeyDown={(e) => onKey(e, i)}>
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 /** Filters inside the Filter popover (everything except search and status). */
 const POPOVER_FILTERS: readonly TicketFilterKey[] = [
   'channel', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore',
 ];
 
 /**
- * C05 one-row toolbar (wraps): search (300 ms debounce, Enter applies now), status, Filter popover
+ * C05/CP-UI2b one-row toolbar like the prototype (wraps on narrow screens): search (300 ms debounce, Enter applies now), status, Filter popover
  * (PIC/kanal/kategori/prioritas/tanggal, with an active-count badge and its own reset), sort, C32
  * saved view and one reset for everything. Active popover filters stay visible as removable chips.
  */
@@ -432,6 +408,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
             )}
           </select>
         </label>}
+        <div className="toolbar-tools">
         <Popover className="filter-popover" label="Filter lanjutan" title="Filter"
           trigger={<>
             <span aria-hidden="true">⚲</span> Filter
@@ -486,18 +463,19 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
               onSort(s as TicketSort, o === 'asc' ? 'asc' : 'desc');
             }}>
             {(Object.keys(SORT_LABELS) as TicketSort[]).flatMap((s) => [
-              <option key={`${s}:desc`} value={`${s}:desc`}>Urut: {SORT_LABELS[s]} ↓</option>,
-              <option key={`${s}:asc`} value={`${s}:asc`}>Urut: {SORT_LABELS[s]} ↑</option>,
+              <option key={`${s}:desc`} value={`${s}:desc`}>{SORT_SHORT[s]} ↓</option>,
+              <option key={`${s}:asc`} value={`${s}:asc`}>{SORT_SHORT[s]} ↑</option>,
             ])}
           </select>
         </label>
-        <ColumnChooser params={params} onApply={onApply} />
+        {list && <ColumnChooser params={params} onApply={onApply} />}
         <SavedViews api={api} workspaceId={workspaceId} params={params} onApply={onApply} />
         {activeCount > 0 && (
           <Button variant="ghost" onClick={onReset} aria-label={`Reset semua filter (${activeCount} aktif)`}>
             Reset ({activeCount})
           </Button>
         )}
+        </div>
       </div>
       {chips.length > 0 && (
         <ul className="chips" aria-label="Filter aktif">
@@ -601,6 +579,7 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
   };
   const num_ = sortHeader('number', 'Nomor');
   const recv = sortHeader('received_at', 'Umur');
+  const recvAt = sortHeader('received_at', 'Diterima');
   const upd = sortHeader('updated_at', 'Diperbarui');
   const status = params.filters.status;
   const show = (c: TicketColumn) => params.columns.includes(c);
@@ -648,10 +627,10 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
                 {show('channel') && <th scope="col">Kategori</th>}
                 {show('channel') && <th scope="col">Channel</th>}
                 {show('owner') && <th scope="col">PIC</th>}
-                {show('received') && <th scope="col">Diterima</th>}
-                {show('received') && <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>}
+                {show('received') && <th scope="col" aria-sort={recvAt.ariaSort}>{recvAt.node}</th>}
                 {show('updated') && <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>}
-                <th scope="col"><span className="sr-only">Aksi</span></th>
+                <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>
+                {params.rowActions && <th scope="col"><span className="sr-only">Aksi</span></th>}
               </tr>
             </thead>
             <tbody>
@@ -666,15 +645,15 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
                   {show('priority') && <td className="nowrap">{t.priority
                     ? <span className={`pri ${priorityDot(t.priority.code)}`}><b aria-hidden="true" />{t.priority.label}</span>
                     : <span className="muted">—</span>}</td>}
-                  {show('channel') && <td>{t.category?.label ?? <span className="muted">Tanpa kategori</span>}</td>}
-                  {show('channel') && <td className="muted-cell">{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</td>}
+                  {show('channel') && <td className="wrapcell">{t.category?.label ?? <span className="muted">Tanpa kategori</span>}</td>}
+                  {show('channel') && <td className="wrapcell muted-cell">{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</td>}
                   {show('owner') && <td className="nowrap">{t.owner
                     ? <span className="cell-pic"><span className="cell-av" aria-hidden="true">{initials(t.owner.label)}</span>{t.owner.label}</span>
                     : <span className="chip-tag">Belum ada</span>}</td>}
                   {show('received') && <td className="nowrap muted-cell" title={instantLabel(t.receivedAt, tz)}>{shortInstant(t.receivedAt, tz)}</td>}
-                  {show('received') && <td className="nowrap"><b>{ageLabel(t.ageSeconds)}</b></td>}
                   {show('updated') && <td className="nowrap muted-cell" title={instantLabel(t.updatedAt, tz)}>{shortInstant(t.updatedAt, tz)}</td>}
-                  <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>
+                  <td className="nowrap"><b>{ageLabel(t.ageSeconds)}</b></td>
+                  {params.rowActions && <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>}
                 </tr>
               ))}
             </tbody>
@@ -1061,9 +1040,12 @@ function errorMessage(e: unknown): string {
   return 'Terjadi kesalahan tak terduga.';
 }
 
-/** C05 column chooser: allowlisted list columns; number, title and action always stay. */
+/**
+ * C05 column chooser: allowlisted list columns; number, subject and age always stay. CP-UI2b: the
+ * default is the prototype's set (Diperbarui off) and the per-row "Ubah status" button is opt-in.
+ */
 function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p: TicketParams) => void }) {
-  const hidden = TICKET_COLUMNS.length - params.columns.length;
+  const changed = !isDefaultColumns(params.columns) || params.rowActions;
   const toggle = (c: TicketColumn, on: boolean) => {
     const next = on ? [...params.columns, c] : params.columns.filter((x) => x !== c);
     if (next.length === 0) return;
@@ -1071,11 +1053,11 @@ function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p:
   };
   return (
     <Popover label="Kolom daftar" title="Kolom daftar"
-      trigger={<>Kolom{hidden > 0 && <span className="count-badge" aria-label={`${hidden} kolom disembunyikan`}>−{hidden}</span>}</>}>
+      trigger={<>Kolom{changed && <span className="count-badge" aria-label="diubah dari bawaan">•</span>}</>}>
       {(close) => (
         <>
           <fieldset className="column-checks">
-            <legend className="tiny muted">Nomor, judul, dan aksi selalu tampil. Minimal satu kolom lain.</legend>
+            <legend className="tiny muted">Nomor, subjek, dan umur selalu tampil. Minimal satu kolom lain.</legend>
             {TICKET_COLUMNS.map((c) => {
               const on = params.columns.includes(c);
               const last = on && params.columns.length === 1;
@@ -1086,9 +1068,14 @@ function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p:
                 </label>
               );
             })}
+            <label className="row check">
+              <input type="checkbox" checked={params.rowActions} onChange={(e) => onApply({ ...params, rowActions: e.target.checked })} />
+              Tombol ubah status per baris
+            </label>
           </fieldset>
           <div className="popover-foot row between">
-            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...TICKET_COLUMNS] })} disabled={hidden === 0}>Tampilkan semua</Button>
+            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...DEFAULT_TICKET_COLUMNS], rowActions: false })}
+              disabled={!changed}>Kembali ke bawaan</Button>
             <Button variant="primary" onClick={() => close()}>Selesai</Button>
           </div>
         </>

@@ -100,11 +100,14 @@ export interface DashboardParams {
 
 const PERIOD_KEYS: readonly string[] = ['today', 'last_7_days', 'this_month'];
 
-/** Unknown period → today; empty filter values are dropped (no filter). */
+/** CP-UI2b: the owner prototype opens on "bulan ini". */
+export const DEFAULT_DASHBOARD_PERIOD: DashboardPeriodKey = 'this_month';
+
+/** Unknown period → this month; empty filter values are dropped (no filter). */
 export function parseDashboardQuery(query: string): DashboardParams {
   const q = new URLSearchParams(query);
   const p = q.get('period');
-  const period = (p && PERIOD_KEYS.includes(p) ? p : 'today') as DashboardPeriodKey;
+  const period = (p && PERIOD_KEYS.includes(p) ? p : DEFAULT_DASHBOARD_PERIOD) as DashboardPeriodKey;
   const filters = Object.fromEntries(DASHBOARD_FILTERS.map((k) => [k, q.get(k) || null])) as DashboardParams['filters'];
   return { period, filters };
 }
@@ -144,22 +147,30 @@ export interface TicketParams {
   order: TicketOrder;
   /** Optional List columns shown (canonical order, never empty). Display only; not sent to the API. */
   columns: TicketColumn[];
+  /**
+   * CP-UI2b: per-row "Ubah status" button in the List (`acts=1`, default off as in the prototype).
+   * Display only: not sent to the API and not part of a saved view (the server allowlists columns).
+   */
+  rowActions: boolean;
 }
 
 /** C32 properties: optional List columns in display order (number and title are always shown). */
 export const TICKET_COLUMNS = ['status', 'priority', 'owner', 'channel', 'received', 'updated'] as const;
 export type TicketColumn = (typeof TICKET_COLUMNS)[number];
 export const COLUMN_LABELS: Record<TicketColumn, string> = {
-  status: 'Status', priority: 'Prioritas', owner: 'PIC', channel: 'Kanal · kategori',
+  status: 'Status', priority: 'Prioritas', owner: 'PIC', channel: 'Kategori · channel',
   received: 'Diterima', updated: 'Diperbarui',
 };
+/** CP-UI2b: the prototype's default List columns (Diperbarui is opt-in through Kolom). */
+export const DEFAULT_TICKET_COLUMNS: readonly TicketColumn[] = ['status', 'priority', 'owner', 'channel', 'received'];
 
 /** Allowlisted, deduplicated, canonical order; unknown names are dropped, nothing left = all. */
 export function canonicalColumns(raw: readonly string[]): TicketColumn[] {
   const picked = TICKET_COLUMNS.filter((c) => raw.includes(c));
   return picked.length ? picked : [...TICKET_COLUMNS];
 }
-const allColumns = (c: readonly TicketColumn[]) => c.length === TICKET_COLUMNS.length;
+export const isDefaultColumns = (c: readonly TicketColumn[]) =>
+  c.length === DEFAULT_TICKET_COLUMNS.length && DEFAULT_TICKET_COLUMNS.every((x) => c.includes(x));
 
 const SORTS: readonly string[] = ['updated_at', 'received_at', 'number'];
 
@@ -172,8 +183,10 @@ export function parseTicketQuery(query: string): TicketParams {
   const s = q.get('sort');
   const sort = (s && SORTS.includes(s) ? s : 'updated_at') as TicketSort;
   const order = q.get('order') === 'asc' ? 'asc' : 'desc';
-  const columns = canonicalColumns((q.get('cols') ?? '').split(','));
-  return { view, filters, sort, order, columns };
+  // No (valid) `cols` = the prototype default; an explicit list is kept as given.
+  const raw = (q.get('cols') ?? '').split(',');
+  const columns = TICKET_COLUMNS.some((c) => raw.includes(c)) ? canonicalColumns(raw) : [...DEFAULT_TICKET_COLUMNS];
+  return { view, filters, sort, order, columns, rowActions: q.get('acts') === '1' };
 }
 
 /** Canonical API query (no `view`): the same scope always gives the same string and cache key. */
@@ -188,10 +201,11 @@ export function ticketApiQuery(p: TicketParams): string {
   return q.toString();
 }
 
-/** URL query: view first (default list omitted), then the API query, then non-default columns. */
+/** URL query: view first (default list omitted), then the API query, then non-default display options. */
 export function ticketQuery(p: TicketParams): string {
   const parts = [p.view === 'board' ? 'view=board' : '', ticketApiQuery(p),
-    allColumns(p.columns) ? '' : `cols=${canonicalColumns(p.columns).join(',')}`];
+    isDefaultColumns(p.columns) ? '' : `cols=${canonicalColumns(p.columns).join(',')}`,
+    p.rowActions ? 'acts=1' : ''];
   return parts.filter(Boolean).join('&');
 }
 
@@ -228,12 +242,14 @@ export function paramsFromSavedView(v: {
     const value = v.query[k];
     if (value) q.set(k, value);
   }
-  return { ...parseTicketQuery(q.toString()), columns: canonicalColumns(v.columns ?? []) };
+  const cols = v.columns ?? [];
+  const columns = TICKET_COLUMNS.some((c) => cols.includes(c)) ? canonicalColumns(cols) : [...DEFAULT_TICKET_COLUMNS];
+  return { ...parseTicketQuery(q.toString()), columns };
 }
 
 /** Same view, filters, sort and columns (search ignored): the saved view that matches the screen. */
 export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
-  const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null } });
+  const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null }, rowActions: false });
   return strip(a) === strip(b);
 }
 
@@ -334,6 +350,15 @@ export function reportExportBody(p: ReportParams, format: 'csv' | 'xlsx' = 'csv'
     ...(p.status.length ? { status: REPORT_STATUSES.filter((c) => p.status.includes(c)) } : {}),
     ...Object.fromEntries(DASHBOARD_FILTERS.flatMap((k) => (p.filters[k] ? [[k, p.filters[k]]] : []))),
   };
+}
+
+/** CP-UI2b breadcrumb: "Detail tiket" on the full-page detail, "Board" on the board view. */
+export function crumbLabel(route: Route): string {
+  if (route.page === 'tickets') {
+    if (parseDetailQuery(route.query).full) return 'Detail tiket';
+    if (parseTicketQuery(route.query).view === 'board') return 'Board';
+  }
+  return pageDef(route.page).label;
 }
 
 /** CP-UI1 sidebar entry (owner prototype groups Operasional / Analitik / Administrasi). */

@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react';
-import { ApiError, type Api } from '../api/client';
-import type { Dashboard, DashboardPeriodKey, TicketFilter, Workspace } from '../api/types';
-import { barPercent, channelSlices, dataQuality, donutGradient, resolvedKpiLabel } from '../app/dashboardView';
+import { useEffect, useRef, useState } from 'react';
+import { ApiError, isAbort, type Api } from '../api/client';
+import type { Dashboard, DashboardPeriodKey, TicketFilter, TicketListItem, Workspace } from '../api/types';
+import {
+  ATTENTION_LIMIT, attentionQuery, barPercent, channelSlices, dataQuality, donutGradient, resolvedKpiLabel,
+} from '../app/dashboardView';
 import { ageLabel, instantLabel, num, PERIOD_LABELS, rangeLabel, tzLabel } from '../app/format';
 import { navigate, useDashboard } from '../app/hooks';
 import {
@@ -133,7 +135,7 @@ export function DashboardPage({ api, workspace, canReports, canCreate = false, q
           setAttempt((n) => n + 1);
         }} />
       )}
-      {d && <DashboardBody d={d} filtered={filtered} />}
+      {d && <DashboardBody api={api} d={d} filtered={filtered} />}
     </>
   );
 }
@@ -178,7 +180,7 @@ function DashboardError({ error, onRetry, onReset }: {
     requestId={error instanceof ApiError ? error.requestId : null} onRetry={onRetry} />;
 }
 
-function DashboardBody({ d, filtered }: { d: Dashboard; filtered: boolean }) {
+function DashboardBody({ api, d, filtered }: { api: Api; d: Dashboard; filtered: boolean }) {
   const ws = d.workspaceId;
   const t = d.totals;
   const periodText = PERIOD_LABELS[d.period.key];
@@ -245,12 +247,13 @@ function DashboardBody({ d, filtered }: { d: Dashboard; filtered: boolean }) {
             <section className="pcard" aria-labelledby="dash-attention">
               <header className="hd">
                 <h2 id="dash-attention">Perlu perhatian</h2>
-                <span className="sub">aktif prioritas Mendesak/Tinggi · {num(d.attention.items.length)} dari {num(d.attention.total)}</span>
-                {d.drilldown.attention && (
-                  <span className="r"><a className="btn btn-small" href={drilldownHash(ws, d.drilldown.attention)}>Lihat semua</a></span>
+                <span className="sub">belum ada PIC, urut umur</span>
+                {d.drilldown.unassigned && (
+                  <span className="r"><a className="btn btn-small"
+                    href={toHash({ workspaceId: ws, page: 'tickets', query: attentionQuery(d.drilldown.unassigned) })}>Lihat semua</a></span>
                 )}
               </header>
-              <AttentionTable d={d} />
+              <AttentionTable api={api} d={d} />
             </section>
             <section className="pcard" aria-labelledby="dash-quality">
               <header className="hd"><h2 id="dash-quality">Kualitas data</h2></header>
@@ -334,26 +337,56 @@ function QualityBars({ d }: { d: Dashboard }) {
   );
 }
 
-function AttentionTable({ d }: { d: Dashboard }) {
-  if (d.attention.items.length === 0) {
-    return (
-      <div className="bd">
-        {d.drilldown.attention
-          ? <EmptyState title="Tidak ada tiket mendesak" body="Tidak ada tiket aktif berprioritas Mendesak atau Tinggi." />
-          : <EmptyState title="Di luar filter prioritas" body="Filter prioritas aktif tidak mencakup Mendesak atau Tinggi." />}
-      </div>
+type AttentionState =
+  | { key: string; status: 'loading' }
+  | { key: string; status: 'error' }
+  | { key: string; status: 'success'; items: TicketListItem[]; total: number };
+
+/**
+ * CP-UI2b: active tickets without a PIC, oldest received first (the List API's own sort), at most
+ * ATTENTION_LIMIT rows. The scope is the server's "Belum ditugaskan" drilldown, so it follows the
+ * dashboard filters; a PIC filter makes it not applicable (the server sends no drilldown then).
+ */
+function AttentionTable({ api, d }: { api: Api; d: Dashboard }) {
+  const query = d.drilldown.unassigned ? attentionQuery(d.drilldown.unassigned) : null;
+  const key = query === null ? '' : `${d.workspaceId}|${query}|${d.asOf}`;
+  const [state, setState] = useState<AttentionState | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (query === null) return;
+    const c = new AbortController();
+    setState({ key, status: 'loading' });
+    api.listTickets(d.workspaceId, `${query}&limit=${ATTENTION_LIMIT}`, null, c.signal).then(
+      (res) => setState({ key, status: 'success', items: res.items.slice(0, ATTENTION_LIMIT), total: res.total }),
+      (e) => { if (!isAbort(e)) setState({ key, status: 'error' }); },
     );
+    return () => c.abort();
+  }, [api, d.workspaceId, query, key, attempt]);
+
+  if (query === null) {
+    return <div className="bd"><EmptyState title="Tidak berlaku untuk filter PIC" body="Daftar tiket tanpa PIC tidak relevan saat filter PIC aktif." /></div>;
+  }
+  // Never show rows that belong to another workspace, filter or refresh.
+  const s = state && state.key === key ? state : { key, status: 'loading' as const };
+  if (s.status === 'loading') {
+    return <div className="bd" role="status"><span className="sr-only">Memuat tiket tanpa PIC…</span><div className="skeleton" aria-hidden="true" /><div className="skeleton" aria-hidden="true" /></div>;
+  }
+  if (s.status === 'error') {
+    return <div className="bd"><ErrorState title="Daftar belum dapat dimuat" body="Tiket tanpa PIC tidak ditampilkan karena permintaan gagal." onRetry={() => setAttempt((n) => n + 1)} /></div>;
+  }
+  if (s.items.length === 0) {
+    return <div className="bd"><EmptyState title="Semua tiket aktif sudah ada PIC" body="Tidak ada tiket aktif yang belum ditugaskan." /></div>;
   }
   return (
     <div className="ptable" role="region" aria-label="Tiket perlu perhatian" tabIndex={0}>
       <table>
-        <caption className="sr-only">Tiket perlu perhatian · Mendesak dulu, lalu yang paling lama diterima</caption>
+        <caption className="sr-only">Tiket aktif tanpa PIC · paling lama diterima dulu · {num(s.items.length)} dari {num(s.total)}</caption>
         <thead><tr><th scope="col">Nomor</th><th scope="col">Subjek</th><th scope="col">Status</th><th scope="col">Umur</th></tr></thead>
         <tbody>
-          {d.attention.items.map((r) => (
+          {s.items.map((r) => (
             <tr key={r.id}>
               <td><a className="tno" href={toHash({ workspaceId: d.workspaceId, page: 'tickets', query: withDetail('', r.id, true) })}>{r.displayNumber}</a></td>
-              <td><span className="tsub">{r.subject}</span><span className="tmeta">{[r.priority?.label, r.owner?.label ?? 'Belum ditugaskan'].filter(Boolean).join(' · ')}</span></td>
+              <td><span className="tsub">{r.subject}</span><span className="tmeta">{[r.priority?.label, r.category?.label].filter(Boolean).join(' · ') || 'Belum ditugaskan'}</span></td>
               <td><Badge tone={statusTone(r.status)}>{r.status.label}</Badge></td>
               <td className="nowrap"><b>{ageLabel(r.ageSeconds)}</b></td>
             </tr>

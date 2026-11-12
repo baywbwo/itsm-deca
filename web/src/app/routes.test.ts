@@ -84,9 +84,9 @@ describe('routes', () => {
     const hash = toHash({ workspaceId: id, page: 'dashboard', query: dashboardQuery(p) });
     expect(parseDashboardQuery(parseHash(hash).query)).toEqual(p);
     const none = parseDashboardQuery('period=7d');
-    expect(none.period).toBe('today');
+    expect(none.period).toBe('this_month');
     expect(hasDashboardFilter(none)).toBe(false);
-    expect(dashboardQuery(none)).toBe('period=today');
+    expect(dashboardQuery(none)).toBe('period=this_month');
   });
 
   it('carries channel and category in drilldowns', () => {

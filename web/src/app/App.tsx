@@ -13,7 +13,7 @@ import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
-import { allowedPages, leavesScope, navGroups, pageDef, parseHash, toHash, type NavItem, NEW_TICKET_FLAG, type PageDef, type PageId } from './routes';
+import { allowedPages, crumbLabel, leavesScope, navGroups, pageDef, parseHash, toHash, type NavItem, NEW_TICKET_FLAG, type PageDef, type PageId } from './routes';
 import { activeBrand, pageTitle } from './brand';
 import { freshest } from './workspaces';
 
@@ -251,9 +251,9 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
                 <label className="sr-only" htmlFor="crumb-ws">Workspace</label>
                 {workspaceSelect('crumb-ws', 'crumb-ws')}
                 <span className="crumb-sep" aria-hidden="true">/</span>
-                <b>{current.label}</b>
+                <b>{crumbLabel(route)}</b>
               </div>
-              <span className="top-title" aria-hidden="true">{current.label}</span>
+              <span className="top-title" aria-hidden="true">{crumbLabel(route)}</span>
             </div>
             <div className="top-right">
               {canSearch && <TicketSearch onSearch={search} shortcut />}
