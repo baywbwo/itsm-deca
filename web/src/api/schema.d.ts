@@ -1587,6 +1587,8 @@ export interface components {
             mustChangePassword: boolean;
             /** @description CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then. */
             platformAdmin: boolean;
+            /** @description ITSM_MFA (default off): the server offers MFA at all. False = plain password login, no pre-MFA session, no step-up, the /me/mfa, /login/mfa and /session/step-up routes answer 404 and the client hides every MFA screen. Always false in UAT Superadmin mode. */
+            mfaEnabled: boolean;
             /** @description US-1.2: password mode, the user has a confirmed TOTP authenticator. Always false in UAT Superadmin mode. */
             mfaEnrolled: boolean;
             /** @description US-1.2: MFA is mandatory for this user (platform_admin, or a live admin.*, integration.* or ai.manage grant). While required and not verified, the session is pre-MFA: only session, CSRF refresh, logout-all, meta and the /me/mfa enrolment routes answer; everything else is 403 forbidden. */
@@ -5897,7 +5899,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidRequest"];
-            /** @description unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false). */
+            /** @description unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false). Only with ITSM_MFA=on; with it off (default) every correct password gets a full session. */
             401: {
                 headers: {
                     [name: string]: unknown;

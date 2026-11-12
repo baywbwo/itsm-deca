@@ -15,7 +15,7 @@ const user = { id: 'u-1', displayName: 'Sari Wulandari' };
 const meta = { environment: 'production', accessMode: 'password', banner: null, uat: null };
 const session = (over: Record<string, unknown> = {}) => ({
   user, banner: null, uatSuperadmin: false, mustChangePassword: false, platformAdmin: true,
-  mfaEnrolled: true, mfaRequired: true, ...over,
+  mfaEnabled: true, mfaEnrolled: true, mfaRequired: true, ...over,
 });
 const SYNTHETIC_URI = 'otpauth://totp/DECA%20ITSM:sari?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP&issuer=DECA%20ITSM&algorithm=SHA1&digits=6&period=30';
 
@@ -87,6 +87,16 @@ describe('CP4c boot (TM-02 b)', () => {
       });
       expect((await loadBoot(api, signal())).status).toBe('ready');
     }
+  });
+
+  it('never stops at enrolment when the server has MFA off (ITSM_MFA default)', async () => {
+    const { api } = mock((r) => {
+      if (r.path === '/api/v1/meta') return res(200, meta);
+      if (r.path === '/api/v1/session') return res(200, session({ mfaEnabled: false, mfaEnrolled: false }));
+      if (r.path === '/api/v1/workspaces') return res(200, { items: [] });
+      return undefined;
+    });
+    expect((await loadBoot(api, signal())).status).toBe('ready');
   });
 });
 

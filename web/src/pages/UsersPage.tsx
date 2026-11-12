@@ -44,7 +44,10 @@ const CONFIRM: Record<Pending['kind'], { title: (n: string) => string; impact: s
  * CP3b platform user administration (US-1.3/1.5/1.7, password mode, platform_admin only). The
  * server decides access; this page only exists in the nav when the session says platformAdmin.
  */
-export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string; onNotice: (t: string) => void }) {
+/** `mfaEnabled` false (server ITSM_MFA off, the default): no MFA badge and no Reset MFA. */
+export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
+  api: Api; userId: string; mfaEnabled: boolean; onNotice: (t: string) => void;
+}) {
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
   const [active, setActive] = useState<ActiveFilter>('all');
@@ -197,7 +200,7 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                         {u.platformAdmin && <Badge tone="blue">Admin platform</Badge>}
                         {u.active && u.mustChangePassword && <Badge tone="waiting">Wajib ganti sandi</Badge>}
                         {u.active && u.locked && <Badge tone="error">Terkunci</Badge>}
-                        {u.username && <Badge tone={u.mfaEnrolled ? 'violet' : 'neutral'}>{u.mfaEnrolled ? 'MFA aktif' : 'Belum MFA'}</Badge>}
+                        {mfaEnabled && u.username && <Badge tone={u.mfaEnrolled ? 'violet' : 'neutral'}>{u.mfaEnrolled ? 'MFA aktif' : 'Belum MFA'}</Badge>}
                     </div>
                   ),
                 },
@@ -215,7 +218,7 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                         {u.locked && (
                           <Button className="btn-small" aria-label={`Buka kunci ${u.displayName}`} onClick={() => ask('unlock')}>Buka kunci</Button>
                         )}
-                        {u.username && u.mfaEnrolled && (
+                        {mfaEnabled && u.username && u.mfaEnrolled && (
                           <Button className="btn-small" aria-label={`Reset MFA ${u.displayName}`} onClick={() => ask('mfa_reset')}>Reset MFA</Button>
                         )}
                         {u.username && (

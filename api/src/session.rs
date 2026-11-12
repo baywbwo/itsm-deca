@@ -250,7 +250,8 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
                 id,
                 user_id,
                 must_change_password,
-                mfa_pending,
+                // ITSM_MFA=off: no pre-MFA session, whatever the user's grants are.
+                mfa_pending: mfa_pending && state.config.mfa_enabled,
                 step_up_fresh,
                 // The grant is honoured only while the server runs in UAT Superadmin mode;
                 // the session's access_mode was matched above.

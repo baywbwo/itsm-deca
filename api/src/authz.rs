@@ -213,11 +213,12 @@ pub fn superadmin_effective(state: &AppState, s: &Session) -> bool {
 /// A-9: sensitive actions need a second factor re-entered on this session in the last 5 minutes
 /// (POST /session/step-up). Call after the permission check (403 first, then 401).
 ///
+/// With MFA off (`ITSM_MFA`, default) there is no second factor to re-enter, so it passes.
 /// UAT Superadmin skips it: that mode has no password or TOTP to step up with, exists only in a
 /// UAT environment (refused at config load in production) and never reaches the password-mode
 /// identity endpoints (they answer 404 outside password mode).
 pub fn require_step_up(state: &AppState, s: &Session) -> Result<(), AppError> {
-    if superadmin_effective(state, s) || s.step_up_fresh {
+    if !state.config.mfa_enabled || superadmin_effective(state, s) || s.step_up_fresh {
         Ok(())
     } else {
         Err(AppError::StepUpRequired)

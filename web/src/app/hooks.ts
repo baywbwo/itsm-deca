@@ -49,7 +49,7 @@ export async function loadBoot(api: Api, signal: AbortSignal): Promise<Boot> {
     session = await api.enterUat(signal);
   }
   // MFA first, then the forced password change: the server checks them in that order.
-  if (meta.accessMode === 'password' && session.mfaRequired && !session.mfaEnrolled) return { status: 'mfa_enrol', meta, session };
+  if (meta.accessMode === 'password' && session.mfaEnabled && session.mfaRequired && !session.mfaEnrolled) return { status: 'mfa_enrol', meta, session };
   if (session.mustChangePassword) return { status: 'must_change', meta, session };
   const workspaces = await api.listWorkspaces(signal);
   return { status: 'ready', meta, session, workspaces };

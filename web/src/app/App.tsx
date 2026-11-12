@@ -277,7 +277,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
             </div>
           </header>
           <div className="content">
-          <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
+          <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} mfaEnabled={session.mfaEnabled} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
@@ -380,9 +380,10 @@ function Profile({ session, role }: { session: Session; role: string }) {
   );
 }
 
-function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, listed, onWorkspacesChanged, onRetry, onReenter, onNotice }: {
+function Content({ api, userId, mfaEnabled, scope, page, pages, query, uat, firstWorkspace, listed, onWorkspacesChanged, onRetry, onReenter, onNotice }: {
   api: Api;
   userId: string;
+  mfaEnabled: boolean;
   scope: ReturnType<typeof useScope>;
   page: PageDef;
   pages: PageDef[];
@@ -427,7 +428,7 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
   return (
     <PageChunkBoundary key={page.id}>
       <Suspense fallback={<LoadingState label="Memuat halaman…" />}>
-        <Page id={page.id} api={api} userId={userId} data={data} query={query} uat={uat} onNotice={onNotice}
+        <Page id={page.id} api={api} userId={userId} mfaEnabled={mfaEnabled} data={data} query={query} uat={uat} onNotice={onNotice}
           onWorkspacesChanged={onWorkspacesChanged} />
       </Suspense>
     </PageChunkBoundary>
@@ -453,8 +454,8 @@ class PageChunkBoundary extends Component<{ children: ReactNode }, { failed: boo
   }
 }
 
-function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged }: {
-  id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
+function Page({ id, api, userId, mfaEnabled, data, query, uat, onNotice, onWorkspacesChanged }: {
+  id: PageId; api: Api; userId: string; mfaEnabled: boolean; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
   onWorkspacesChanged: () => void;
 }) {
   switch (id) {
@@ -472,7 +473,7 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'users':
-      return <UsersPage api={api} userId={userId} onNotice={onNotice} />;
+      return <UsersPage api={api} userId={userId} mfaEnabled={mfaEnabled} onNotice={onNotice} />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }

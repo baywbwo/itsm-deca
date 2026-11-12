@@ -16,6 +16,7 @@ fn state(pool: &PgPool, mode: &str) -> AppState {
         ("ITSM_ACCESS_MODE", mode),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
+        ("ITSM_MFA", "on"),
         // Synthetic test-only MFA key material (US-1.2): admins must enrol before administering.
         (
             "ITSM_KEYRING",

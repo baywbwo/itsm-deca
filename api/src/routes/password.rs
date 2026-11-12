@@ -175,7 +175,12 @@ pub async fn login(
     .await?;
     // US-1.2: an enrolled user gets a challenge instead of a session (401 mfa_required). A user
     // who must use MFA but has not enrolled gets a pre-MFA session that can only enrol.
-    let (mfa_enrolled, mfa_required) = super::mfa::status(&mut tx, user_id).await?;
+    // ITSM_MFA=off (default): plain password login; stored factors are ignored, not removed.
+    let (mfa_enrolled, mfa_required) = if state.config.mfa_enabled {
+        super::mfa::status(&mut tx, user_id).await?
+    } else {
+        (false, false)
+    };
     if mfa_enrolled {
         if state.config.mfa.is_none() {
             tracing::warn!(error.kind = "mfa_keys_missing", "mfa login without keys");
@@ -211,7 +216,7 @@ pub(crate) async fn session_issued(
 ) -> Result<Response, AppError> {
     let issued = session::issue_with_mfa(&state.pool, user_id, "password", mfa_verified).await?;
     let platform_admin = super::users::is_platform_admin(&state.pool, user_id).await?;
-    Ok((status,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"platformAdmin":platform_admin,"mfaEnrolled":mfa_verified,"mfaRequired":mfa_required,"csrfToken":issued.csrf_token}))).into_response())
+    Ok((status,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"platformAdmin":platform_admin,"mfaEnabled":state.config.mfa_enabled,"mfaEnrolled":mfa_verified,"mfaRequired":mfa_required,"csrfToken":issued.csrf_token}))).into_response())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

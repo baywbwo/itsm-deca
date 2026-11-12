@@ -64,6 +64,8 @@ pub struct SessionView {
     must_change_password: bool,
     /// CP3b: the client shows the "Pengguna" admin page only when true (password mode only).
     platform_admin: bool,
+    /// `ITSM_MFA`: the server offers MFA at all. False = the client hides every MFA screen.
+    mfa_enabled: bool,
     /// US-1.2: a confirmed TOTP factor exists (password mode only).
     mfa_enrolled: bool,
     /// US-1.2: MFA is mandatory for this user's grants; until this session passes it, only the
@@ -121,6 +123,7 @@ pub async fn uat_enter(State(state): State<AppState>) -> Result<Response, AppErr
             uat_superadmin: true,
             must_change_password: false,
             platform_admin: false,
+            mfa_enabled: false,
             mfa_enrolled: false,
             mfa_required: false,
         },
@@ -148,7 +151,8 @@ pub async fn current(
     let password_mode = state.config.access_mode == AccessMode::Password;
     let platform_admin =
         password_mode && super::users::is_platform_admin(&state.pool, s.user_id).await?;
-    let (mfa_enrolled, mfa_required) = if password_mode {
+    let mfa_enabled = password_mode && state.config.mfa_enabled;
+    let (mfa_enrolled, mfa_required) = if mfa_enabled {
         super::mfa::status(&mut *state.pool.acquire().await?, s.user_id).await?
     } else {
         (false, false)
@@ -162,6 +166,7 @@ pub async fn current(
         uat_superadmin: s.uat_superadmin,
         must_change_password: s.must_change_password,
         platform_admin,
+        mfa_enabled,
         mfa_enrolled,
         mfa_required,
     }))

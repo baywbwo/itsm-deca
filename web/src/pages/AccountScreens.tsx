@@ -335,7 +335,7 @@ export function AccountMenu({ api, session, role, passwordMode, username, onLogg
             {passwordMode && (
               <>
                 <Button onClick={() => { close(); setChanging(true); }}>Ganti kata sandi</Button>
-                <Button onClick={() => { close(); setSecurity(true); }}>Keamanan akun</Button>
+                {session.mfaEnabled && <Button onClick={() => { close(); setSecurity(true); }}>Keamanan akun</Button>}
                 <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
               </>
             )}
