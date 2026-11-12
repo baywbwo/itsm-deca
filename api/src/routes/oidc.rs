@@ -122,6 +122,7 @@ async fn refuse(
 
 fn policy(state: &AppState, issuer: &str, extra_hosts: &[String]) -> Option<HostPolicy> {
     HostPolicy::new(issuer, extra_hosts, state.config.auth.oidc_lab)
+        .map(|p| p.with_proxy(state.config.egress_proxy.clone()))
 }
 
 fn timeout(state: &AppState) -> std::time::Duration {

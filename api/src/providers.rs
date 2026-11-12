@@ -7,7 +7,10 @@
 //!   CGNAT, documentation, multicast or reserved ranges, IPv4-mapped forms included) unless lab
 //!   mode is on; the connection is pinned to the checked addresses so a second DNS answer cannot
 //!   swap in an internal one;
-//! - redirects are never followed, environment proxies are ignored, bodies are capped.
+//! - redirects are never followed, environment proxies are ignored, bodies are capped;
+//! - with `ITSM_EGRESS_PROXY` (CP6b, production) the request is tunnelled through that proxy
+//!   with CONNECT instead: no local DNS, the proxy resolves the name and refuses private
+//!   addresses (it is the anti-rebinding point), the rules above on scheme, host and port stay.
 //!
 //! Errors are reduced to [`CallError`] kinds. Provider bodies, URLs and credentials never reach a
 //! log line, an error message or a response; callers turn a kind into a fixed safe sentence.
@@ -21,6 +24,8 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+use crate::config::EgressProxy;
 
 /// Largest provider answer read into memory.
 const MAX_BODY: usize = 1024 * 1024;
@@ -166,12 +171,20 @@ fn v4_public(ip: Ipv4Addr) -> bool {
 
 fn v6_public(ip: Ipv6Addr) -> bool {
     let s = ip.segments();
+    let v4 = |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
     // IPv4-mapped (::ffff:a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) carry an IPv4 target.
     if s[..5] == [0, 0, 0, 0, 0] && s[5] == 0xffff || s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-        let v4 = Ipv4Addr::new((s[6] >> 8) as u8, s[6] as u8, (s[7] >> 8) as u8, s[7] as u8);
-        return v4_public(v4);
+        return v4_public(v4(s[6], s[7]));
+    }
+    // CP5B-07: 6to4 (2002:a.b.c.d::/48) carries an IPv4 target in bits 16-47.
+    if s[0] == 0x2002 {
+        return v4_public(v4(s[1], s[2]));
     }
     !(ip.is_unspecified()
+        // CP5B-07: Teredo 2001::/32, local-use NAT64 64:ff9b:1::/48, discard-only 100::/64.
+        || (s[0] == 0x2001 && s[1] == 0)
+        || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)
+        || s[..4] == [0x100, 0, 0, 0]
         || ip.is_loopback()
         || (s[0] & 0xfe00) == 0xfc00
         || (s[0] & 0xffc0) == 0xfe80
@@ -205,17 +218,20 @@ impl Target {
         raw_base: &str,
         lab: bool,
         timeout: Duration,
+        proxy: Option<&EgressProxy>,
     ) -> Result<Self, CallError> {
         let base = provider_base_url(provider, raw_base, lab).ok_or(CallError::Refused)?;
-        Self::prepare_origin(base, lab, timeout).await
+        Self::prepare_origin(base, lab, timeout, proxy).await
     }
 
     /// Resolves and pins an origin `scheme://host[:port]` that the caller already validated against
     /// its own allowlist (CP5c: OIDC endpoints of a configured IdP). Same address rules as above.
+    /// With a proxy nothing is resolved here: the client tunnels through the proxy only.
     pub async fn prepare_origin(
         base: String,
         lab: bool,
         timeout: Duration,
+        proxy: Option<&EgressProxy>,
     ) -> Result<Self, CallError> {
         let url = Url::parse(&base).map_err(|_| CallError::Refused)?;
         let host = url.host_str().ok_or(CallError::Refused)?.to_owned();
@@ -224,6 +240,22 @@ impl Target {
             .trim_start_matches('[')
             .trim_end_matches(']')
             .to_owned();
+        if let Some(proxy) = proxy {
+            // The proxy refuses address literals (it checks names, then their addresses), so
+            // they are refused here before anything is sent.
+            if lookup.parse::<IpAddr>().is_ok() {
+                return Err(CallError::Refused);
+            }
+            let mut via = reqwest::Proxy::all(proxy.url()).map_err(|_| CallError::Protocol)?;
+            if let Some((user, password)) = proxy.credentials() {
+                via = via.basic_auth(user, password);
+            }
+            let client = Self::builder(lab, timeout)
+                .proxy(via)
+                .build()
+                .map_err(|_| CallError::Protocol)?;
+            return Ok(Self { base, client });
+        }
         let addrs: Vec<SocketAddr> = tokio::net::lookup_host((lookup.as_str(), port))
             .await
             .map_err(|_| CallError::Connect)?
@@ -234,18 +266,23 @@ impl Target {
         if !lab && addrs.iter().any(|a| !is_public(a.ip())) {
             return Err(CallError::Refused);
         }
-        let mut builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .https_only(!lab)
-            .timeout(timeout)
-            .connect_timeout(timeout)
-            .user_agent(concat!("itsm-deca/", env!("CARGO_PKG_VERSION")));
+        let mut builder = Self::builder(lab, timeout).no_proxy();
         if lookup.parse::<IpAddr>().is_err() {
             builder = builder.resolve_to_addrs(&host, &addrs);
         }
         let client = builder.build().map_err(|_| CallError::Protocol)?;
         Ok(Self { base, client })
+    }
+
+    /// Settings shared by the direct and the proxied client. `proxy()` replaces the environment
+    /// proxies, `no_proxy()` ignores them: `HTTPS_PROXY` and friends are never read.
+    fn builder(lab: bool, timeout: Duration) -> reqwest::ClientBuilder {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(!lab)
+            .timeout(timeout)
+            .connect_timeout(timeout)
+            .user_agent(concat!("itsm-deca/", env!("CARGO_PKG_VERSION")))
     }
 
     /// GET returning the parsed JSON body of a 2xx answer (CP5c discovery and JWKS).
@@ -333,10 +370,29 @@ fn classify(e: reqwest::Error) -> CallError {
     if e.is_timeout() {
         CallError::Timeout
     } else if e.is_connect() {
+        if let Some(answer) = tunnel_refusal(&e) {
+            // CP6b: the egress proxy answered the CONNECT with an error. The client library does
+            // not expose the status (403 denied and 502/503 upstream down look the same), so
+            // this stays a transient Connect; the log tells operators to look at the proxy.
+            tracing::warn!(proxy.answer = answer, "egress proxy refused the tunnel");
+        }
         CallError::Connect
     } else {
         CallError::Protocol
     }
+}
+
+/// `Some("auth_required" | "refused")` when the error is the proxy refusing a CONNECT.
+fn tunnel_refusal(e: &reqwest::Error) -> Option<&'static str> {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(err) = source {
+        match err.to_string().as_str() {
+            "tunnel error: proxy authorization required" => return Some("auth_required"),
+            "tunnel error: unsuccessful" => return Some("refused"),
+            _ => source = err.source(),
+        }
+    }
+    None
 }
 
 pub(crate) fn sensitive(value: String) -> Result<HeaderValue, CallError> {
@@ -721,6 +777,7 @@ impl Lark {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -775,6 +832,13 @@ mod tests {
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
             "64:ff9b::a9fe:a9fe",
+            // CP5B-07: 6to4 around a private IPv4, Teredo, local NAT64, discard-only.
+            "2002:a00:1::1",
+            "2002:7f00:1::",
+            "2002:a9fe:a9fe::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "64:ff9b:1::a00:1",
+            "100::1",
         ] {
             let ip: IpAddr = ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
             assert!(!is_public(ip), "{ip}");
@@ -784,6 +848,8 @@ mod tests {
             "104.192.141.1",
             "2606:4700::1111",
             "::ffff:8.8.8.8",
+            "2002:808:808::1",
+            "2001:4860:4860::8888",
         ] {
             let ip: IpAddr = ip.parse().unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
             assert!(is_public(ip), "{ip}");
@@ -792,11 +858,32 @@ mod tests {
 
     #[tokio::test]
     async fn loopback_target_is_refused_outside_lab_before_any_request() {
-        let r = Target::prepare("jira", "https://127.0.0.1:9", false, Duration::from_secs(1)).await;
+        let r = Target::prepare(
+            "jira",
+            "https://127.0.0.1:9",
+            false,
+            Duration::from_secs(1),
+            None,
+        )
+        .await;
         assert_eq!(r.err(), Some(CallError::Refused));
-        let r = Target::prepare("jira", "https://localhost:9", false, Duration::from_secs(1)).await;
+        let r = Target::prepare(
+            "jira",
+            "https://localhost:9",
+            false,
+            Duration::from_secs(1),
+            None,
+        )
+        .await;
         assert_eq!(r.err(), Some(CallError::Refused));
-        let r = Target::prepare("jira", "http://8.8.8.8", false, Duration::from_secs(1)).await;
+        let r = Target::prepare(
+            "jira",
+            "http://8.8.8.8",
+            false,
+            Duration::from_secs(1),
+            None,
+        )
+        .await;
         assert_eq!(r.err(), Some(CallError::Refused));
     }
 
@@ -838,7 +925,7 @@ mod tests {
                 None,
                 "{provider} {bad}"
             );
-            let r = Target::prepare(provider, bad, false, Duration::from_secs(1)).await;
+            let r = Target::prepare(provider, bad, false, Duration::from_secs(1), None).await;
             assert_eq!(r.err(), Some(CallError::Refused), "{provider} {bad}");
         }
         // Lab mode (UAT only) keeps local stubs reachable.
@@ -852,5 +939,191 @@ mod tests {
         assert!(CallError::Api(LARK_RATE_LIMITED).is_throttle());
         assert!(!CallError::Status(400).is_throttle());
         assert_eq!(enc("a b/c"), "a%20b%2Fc");
+    }
+
+    /// One-shot fake egress proxy: records the request head it receives and answers `reply`.
+    async fn fake_proxy(reply: &'static str) -> (String, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
+            let _ = sock.write_all(reply.as_bytes()).await;
+            let _ = tx.send(String::from_utf8_lossy(&head).into_owned());
+        });
+        (format!("http://127.0.0.1:{}", addr.port()), rx)
+    }
+
+    /// CP6b: with a proxy the request is a CONNECT to host:443 carrying the proxy credentials,
+    /// nothing is resolved locally (`.invalid` never resolves), and a refused tunnel is a
+    /// transient Connect error the log can attribute to the proxy.
+    #[tokio::test]
+    async fn cp6b_requests_tunnel_through_the_egress_proxy() {
+        let t = Duration::from_secs(5);
+        for (reply, answer) in [
+            (
+                "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+                "refused",
+            ),
+            (
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+                "refused",
+            ),
+            (
+                "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
+                "auth_required",
+            ),
+        ] {
+            let (url, head) = fake_proxy(reply).await;
+            let proxy = EgressProxy::parse(&url, Some("itsm-egress:synthetic-proxy-pass-0001"))
+                .expect("proxy");
+            let target =
+                Target::prepare_origin("https://idp.invalid".into(), false, t, Some(&proxy))
+                    .await
+                    .expect("no local DNS with a proxy");
+            let err = target
+                .client
+                .get("https://idp.invalid/.well-known/openid-configuration")
+                .send()
+                .await
+                .expect_err("tunnel refused");
+            assert_eq!(tunnel_refusal(&err), Some(answer), "{reply}");
+            assert_eq!(classify(err), CallError::Connect, "{reply}");
+            let head = head.await.expect("proxy saw the request");
+            assert!(
+                head.starts_with("CONNECT idp.invalid:443 HTTP/1.1\r\n"),
+                "{head}"
+            );
+            let basic = STANDARD.encode("itsm-egress:synthetic-proxy-pass-0001");
+            assert!(
+                head.contains(&format!("proxy-authorization: Basic {basic}"))
+                    || head.contains(&format!("Proxy-Authorization: Basic {basic}")),
+                "credentials sent"
+            );
+            assert!(
+                !head.contains(".well-known"),
+                "the path stays inside the tunnel"
+            );
+        }
+
+        // Provider rules still apply before the proxy is involved; address literals are refused.
+        let (url, head) = fake_proxy("HTTP/1.1 200 OK\r\n\r\n").await;
+        let proxy = EgressProxy::parse(&url, None).expect("proxy");
+        for (provider, base) in [
+            ("jira", "https://evil.example"),
+            ("jira", "https://acme.atlassian.net:8443"),
+            ("lark", "https://8.8.8.8"),
+        ] {
+            let r = Target::prepare(provider, base, false, t, Some(&proxy)).await;
+            assert_eq!(r.err(), Some(CallError::Refused), "{base}");
+        }
+        for origin in [
+            "https://8.8.8.8",
+            "https://[2606:4700::1111]",
+            "http://127.0.0.1:9",
+        ] {
+            let r = Target::prepare_origin(origin.into(), true, t, Some(&proxy)).await;
+            assert_eq!(r.err(), Some(CallError::Refused), "{origin}");
+        }
+        drop(head);
+
+        // Proxy settings from the process environment are never used.
+        assert!(EgressProxy::parse("http://egress-proxy:3128", None).is_some());
+        for bad in [
+            "https://egress-proxy:3128",
+            "http://egress-proxy",
+            "http://u:p@egress-proxy:3128",
+            "http://egress-proxy:3128/x",
+            "http://Egress:3128",
+            "http://egress-proxy:0",
+        ] {
+            assert!(EgressProxy::parse(bad, None).is_none(), "{bad}");
+        }
+        for bad in [
+            "nouser",
+            ":short",
+            "u:short",
+            "bad user:0123456789abcdef",
+            "u:0123456789abcdef with space",
+        ] {
+            assert!(
+                EgressProxy::parse("http://egress-proxy:3128", Some(bad)).is_none(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// CP6b against a real Squid (evidence/i3/cp6b/proxy-harness.sh sets the env): the reqwest
+    /// tunnel interoperates with Squid basic auth, and real 403/407 answers map as expected.
+    #[tokio::test]
+    #[ignore = "needs a running egress proxy (proxy harness)"]
+    async fn cp6b_real_egress_proxy() {
+        let (Ok(url), Ok(auth)) = (
+            std::env::var("ITSM_TEST_EGRESS_PROXY"),
+            std::env::var("ITSM_TEST_EGRESS_PROXY_AUTH"),
+        ) else {
+            panic!("ITSM_TEST_EGRESS_PROXY and ITSM_TEST_EGRESS_PROXY_AUTH are required");
+        };
+        let t = Duration::from_secs(20);
+        let good = EgressProxy::parse(&url, Some(&auth)).expect("proxy");
+        let target = Target::prepare(
+            "jira",
+            "https://itsm-deca-probe.atlassian.net",
+            false,
+            t,
+            Some(&good),
+        )
+        .await
+        .expect("allowed provider host");
+        let r = target
+            .client
+            .get(format!("{}/status", target.base))
+            .send()
+            .await;
+        assert!(
+            r.is_ok(),
+            "allowlisted host answers through the tunnel: {:?}",
+            r.err().map(classify)
+        );
+
+        let target = Target::prepare_origin("https://example.com".into(), false, t, Some(&good))
+            .await
+            .expect("no local policy for an origin");
+        let err = target
+            .client
+            .get("https://example.com/")
+            .send()
+            .await
+            .expect_err("denied");
+        assert_eq!(tunnel_refusal(&err), Some("refused"));
+        assert_eq!(classify(err), CallError::Connect);
+
+        let user = auth.split_once(':').map(|(u, _)| u).expect("user");
+        let wrong = EgressProxy::parse(&url, Some(&format!("{user}:wrong-password-0123456789")))
+            .expect("proxy");
+        let target =
+            Target::prepare_origin("https://open.larksuite.com".into(), false, t, Some(&wrong))
+                .await
+                .expect("origin");
+        let err = target
+            .client
+            .get("https://open.larksuite.com/")
+            .send()
+            .await
+            .expect_err("407");
+        assert_eq!(tunnel_refusal(&err), Some("auth_required"));
     }
 }

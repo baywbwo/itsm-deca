@@ -1,0 +1,12 @@
+# ITSM egress allowlist: one anchored, case-insensitive regex per line, matched against the
+# CONNECT host (port 443 only). Every addition needs a security review (CP6b).
+# Jira Cloud tenants: exactly one label under atlassian.net (not atlassian.net itself).
+^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.atlassian\.net$
+# Lark Open Platform (international and China).
+^open\.larksuite\.com$
+^open\.feishu\.cn$
+# Company IdPs for SSO (CP5c), add per company after review, e.g.:
+# ^login\.microsoftonline\.com$
+# ^accounts\.google\.com$
+# ^oauth2\.googleapis\.com$
+# ^www\.googleapis\.com$

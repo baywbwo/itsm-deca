@@ -12,8 +12,8 @@ Setiap perusahaan punya satu IdP. Akun dikenali dari pasangan (IdP, `sub`), buka
 | `ITSM_KEYRING_FILE` + `ITSM_KEYRING_ACTIVE` | lihat `RUNBOOK-keyring.md` | Client secret disegel keyring (purpose `oidc_client_secret`). Tanpa keyring SSO tidak bisa diaktifkan. |
 | `ITSM_OIDC_LAB` | `off` | `on` hanya untuk stub IdP lokal di UAT; production menolak start. |
 
-- Server harus bisa menjangkau host IdP lewat HTTPS 443. Discovery, JWKS, dan token endpoint memakai guard egress yang sama dengan Jira/Lark: DNS di-pin, IP privat ditolak, tanpa redirect, body maksimal 1 MB.
-- Di production lalu lintas keluar lewat egress proxy (CP6b). Tambahkan host IdP di bawah ini ke allowlist proxy.
+- Server harus bisa menjangkau host IdP lewat HTTPS 443. Discovery, JWKS, dan token endpoint memakai guard egress yang sama dengan Jira/Lark: tanpa redirect, body maksimal 1 MB, IP literal dan IP privat ditolak.
+- Di production lalu lintas keluar wajib lewat egress proxy (CP6b, `ITSM_EGRESS_PROXY`). Tambahkan host IdP di bawah ini ke `deploy/egress/allowlist.regex` lewat security review (lihat `RUNBOOK-egress.md`). Host tambahan di halaman **Login SSO** tidak mengubah allowlist proxy; keduanya harus cocok.
 - Host yang boleh dihubungi untuk satu IdP: host issuer, ditambah **host tambahan** yang diisi admin, dengan pencocokan persis.
 
 ## Mendaftarkan aplikasi di IdP

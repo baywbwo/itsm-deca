@@ -260,6 +260,10 @@ const LIVE: Opts = Opts {
 };
 
 fn state(pool: &PgPool, o: Opts) -> AppState {
+    state_with(pool, o, Vec::new())
+}
+
+fn state_with(pool: &PgPool, o: Opts, extra: Vec<(&str, String)>) -> AppState {
     let key = STANDARD.encode([7u8; 32]);
     let keyring = format!("k1:{key}");
     let mut vars: Vec<(&str, String)> = vec![
@@ -278,6 +282,7 @@ fn state(pool: &PgPool, o: Opts) -> AppState {
         vars.push(("ITSM_KEYRING", keyring));
         vars.push(("ITSM_KEYRING_ACTIVE", "k1".into()));
     }
+    vars.extend(extra);
     let vars: HashMap<String, String> = vars.into_iter().map(|(k, v)| (k.to_owned(), v)).collect();
     AppState {
         config: Arc::new(ok(Config::from_map(&vars), "test config")),
@@ -1474,4 +1479,99 @@ async fn cp5b06_503_after_the_create_is_unknown_not_retried(pool: PgPool) {
         1,
         "one create only"
     );
+}
+
+/// CP6b: with ITSM_EGRESS_PROXY set, a live call leaves only as a CONNECT to the provider host on
+/// 443 through the proxy, with the proxy credentials; the provider path and the provider token
+/// never reach the proxy, and a proxy refusal reads as "provider unreachable" (retried later).
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp6b_live_calls_leave_through_the_egress_proxy(pool: PgPool) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fx = fixture(&pool).await;
+    let heads: Arc<Mutex<Vec<String>>> = Arc::default();
+    let listener = ok(
+        tokio::net::TcpListener::bind("127.0.0.1:0").await,
+        "bind proxy",
+    );
+    let proxy = format!("http://{}", ok(listener.local_addr(), "proxy addr"));
+    let seen = heads.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut head = Vec::new();
+            let mut buf = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                match sock.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
+            seen.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(String::from_utf8_lossy(&head).into_owned());
+            let _ = sock
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                .await;
+        }
+    });
+    let auth = std::env::temp_dir().join(format!("itsm-cp6b-proxy-{}", Uuid::new_v4()));
+    ok(
+        std::fs::write(&auth, "itsm-api:synthetic-egress-pass-01\n"),
+        "auth file",
+    );
+    let st = state_with(
+        &pool,
+        Opts {
+            lab: false,
+            keyring: true,
+        },
+        vec![
+            ("ITSM_EGRESS_PROXY", proxy),
+            (
+                "ITSM_EGRESS_PROXY_AUTH_FILE",
+                auth.to_string_lossy().into_owned(),
+            ),
+        ],
+    );
+    let _ = std::fs::remove_file(&auth);
+    let admin = tok(&pool, fx.admin).await;
+    let c = configure(
+        &st,
+        fx.a,
+        &admin,
+        "jira",
+        "https://acme.atlassian.net",
+        JIRA_TOKEN,
+    )
+    .await;
+    let r = step(&st, fx.a, &admin, &c, "test").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+    assert_eq!(r.json["item"]["lastTestOk"], false);
+    assert!(
+        s(&r.json["item"]["lastTestNote"]).contains("tidak dapat dihubungi"),
+        "{}",
+        r.json
+    );
+    let heads = heads
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    assert!(!heads.is_empty(), "the call went to the proxy");
+    let basic = STANDARD.encode("itsm-api:synthetic-egress-pass-01");
+    for h in &heads {
+        assert!(
+            h.starts_with("CONNECT acme.atlassian.net:443 HTTP/1.1\r\n"),
+            "{h}"
+        );
+        assert!(
+            h.to_ascii_lowercase().contains(&format!(
+                "proxy-authorization: basic {}",
+                basic.to_ascii_lowercase()
+            )),
+            "{h}"
+        );
+        assert!(
+            !h.contains("/rest/") && !h.contains(JIRA_TOKEN) && !h.contains(JIRA_EMAIL),
+            "{h}"
+        );
+    }
 }

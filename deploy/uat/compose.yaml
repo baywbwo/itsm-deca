@@ -5,6 +5,9 @@
 #   - ITSM_UAT_SITE_ADDRESS, ITSM_UAT_TLS, ITSM_UAT_ALLOWED_CIDRS, ITSM_UAT_BASIC_AUTH_USER in .env
 #   - secrets/ingress_basic_auth_hash (bcrypt) and secrets/pg_password
 # See README.md. Only the ingress publishes ports; API, Postgres and clamd stay private.
+# CP6b: the backend network has no route out. Outbound calls (Jira/Lark, company IdPs) leave only
+# through egress-proxy: CONNECT to allowlisted hosts on 443 with proxy credentials
+# (deploy/RUNBOOK-egress.md). Needs secrets/egress_proxy_auth + secrets/egress_proxy_htpasswd.
 #
 # D13: attachments are out of scope. clamd is NOT started by default and is not a startup
 # dependency; without ITSM_CLAMD_ADDR every upload is refused fail-closed (503
@@ -79,18 +82,52 @@ services:
       # material is a secret file (empty file = no keyring), never an env var visible to inspect.
       ITSM_KEYRING_FILE: /run/secrets/itsm_keyring
       ITSM_KEYRING_ACTIVE: "${ITSM_KEYRING_ACTIVE:-}"
+      # CP6b: every outbound call is a CONNECT through egress-proxy (no local DNS for providers).
+      ITSM_EGRESS_PROXY: http://egress-proxy:3128
+      ITSM_EGRESS_PROXY_AUTH_FILE: /run/secrets/egress_proxy_auth
       RUST_LOG: ${RUST_LOG:-info}
-    secrets: [pg_password, itsm_keyring]
+    secrets: [pg_password, itsm_keyring, egress_proxy_auth]
     volumes:
       - attachments:/var/lib/itsm/attachments
     networks: [backend]
     depends_on:
       postgres:
         condition: service_healthy
+      # Not a health dependency: without egress the API still serves (calls fail as unreachable).
+      egress-proxy:
+        condition: service_started
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  egress-proxy:
+    # Squid 5.7 (deploy/egress/): CONNECT only, port 443 only, host allowlist, private/reserved
+    # addresses refused after DNS, proxy basic auth, no TLS interception, no cache, JSON access log
+    # without user, path or query. No ports published; reachable only from the backend network.
+    build:
+      context: ../..
+      dockerfile: deploy/uat/Dockerfile
+      target: egress
+    image: itsm-uat-egress:${ITSM_UAT_IMAGE_TAG:?ITSM_UAT_IMAGE_TAG wajib (git SHA kandidat)}
+    environment:
+      ITSM_EGRESS_CLIENT_CIDRS: ${ITSM_UAT_BACKEND_SUBNET:-172.30.57.0/24}
+      ITSM_EGRESS_DNS: "${ITSM_EGRESS_DNS:-1.1.1.1 8.8.8.8}"
+    secrets: [egress_proxy_htpasswd]
+    volumes:
+      # Reviewed in git; a new host needs a security review (deploy/RUNBOOK-egress.md).
+      - ../egress/allowlist.regex:/etc/squid/itsm/allowlist.regex:ro
+    networks: [backend, egress]
+    read_only: true
+    tmpfs:
+      - /run/squid:uid=13,gid=13,mode=0700
+      - /tmp:uid=13,gid=13,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
     restart: unless-stopped
 
   ingress:
@@ -129,6 +166,8 @@ networks:
         - subnet: ${ITSM_UAT_BACKEND_SUBNET:-172.30.57.0/24}
   edge: {}
   clamav-updates: {}
+  # Only egress-proxy joins this network; api, postgres and clamav never do.
+  egress: {}
 
 volumes:
   pgdata:
@@ -144,3 +183,7 @@ secrets:
     file: ./secrets/ingress_basic_auth_hash
   itsm_keyring:
     file: ./secrets/itsm_keyring
+  egress_proxy_auth:
+    file: ./secrets/egress_proxy_auth
+  egress_proxy_htpasswd:
+    file: ./secrets/egress_proxy_htpasswd

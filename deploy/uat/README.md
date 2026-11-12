@@ -3,6 +3,8 @@
 Stack: `ingress` (Caddy 2.11.7: TLS, allowlist IP, basic auth, web statis, proxy `/api` + `/health`)
 → `api` (itsm-api, migrate lalu serve) → `postgres` 18.4 di jaringan privat.
 Hanya `ingress` yang mem-publish port. `api` dan `postgres` tidak bisa dijangkau dari luar.
+Panggilan keluar (Jira/Lark, IdP) hanya lewat `egress-proxy` (Squid, CP6b): CONNECT ke host allowlist di 443
+dengan kredensial proxy. Lihat `deploy/RUNBOOK-egress.md`.
 
 **Lampiran di luar scope (keputusan owner, D13).** UI lampiran tidak ada dan `clamav` **tidak** dijalankan
 secara default (compose profile `attachments`). `ITSM_CLAMD_ADDR` kosong, jadi setiap unggahan lewat API
@@ -47,7 +49,10 @@ openssl rand -hex 32 > secrets/pg_password                        # alfanumerik,
 docker run --rm caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 \
   caddy hash-password > secrets/ingress_basic_auth_hash           # prompt interaktif; password dibagikan lewat kanal aman
 : > secrets/itsm_keyring                                          # kosong = tanpa keyring; isi: lihat deploy/RUNBOOK-keyring.md
-chmod 444 secrets/pg_password secrets/ingress_basic_auth_hash secrets/itsm_keyring  # dibaca uid container; direktori 700 membatasi host
+pw=$(openssl rand -hex 24)                                        # kredensial egress proxy (CP6b), tidak dicetak
+printf 'itsm-api:%s\n' "$pw" > secrets/egress_proxy_auth
+printf '%s' "$pw" | openssl passwd -6 -stdin | sed 's/^/itsm-api:/' > secrets/egress_proxy_htpasswd; unset pw
+chmod 444 secrets/*                                               # dibaca uid container; direktori 700 membatasi host
 ./check-config.sh                                                 # wajib OK sebelum up
 ```
 `.env` dan `secrets/` ada di `.gitignore` dan `.dockerignore`. Jangan di-commit, jangan dicetak.
@@ -69,7 +74,7 @@ git checkout <SHA>; docker compose -f deploy/uat/compose.yaml build
 docker compose -f deploy/uat/compose.yaml up -d postgres
 docker compose -f deploy/uat/compose.yaml run --rm -e ITSM_SEED_CONFIRM_DB=itsm_uat_dummy api seed-uat   # migrate + tandai dummy + tiket dummy
 docker compose -f deploy/uat/compose.yaml up -d
-docker compose -f deploy/uat/compose.yaml ps        # postgres, api, ingress healthy (clamav tidak ikut: profile attachments)
+docker compose -f deploy/uat/compose.yaml ps        # postgres, egress-proxy, api, ingress healthy (clamav tidak ikut: profile attachments)
 ```
 - Urutan start: `api` menjalankan `migrate` lalu `serve`. Sebelum seed, `serve` menolak start karena DB belum bertanda. Itu disengaja, karena tidak ada auto-seed.
 - `ingress` menunggu `api` healthy (`/health/ready`).
@@ -83,6 +88,8 @@ docker compose -f deploy/uat/compose.yaml ps        # postgres, api, ingress hea
 | `https://<site>/health/ready` | 200 `ready` |
 | dari IP di luar allowlist | 403 (tanpa prompt login) |
 | `docker compose ps` | tidak ada service `clamav` (profile `attachments` mati) |
+| `docker compose exec api bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'` | gagal (api tanpa rute keluar, E1) |
+| `docker compose logs egress-proxy` setelah **Uji koneksi** | baris JSON per CONNECT, tanpa user/path/query |
 | unggah lampiran lewat API (tidak ada di UI) | 503 `scanner_unavailable` (gagal-tutup) |
 
 ## 5. Upgrade ke SHA baru
@@ -126,10 +133,9 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d
     `--profile attachments`, lalu uji runtime (PONG, EICAR, timeout, `StreamMaxLength` ≥ batas unggah API 10–25 MiB).
 - **Integrasi Jira/Lark (CP5b):** default UAT `ITSM_INTEGRATIONS` kosong = `simulation` (tanpa panggilan keluar).
   - Mode `live` butuh keyring di `secrets/itsm_keyring` + `ITSM_KEYRING_ACTIVE` di `.env` (tanpa itu: 503 `keyring_missing`,
-    koneksi tidak bisa diaktifkan) **dan** egress HTTPS ke Jira Cloud / Lark. Jaringan `backend` sengaja
-    `internal: true`, jadi paket ini **tidak** punya egress: live tidak akan tersambung sampai ada egress
-    terkendali (proxy/allowlist domain) yang disetujui security. Isolasi tidak dilonggarkan di paket ini.
-  - `ITSM_INTEGRATIONS_LAB=on` hanya untuk stub uji (http/alamat privat); jangan dipakai dengan provider nyata.
+    koneksi tidak bisa diaktifkan). Jaringan `backend` tetap `internal: true`; panggilan keluar hanya lewat
+    `egress-proxy` (CP6b) ke host di `deploy/egress/allowlist.regex`. Uji nyata Jira/Lark lewat proxy (E10) TUNGGU token owner.
+  - `ITSM_INTEGRATIONS_LAB=on` hanya untuk stub uji (http/alamat privat) tanpa proxy; di compose ini stub ditolak proxy.
   - Keyring dibaca dari file secret (`ITSM_KEYRING_FILE`), bukan env, sehingga tidak terlihat lewat `docker inspect`.
     Rotasi kunci: `deploy/RUNBOOK-keyring.md` (`docker compose run --rm api reseal --dry-run`, lalu `reseal`).
   - Kredensial hanya-tulis (UI: "Tersimpan · diganti <tgl>", ganti/hapus); nilainya tidak pernah keluar dari API, log, atau audit.

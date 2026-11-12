@@ -1196,6 +1196,8 @@ async fn cp5d_operational_bootstrap_admin_is_home_in_pt_delta_omega_beta(pool: P
     let dir = std::env::temp_dir();
     let key_file = dir.join(format!("itsm-cp5d-key-{}", Uuid::new_v4()));
     let pepper_file = dir.join(format!("itsm-cp5d-pepper-{}", Uuid::new_v4()));
+    let auth_file = dir.join(format!("itsm-cp6b-egress-{}", Uuid::new_v4()));
+    std::fs::write(&auth_file, "itsm-api:synthetic-egress-pass-01").expect("egress auth file");
     std::fs::write(&key_file, "t1:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=").expect("key file");
     std::fs::write(
         &pepper_file,
@@ -1207,6 +1209,11 @@ async fn cp5d_operational_bootstrap_admin_is_home_in_pt_delta_omega_beta(pool: P
         ("ITSM_ACCESS_MODE", "password"),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
+        ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+        (
+            "ITSM_EGRESS_PROXY_AUTH_FILE",
+            auth_file.to_str().expect("path"),
+        ),
         ("ITSM_MFA", "on"),
         ("ITSM_KEYRING_FILE", key_file.to_str().expect("path")),
         ("ITSM_KEYRING_ACTIVE", "t1"),
@@ -1221,6 +1228,7 @@ async fn cp5d_operational_bootstrap_admin_is_home_in_pt_delta_omega_beta(pool: P
     let cfg = Config::from_map(&vars);
     let _ = std::fs::remove_file(&key_file);
     let _ = std::fs::remove_file(&pepper_file);
+    let _ = std::fs::remove_file(&auth_file);
     let cfg = Arc::new(cfg.expect("production config"));
     itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.dob", &name, ADMIN_PASSWORD)
         .await

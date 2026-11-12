@@ -241,7 +241,14 @@ async fn secret(state: &AppState, ws: Uuid, conn: &LiveConn) -> Result<SecretByt
 }
 
 async fn target(state: &AppState, provider: &str, base: &str) -> Result<Target, Failure> {
-    Ok(Target::prepare(provider, base, state.config.integrations.lab, budget(state)).await?)
+    Ok(Target::prepare(
+        provider,
+        base,
+        state.config.integrations.lab,
+        budget(state),
+        state.config.egress_proxy.as_ref(),
+    )
+    .await?)
 }
 
 async fn jira(

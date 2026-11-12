@@ -93,6 +93,20 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
         access_mode = config.access_mode.as_str(),
         "itsm-api listening"
     );
+    // CP6b: where outbound calls go (proxy address only, never its credentials).
+    match &config.egress_proxy {
+        Some(proxy) => tracing::info!(
+            egress_proxy = proxy.url(),
+            proxy_auth = proxy.credentials().is_some(),
+            integrations = config.integrations.mode.as_str(),
+            app_allowlist = "jira *.atlassian.net, lark open.larksuite.com + open.feishu.cn, IdP hosts per company",
+            "outbound calls through the egress proxy"
+        ),
+        None => tracing::info!(
+            integrations = config.integrations.mode.as_str(),
+            "outbound calls direct (no egress proxy; DNS pinned, private addresses refused)"
+        ),
+    }
     let state = AppState {
         config: Arc::new(config),
         pool,

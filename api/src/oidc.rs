@@ -77,6 +77,8 @@ pub struct HostPolicy {
     issuer_host: String,
     extra_hosts: Vec<String>,
     lab: bool,
+    /// CP6b: outbound calls go through this proxy when set (it also allowlists the IdP hosts).
+    proxy: Option<crate::config::EgressProxy>,
 }
 
 /// One allowed endpoint split into the origin to pin and the path (with query) to request.
@@ -101,6 +103,7 @@ impl HostPolicy {
             issuer_host,
             extra_hosts: extra_hosts.iter().map(|h| h.to_ascii_lowercase()).collect(),
             lab,
+            proxy: None,
         };
         policy.endpoint(issuer)?;
         Some(policy)
@@ -108,6 +111,12 @@ impl HostPolicy {
 
     pub fn lab(&self) -> bool {
         self.lab
+    }
+
+    /// Sends this IdP's requests through the egress proxy (CP6b).
+    pub fn with_proxy(mut self, proxy: Option<crate::config::EgressProxy>) -> Self {
+        self.proxy = proxy;
+        self
     }
 
     /// Checks one URL against the policy: https on 443 (lab: http or https, any port), no user
@@ -220,7 +229,7 @@ pub async fn fetch_discovery(
     let ep = policy
         .discovery_endpoint(issuer)
         .ok_or(OidcError::Refused)?;
-    let doc = get_json(&ep, policy.lab, timeout).await?;
+    let doc = get_json(&ep, policy, timeout).await?;
     parse_discovery(&doc, issuer, policy)
 }
 
@@ -230,13 +239,23 @@ pub async fn fetch_jwks(
     policy: &HostPolicy,
     timeout: Duration,
 ) -> Result<Jwks, OidcError> {
-    let doc = get_json(&discovery.jwks, policy.lab, timeout).await?;
+    let doc = get_json(&discovery.jwks, policy, timeout).await?;
     parse_jwks(&doc)
 }
 
-async fn get_json(ep: &Endpoint, lab: bool, timeout: Duration) -> Result<Value, OidcError> {
+async fn get_json(
+    ep: &Endpoint,
+    policy: &HostPolicy,
+    timeout: Duration,
+) -> Result<Value, OidcError> {
     let call = async {
-        let target = Target::prepare_origin(ep.origin.clone(), lab, timeout).await?;
+        let target = Target::prepare_origin(
+            ep.origin.clone(),
+            policy.lab,
+            timeout,
+            policy.proxy.as_ref(),
+        )
+        .await?;
         target.get_json(&ep.path_and_query).await
     };
     match tokio::time::timeout(timeout, call).await {
@@ -604,7 +623,13 @@ pub async fn exchange_code(
     let auth = crate::providers::sensitive(basic.to_string())?;
     let ep = &discovery.token_endpoint;
     let call = async {
-        let target = Target::prepare_origin(ep.origin.clone(), policy.lab, timeout).await?;
+        let target = Target::prepare_origin(
+            ep.origin.clone(),
+            policy.lab,
+            timeout,
+            policy.proxy.as_ref(),
+        )
+        .await?;
         target
             .post_form(
                 &ep.path_and_query,

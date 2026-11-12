@@ -592,7 +592,9 @@ async fn probe(state: &AppState, issuer: &str, extra_hosts: &[String]) -> TestOu
         stage: Some(stage),
         code: Some(code),
     };
-    let Some(policy) = HostPolicy::new(issuer, extra_hosts, state.config.auth.oidc_lab) else {
+    let Some(policy) = HostPolicy::new(issuer, extra_hosts, state.config.auth.oidc_lab)
+        .map(|p| p.with_proxy(state.config.egress_proxy.clone()))
+    else {
         return fail("policy", "issuer_refused".into());
     };
     let timeout = Duration::from_millis(state.config.integrations.timeout_ms);

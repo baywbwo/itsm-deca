@@ -165,6 +165,54 @@ pub struct Config {
     pub keyring: Option<std::sync::Arc<crate::crypto::Keyring>>,
     /// CP5c sign-in methods (see [`AuthConfig`]).
     pub auth: AuthConfig,
+    /// CP6b forward proxy for every outbound call (providers and IdPs), see [`EgressProxy`].
+    pub egress_proxy: Option<EgressProxy>,
+}
+
+/// CP6b: `ITSM_EGRESS_PROXY=http://host:port` (+ `ITSM_EGRESS_PROXY_AUTH_FILE` holding
+/// `user:password`). When set, provider and IdP requests are tunnelled through it with CONNECT
+/// and the proxy resolves names and refuses private addresses; the app keeps its own host,
+/// port and scheme rules. Required in production (integrations are always live there).
+#[derive(Clone)]
+pub struct EgressProxy {
+    url: String,
+    credentials: Option<(String, Zeroizing<String>)>,
+}
+
+impl EgressProxy {
+    /// Same rules as the env variables: `http://host:port` and an optional `user:password`.
+    pub fn parse(url: &str, credentials: Option<&str>) -> Option<Self> {
+        Some(Self {
+            url: parse_proxy_url(url)?,
+            credentials: match credentials {
+                None => None,
+                Some(c) => Some(parse_proxy_credentials(c)?),
+            },
+        })
+    }
+
+    /// `http://host:port`, no credentials in it (safe to log).
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        self.credentials
+            .as_ref()
+            .map(|(u, p)| (u.as_str(), p.as_str()))
+    }
+}
+
+impl fmt::Debug for EgressProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EgressProxy")
+            .field("url", &self.url)
+            .field(
+                "credentials",
+                &self.credentials.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,6 +498,7 @@ impl Config {
             },
         };
         let auth = parse_auth(&optional, environment, access_mode)?;
+        let egress_proxy = parse_egress_proxy(vars, &optional, environment, integrations.mode)?;
         let keyring = match (keyring_raw, keyring_active.as_deref()) {
             (None, None) => None,
             (keyring, active) => Some(std::sync::Arc::new(
@@ -476,8 +525,72 @@ impl Config {
             integrations,
             keyring,
             auth,
+            egress_proxy,
         })
     }
+}
+
+/// CP6b. Production runs integrations live, so it refuses to start without the proxy and its
+/// credentials (fail closed: no direct internet path is ever assumed).
+fn parse_egress_proxy(
+    vars: &HashMap<String, String>,
+    optional: &dyn Fn(&str) -> Option<String>,
+    environment: Environment,
+    mode: IntegrationsMode,
+) -> Result<Option<EgressProxy>, ConfigError> {
+    const URL: &str = "ITSM_EGRESS_PROXY";
+    const AUTH: &str = "ITSM_EGRESS_PROXY_AUTH_FILE";
+    let credentials = match vars.get(AUTH).map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        None => None,
+        Some(path) => match read_secret_file(path) {
+            None => return Err(ConfigError::Invalid { name: AUTH }),
+            Some(None) => None,
+            Some(Some(text)) => {
+                Some(parse_proxy_credentials(&text).ok_or(ConfigError::Invalid { name: AUTH })?)
+            }
+        },
+    };
+    let url = match optional(URL) {
+        None => None,
+        Some(v) => Some(parse_proxy_url(&v).ok_or(ConfigError::Invalid { name: URL })?),
+    };
+    let production_live = environment == Environment::Production && mode == IntegrationsMode::Live;
+    match (url, credentials) {
+        (None, Some(_)) => Err(ConfigError::Invalid { name: AUTH }),
+        (None, None) if production_live => Err(ConfigError::Missing(URL)),
+        (None, None) => Ok(None),
+        (Some(_), None) if production_live => Err(ConfigError::Missing(AUTH)),
+        (Some(url), credentials) => Ok(Some(EgressProxy { url, credentials })),
+    }
+}
+
+/// `http://host:port` (one trailing `/` dropped): lower-case DNS name or IPv4 address, explicit
+/// port, nothing else. The proxy sits on the internal network, so plain http to it is expected.
+fn parse_proxy_url(v: &str) -> Option<String> {
+    let v = v.strip_suffix('/').unwrap_or(v);
+    let rest = v.strip_prefix("http://")?;
+    let (host, port) = rest.rsplit_once(':')?;
+    port.parse::<u16>().ok().filter(|p| *p > 0)?;
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-'))
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-']);
+    host_ok.then(|| v.to_owned())
+}
+
+/// `user:password`: user 1–64 of `A-Za-z0-9._-`, password 16–256 printable ASCII (no spaces).
+fn parse_proxy_credentials(text: &str) -> Option<(String, Zeroizing<String>)> {
+    let (user, password) = text.split_once(':')?;
+    let user_ok = (1..=64).contains(&user.len())
+        && user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'));
+    let password_ok =
+        (16..=256).contains(&password.len()) && password.bytes().all(|c| c.is_ascii_graphic());
+    (user_ok && password_ok).then(|| (user.to_owned(), Zeroizing::new(password.to_owned())))
 }
 
 fn parse_auth(
@@ -690,12 +803,20 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    /// Production calls out only through the egress proxy (CP6b); one shared credentials file.
+    fn egress_auth() -> &'static str {
+        static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        PATH.get_or_init(|| secret_file("egress-auth", "itsm-api:synthetic-egress-pass-01\n"))
+    }
+
     #[test]
     fn production_password_mode_requires_mfa_keys() {
         let prod = vec![
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
             ("ITSM_MFA", "on"),
         ];
         assert_eq!(
@@ -759,6 +880,8 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
         ];
         let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
@@ -810,6 +933,8 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
         ];
         for (value, want) in [("sso", AuthMethods::Sso), ("both", AuthMethods::Both)] {
             let mut v = prod.clone();
@@ -1033,6 +1158,8 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
         ];
         let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Live));
@@ -1090,6 +1217,8 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
             ("ITSM_KEYRING_ACTIVE", "k1"),
         ];
         // Plain env vars are visible through docker inspect and /proc: refused in production.
@@ -1157,6 +1286,79 @@ mod tests {
             })
         );
         for f in [good, empty, bad, open] {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    /// CP6b E9: production (always live integrations) refuses to start without the egress proxy
+    /// and its credentials; the URL is http://host:port only and the password never prints.
+    #[test]
+    fn cp6b_production_requires_the_egress_proxy() {
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        assert_eq!(
+            Config::from_map(&vars(&prod)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY"))
+        );
+        let mut v = prod.clone();
+        v.push(("ITSM_EGRESS_PROXY", "http://egress-proxy:3128/"));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY_AUTH_FILE"))
+        );
+        let empty = secret_file("egress-empty", "\n");
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", &empty));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY_AUTH_FILE"))
+        );
+        v.pop();
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.egress_proxy.as_ref().is_some_and(|p|
+            p.url() == "http://egress-proxy:3128" && p.credentials().map(|(u, _)| u) == Some("itsm-api")))
+        );
+        assert!(!format!("{cfg:?}").contains("synthetic-egress-pass"));
+
+        let bad_auth = secret_file("egress-bad", "itsm-api:short\n");
+        for (name, value) in [
+            ("ITSM_EGRESS_PROXY", "https://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy"),
+            ("ITSM_EGRESS_PROXY", "http://user:pass@egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", bad_auth.as_str()),
+            (
+                "ITSM_EGRESS_PROXY_AUTH_FILE",
+                "/nonexistent/itsm-egress-auth",
+            ),
+        ] {
+            let mut v: Vec<_> = v.iter().copied().filter(|(k, _)| *k != name).collect();
+            v.push((name, value));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={value}"
+            );
+        }
+
+        // UAT may run without a proxy (direct guarded calls); credentials without a proxy are a mistake.
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.egress_proxy.is_none()));
+        let mut v = base();
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_EGRESS_PROXY_AUTH_FILE"
+            })
+        );
+        v.push(("ITSM_EGRESS_PROXY", "http://10.0.0.5:3128"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.egress_proxy.is_some()));
+        for f in [empty, bad_auth] {
             let _ = std::fs::remove_file(f);
         }
     }
