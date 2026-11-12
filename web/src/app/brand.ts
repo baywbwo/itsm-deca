@@ -1,6 +1,6 @@
 import bmtLogo from '../assets/logo-bmt.svg';
 import ajrLogo from '../assets/logo-ajr.png';
-import decaLogo from '../assets/logo-qash.svg';
+import decaLogo from '../assets/qash-logo-color.png';
 import type { BrandKey, Workspace } from '../api/types';
 
 /**

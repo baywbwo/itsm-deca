@@ -8,7 +8,7 @@ import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../comp
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
 import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
-import logoWhiteUrl from '../assets/logo-qash-white.png';
+import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';

@@ -21,6 +21,9 @@ import {
   isCatalogEntryResult,
   isIntegrationList,
   isIntegrationResult,
+  isAiSettingsView,
+  isAiProviderView,
+  isMcpServerView,
   isEmpty,
   isAssignmentHistory,
   isIntakeDirectory,
@@ -50,6 +53,12 @@ import {
 } from './guards';
 import type {
   ActivityPage,
+  AiProviderInput,
+  AiProviderView,
+  AiSettingsView,
+  McpServerInput,
+  McpServerPatch,
+  McpServerView,
   AttachmentUploaded,
   ConversationPanel,
   NoteCreateRequest,
@@ -603,6 +612,19 @@ export function createApi(transport: Transport) {
       call({
         method: 'PATCH', path: `/api/v1/users/${encodeURIComponent(userId)}`, headers: csrf(), body: { active: false },
       }, isUserDeactivated),
+    /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
+    getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
+      get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),
+    saveAiProvider: (id: string, provider: 'openai' | 'anthropic', body: AiProviderInput): Promise<AiProviderView> =>
+      call({ method: 'PUT', path: `${ws(id)}/ai-settings/providers/${provider}`, headers: csrf(), body }, isAiProviderView),
+    testAiProvider: (id: string, provider: 'openai' | 'anthropic'): Promise<AiProviderView> =>
+      call({ method: 'POST', path: `${ws(id)}/ai-settings/providers/${provider}/test`, headers: csrf() }, isAiProviderView),
+    createMcpServer: (id: string, body: McpServerInput): Promise<McpServerView> =>
+      call({ method: 'POST', path: `${ws(id)}/ai-settings/mcp-servers`, headers: csrf(), body }, isMcpServerView),
+    updateMcpServer: (id: string, serverId: string, body: McpServerPatch): Promise<McpServerView> =>
+      call({ method: 'PATCH', path: `${ws(id)}/ai-settings/mcp-servers/${encodeURIComponent(serverId)}`, headers: csrf(), body }, isMcpServerView),
+    testMcpServer: (id: string, serverId: string): Promise<McpServerView> =>
+      call({ method: 'POST', path: `${ws(id)}/ai-settings/mcp-servers/${encodeURIComponent(serverId)}/test`, headers: csrf() }, isMcpServerView),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

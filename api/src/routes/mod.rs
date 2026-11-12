@@ -1,4 +1,5 @@
 pub mod access;
+pub mod ai_settings;
 pub mod ai_suggestions;
 pub mod attachments;
 pub mod catalogs;
@@ -30,6 +31,27 @@ use crate::AppState;
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
+    ("get", "/api/v1/workspaces/{workspace_id}/ai-settings"),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}/test",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers",
+    ),
+    (
+        "patch",
+        "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}/test",
+    ),
     ("post", "/api/v1/login"),
     ("post", "/api/v1/login/mfa"),
     ("get", "/api/v1/meta"),
@@ -211,6 +233,30 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/login", post(password::login))
         .route("/api/v1/login/mfa", post(mfa::login_mfa))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings",
+            get(ai_settings::list),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}",
+            put(ai_settings::save_provider),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}/test",
+            post(ai_settings::test_provider),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers",
+            post(ai_settings::create_mcp),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}",
+            patch(ai_settings::update_mcp),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}/test",
+            post(ai_settings::test_mcp),
+        )
         .route("/api/v1/meta", get(session::meta))
         .route("/api/v1/uat/session", post(session::uat_enter))
         .route(

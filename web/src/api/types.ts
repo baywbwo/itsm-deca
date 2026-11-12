@@ -118,3 +118,10 @@ export type UserCreateRequest = NonNullable<operations['createUser']['requestBod
 export type UserCreated = Body<'createUser', 201>;
 export type TemporaryPassword = Body<'resetUserPassword', 200>;
 export type UserDeactivated = Body<'updateUser', 200>;
+/* D18 — setelan koneksi LLM & MCP (tanpa rahasia di klien). */
+export type AiProviderView = S['AiProviderView'];
+export type AiSettingsView = S['AiSettingsView'];
+export type AiProviderInput = S['AiProviderInput'];
+export type McpServerView = S['McpServerView'];
+export type McpServerInput = S['McpServerInput'];
+export type McpServerPatch = S['McpServerPatch'];

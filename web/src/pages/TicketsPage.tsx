@@ -43,6 +43,7 @@ import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../compon
 import { Badge, statusTone } from '../components/Badge';
 import { Icon } from '../components/Icon';
 import { initials } from '../app/labels';
+import { planDrop } from '../app/boardDnd';
 import {
   activePreset, allStatusCount, applyPreset, pageRange, PRESET_LABELS, presetsFor, priorityDot, shortInstant,
   urgentPriorityId, type TicketPreset,
@@ -779,13 +780,15 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
     setOver(null);
     const t = dragging;
     setDragging(null);
-    if (!t || t.status.code === to) return;
-    const action = t.allowedActions.find((a) => a.to.code === to);
-    if (!action) {
-      onRefused(`${t.displayNumber} tidak dapat dipindah ke status ini. Tidak ada perubahan.`);
+    if (!t) return;
+    const plan = planDrop(t, to);
+    if (plan.kind === 'ignore') return;
+    if (plan.kind === 'refuse') {
+      onRefused(plan.message);
       return;
     }
-    onTransition(t, to);
+    // Resolve/reopen need a mandatory note, so the same dialog opens with the target preselected.
+    onTransition(t, plan.to);
   }
 
   if (board.total === 0) {
