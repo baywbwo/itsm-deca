@@ -266,7 +266,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
                   </div>
                 )}
               </Popover>
-              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'}
+              <AccountMenu api={api} session={session} role={role} passwordMode={meta.accessMode === 'password'}
                 username={username} onLoggedOutAll={onLoggedOutAll} onLogout={logout} onNotice={setToast} />
             </div>
           </header>
@@ -454,7 +454,8 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
   switch (id) {
     case 'dashboard':
       return <DashboardPage api={api} workspace={data.workspace} query={query}
-        canReports={data.permissions.permissions.includes('report.view')} />;
+        canReports={data.permissions.permissions.includes('report.view')}
+        canCreate={data.permissions.permissions.includes('ticket.create')} />;
     case 'tickets':
       return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
     case 'settings':

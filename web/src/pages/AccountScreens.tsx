@@ -234,9 +234,11 @@ export function ChangePasswordDialog({ api, open, username, onClose, onDone }: {
  * CP-UI1 account menu behind the topbar avatar: who is signed in, own-password actions (password
  * mode), and Keluar.
  */
-export function AccountMenu({ api, session, passwordMode, username, onLoggedOutAll, onLogout, onNotice }: {
+export function AccountMenu({ api, session, role, passwordMode, username, onLoggedOutAll, onLogout, onNotice }: {
   api: Api;
   session: Session;
+  /** Same role line as the sidebar user card (one source); falls back to the account-level role. */
+  role?: string;
   passwordMode: boolean;
   /** Username typed at login in this tab (client-side "not the username" check), else null. */
   username: string | null;
@@ -257,7 +259,7 @@ export function AccountMenu({ api, session, passwordMode, username, onLoggedOutA
               <span className="avatar top-avatar" aria-hidden="true">{initials(session.user.displayName)}</span>
               <div>
                 <span className="sr-only">Akun: </span><strong>{session.user.displayName}</strong>
-                <p className="tiny muted">{accountRole(session)}</p>
+                <p className="tiny muted">{role ?? accountRole(session)}</p>
               </div>
             </div>
             {passwordMode && (
