@@ -1,6 +1,6 @@
 import type { DashboardPeriodKey, PermissionCode, TicketFilter } from '../api/types';
 
-export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations';
+export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'users';
 
 export interface PageDef {
   id: PageId;
@@ -9,6 +9,10 @@ export interface PageDef {
   anyOf: readonly PermissionCode[];
   /** Only in UAT mode (design/engineering aid, not a product screen). */
   uatOnly?: boolean;
+  /** CP3b: platform-wide page, shown only when the session holds platform_admin (not a workspace permission). */
+  platformAdmin?: boolean;
+  /** In the "Administrasi" nav section (the caption sits before the first one shown). */
+  admin?: boolean;
   /** Delivery step that builds the real screen. */
   milestone: string;
 }
@@ -20,23 +24,26 @@ export const PAGES: readonly PageDef[] = [
   {
     id: 'settings',
     label: 'Pengaturan',
+    admin: true,
     anyOf: ['admin.settings', 'admin.members', 'member.read', 'catalog.read'],
     milestone: 'D09',
   },
   {
     id: 'integrations',
     label: 'Integrasi',
+    admin: true,
     anyOf: ['integration.manage', 'integration.credentials', 'integration.recovery'],
     milestone: 'D09–D10',
   },
+  { id: 'users', label: 'Pengguna', anyOf: [], platformAdmin: true, admin: true, milestone: 'CP3b' },
 ];
 
 export const pageDef = (id: PageId): PageDef => PAGES.find((p) => p.id === id) ?? PAGES[0]!;
 
-export function allowedPages(permissions: readonly PermissionCode[], uat: boolean): PageDef[] {
-  return PAGES.filter(
-    (p) => (!p.uatOnly || uat) && (p.anyOf.length === 0 || p.anyOf.some((c) => permissions.includes(c))),
-  );
+export function allowedPages(permissions: readonly PermissionCode[], uat: boolean, platformAdmin = false): PageDef[] {
+  return PAGES.filter((p) => (p.platformAdmin
+    ? platformAdmin
+    : (!p.uatOnly || uat) && (p.anyOf.length === 0 || p.anyOf.some((c) => permissions.includes(c)))));
 }
 
 export interface Route {

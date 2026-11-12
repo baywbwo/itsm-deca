@@ -23,6 +23,7 @@ const TicketsPage = lazy(() => import('../pages/TicketsPage').then((m) => ({ def
 const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const ReportsPage = lazy(() => import('../pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const IntegrationsPage = lazy(() => import('../pages/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
+const UsersPage = lazy(() => import('../pages/UsersPage').then((m) => ({ default: m.UsersPage })));
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
@@ -64,7 +65,7 @@ export function App({ api }: { api: Api }) {
       onLogout={() => { void api.logout().finally(retry); }} />;
   }
   return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry}
-    onLoggedOutAll={loggedOutAll} />;
+    username={username} onLoggedOutAll={loggedOutAll} />;
 }
 
 /** Logo of the active company's preset, or a neutral text mark when none is configured. */
@@ -89,11 +90,12 @@ function BrandBlock({ brand }: { brand: ActiveBrand }) {
   );
 }
 
-function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, onLoggedOutAll }: {
+function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, username, onLoggedOutAll }: {
   api: Api;
   meta: Meta;
   session: Session;
   workspaces: Workspace[];
+  username: string | null;
   onReenter: () => void;
   onLoggedOutAll: () => void;
 }) {
@@ -140,7 +142,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, onLo
   }, [ready, routeKey]);
 
   const data = scope.status === 'success' ? scope.data : null;
-  const pages = data ? allowedPages(data.permissions.permissions, session.uatSuperadmin) : [];
+  const pages = data ? allowedPages(data.permissions.permissions, session.uatSuperadmin, session.platformAdmin) : [];
   const current = pageDef(route.page);
   const listed = workspaces.find((w) => w.id === route.workspaceId) ?? null;
   // Branding follows the workspace in the URL (no URL yet: the first one, which it is about to open).
@@ -208,9 +210,9 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, onLo
     <nav className="nav" aria-label="Navigasi utama">
       <div className="nav-caption">Ruang kerja</div>
       {data && route.workspaceId
-        ? pages.map((p) => (
+        ? pages.map((p, i) => (
           <Fragment key={p.id}>
-          {p.id === 'settings' && <div className="nav-caption nav-caption-secondary">Administrasi</div>}
+          {p.admin && !pages[i - 1]?.admin && <div className="nav-caption nav-caption-secondary">Administrasi</div>}
           <a key={p.id} href={toHash({ workspaceId: route.workspaceId!, page: p.id })}
             aria-current={p.id === route.page ? 'page' : undefined} onClick={(e) => {
               if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -257,7 +259,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, onLo
                 }))} />
               )}
               <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'}
-                onLoggedOutAll={onLoggedOutAll} />
+                username={username} onLoggedOutAll={onLoggedOutAll} onNotice={setToast} />
             </div>
           </div>
           <div className="content">
@@ -444,6 +446,8 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
       return <ReportsPage api={api} workspace={data.workspace} uat={uat} query={query} onNotice={onNotice} />;
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
+    case 'users':
+      return <UsersPage api={api} userId={userId} onNotice={onNotice} />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }

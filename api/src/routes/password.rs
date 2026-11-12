@@ -176,7 +176,8 @@ pub async fn login(
     auth_event(&mut tx, Some(user_id), &username, "login", "success", None).await?;
     tx.commit().await?;
     let issued = session::issue(&state.pool, user_id, "password").await?;
-    Ok((StatusCode::CREATED,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"csrfToken":issued.csrf_token}))).into_response())
+    let platform_admin = super::users::is_platform_admin(&state.pool, user_id).await?;
+    Ok((StatusCode::CREATED,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"platformAdmin":platform_admin,"csrfToken":issued.csrf_token}))).into_response())
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

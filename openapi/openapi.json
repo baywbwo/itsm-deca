@@ -738,7 +738,11 @@
                   "scanner_unavailable",
                   "regulator_mapping_unavailable",
                   "report_expired",
-                  "rate_limited"
+                  "rate_limited",
+                  "username_taken",
+                  "email_taken",
+                  "user_inactive",
+                  "last_admin"
                 ]
               },
               "message": {
@@ -818,13 +822,75 @@
           }
         }
       },
+      "UserListItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "displayName",
+          "email",
+          "active",
+          "mustChangePassword",
+          "locked",
+          "platformAdmin",
+          "createdAt",
+          "deactivatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null for users without a local credential."
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Currently locked out after failed logins."
+          },
+          "platformAdmin": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deactivatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "Session": {
         "type": "object",
         "required": [
           "user",
           "banner",
           "uatSuperadmin",
-          "mustChangePassword"
+          "mustChangePassword",
+          "platformAdmin"
         ],
         "properties": {
           "user": {
@@ -842,6 +908,10 @@
           "mustChangePassword": {
             "type": "boolean",
             "description": "US-1.4: true while the user must change the password; every route except the account and session paths answers 403 until then."
+          },
+          "platformAdmin": {
+            "type": "boolean",
+            "description": "CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then."
           }
         }
       },
@@ -6813,6 +6883,106 @@
       }
     },
     "/api/v1/users": {
+      "get": {
+        "operationId": "listUsers",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). User directory, newest first (created_at, id), keyset-paged. Never returns password hashes, lockout counters or credential versions.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Case-insensitive substring of username, display name or email. LIKE wildcards are literal.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "active",
+            "in": "query",
+            "required": false,
+            "description": "true = active only, false = deactivated only, all (default) = both.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false",
+                "all"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "Opaque `nextCursor` of the previous page. A cursor from other filters is 400.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "nextCursor"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UserListItem"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
       "post": {
         "operationId": "createUser",
         "security": [

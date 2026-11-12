@@ -940,3 +940,8 @@ table .subject {
 .account-menu-body .btn { margin-top: 8px; }
 .deployment-picker { display:grid; gap:6px; padding:12px; border:1px solid #cbdcf5; border-radius:9px; background:#f1f6ff; margin-bottom:15px; }
 .deployment-picker label { font-size:11px; font-weight:700; color:#194c91; }.deployment-picker select { width:100%; padding:8px; border:1px solid #bdcde3; border-radius:6px; background:white; font:inherit; font-size:12px; }.deployment-picker small { font-size:10px; color:#536c8c; }
+
+/* CP3b user administration: load-more row and the one-time temporary password. */
+.spaced-top { margin-top: 16px; }
+.temp-password { flex-wrap: nowrap; margin: 8px 0 4px; }
+.temp-password-value { flex: 1 1 auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .02em; }

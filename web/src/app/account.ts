@@ -4,6 +4,8 @@ import { ApiError, rateLimitText } from '../api/client';
 export const SESSION_ENDED_TITLE = 'Sesi berakhir';
 export const SESSION_ENDED_TEXT = 'Sesi Anda tidak lagi aktif. Masuk kembali untuk melanjutkan.';
 export const LOGGED_OUT_ALL_TEXT = 'Anda telah keluar dari semua perangkat. Masuk kembali untuk melanjutkan.';
+/** CP3b voluntary change: this session stays; the server ended the others. */
+export const PASSWORD_CHANGED_TEXT = 'Kata sandi diganti. Anda tetap masuk di perangkat ini; sesi lain akun ini sudah diakhiri.';
 
 /** Same rule as the server (US-1.4): 12 characters, counted as characters, not bytes. */
 export const MIN_PASSWORD_LENGTH = 12;

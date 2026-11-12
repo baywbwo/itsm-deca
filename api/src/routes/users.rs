@@ -1,35 +1,42 @@
 //! R1 I-1 CP2d: platform user administration (US-1.3 create, US-1.5 password reset,
 //! US-1.7 deactivate). Only callers with the `platform_admin` grant; refusals leave a platform
 //! denied-audit row. Temporary passwords are shown once and never stored or logged in clear.
+//! CP3b adds the user directory (`GET /users`).
 use super::password::{HASH_SLOTS, auth_event_by, hash_password};
-use super::ticket_list::body;
+use super::ticket_list::{body, decode_cursor, encode_cursor, non_empty, parse_limit};
 use crate::{AppState, config::AccessMode, error::AppError, session::Session};
 use axum::{
     Json,
-    extract::{Path, State, rejection::JsonRejection},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 /// Capability named in platform denied audit rows for user administration.
 pub const PLATFORM_USER_ADMIN: &str = "platform.users";
 
+/// Whether `user` holds the `platform_admin` grant (also shown to the client in the session).
+pub(crate) async fn is_platform_admin(pool: &sqlx::PgPool, user: Uuid) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM platform_grants WHERE user_id=$1 AND grant_code='platform_admin')",
+    )
+    .bind(user)
+    .fetch_one(pool)
+    .await?)
+}
+
 async fn platform_admin(state: &AppState, s: &Session) -> Result<(), AppError> {
     if state.config.access_mode != AccessMode::Password {
         return Err(AppError::NotFound);
     }
-    let granted: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM platform_grants WHERE user_id=$1 AND grant_code='platform_admin')",
-    )
-    .bind(s.user_id)
-    .fetch_one(&state.pool)
-    .await?;
-    if granted {
+    if is_platform_admin(&state.pool, s.user_id).await? {
         Ok(())
     } else {
         tracing::info!(user_id = %s.user_id, "user administration denied");
@@ -298,4 +305,144 @@ pub async fn update(
     tx.commit().await?;
     tracing::info!(actor = %s.user_id, user_id = %id, "user deactivated");
     Ok(Json(json!({"id": id, "active": false})).into_response())
+}
+
+const LIST_DEFAULT_LIMIT: i64 = 50;
+const LIST_MAX_LIMIT: i64 = 100;
+const MAX_SEARCH_CHARS: usize = 100;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ListUsersQuery {
+    q: Option<String>,
+    active: Option<String>,
+    limit: Option<String>,
+    cursor: Option<String>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct UserListItem {
+    id: Uuid,
+    /// Absent for users without a local credential (e.g. synthetic UAT fixtures).
+    username: Option<String>,
+    display_name: String,
+    email: Option<String>,
+    active: bool,
+    must_change_password: bool,
+    locked: bool,
+    platform_admin: bool,
+    created_at: String,
+    deactivated_at: Option<String>,
+    #[serde(skip)]
+    sort_key: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserList {
+    items: Vec<UserListItem>,
+    next_cursor: Option<String>,
+}
+
+/// Columns only: no hash, lockout counters or credential version leave the server.
+const LIST_SQL: &str = concat!(
+    "SELECT u.id, c.username, u.display_name, u.email, \
+     (u.active AND u.deactivated_at IS NULL) AS active, \
+     coalesce(c.must_change_password, false) AS must_change_password, \
+     coalesce(c.locked_until > now(), false) AS locked, \
+     EXISTS (SELECT 1 FROM platform_grants g WHERE g.user_id = u.id \
+       AND g.grant_code = 'platform_admin') AS platform_admin, ",
+    "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, ",
+    "to_char(u.deactivated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deactivated_at, ",
+    "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS sort_key \
+     FROM users u LEFT JOIN local_credentials c ON c.user_id = u.id WHERE true"
+);
+
+/// `q` as an escaped ILIKE pattern.
+fn like(q: &str) -> String {
+    let mut out = String::with_capacity(q.len() + 2);
+    out.push('%');
+    for c in q.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+/// US-1.3: user directory for platform admins, newest first, keyset-paged.
+pub async fn list(
+    State(state): State<AppState>,
+    s: Session,
+    Query(q): Query<ListUsersQuery>,
+) -> Result<Json<UserList>, AppError> {
+    platform_admin(&state, &s).await?;
+    let search = match q.q.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(v) if v.chars().count() > MAX_SEARCH_CHARS => return Err(AppError::InvalidRequest),
+        Some(v) => Some(v.to_owned()),
+    };
+    let active = match non_empty(q.active.as_deref()) {
+        None | Some("all") => None,
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        Some(_) => return Err(AppError::InvalidRequest),
+    };
+    let limit = parse_limit(q.limit.as_deref(), LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT)?;
+    let digest = Sha256::digest(json!(["users", search, active]).to_string().as_bytes());
+    let fp = URL_SAFE_NO_PAD.encode(&digest[..16]);
+    let after = match non_empty(q.cursor.as_deref()) {
+        Some(c) => Some(decode_cursor(c, &fp)?),
+        None => None,
+    };
+
+    let mut b = QueryBuilder::<Postgres>::new(LIST_SQL);
+    if let Some(v) = &search {
+        let pattern = like(v);
+        b.push(" AND (c.username ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" ESCAPE '\\' OR u.display_name ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" ESCAPE '\\' OR u.email ILIKE ")
+            .push_bind(pattern)
+            .push(" ESCAPE '\\')");
+    }
+    match active {
+        Some(true) => {
+            b.push(" AND u.active AND u.deactivated_at IS NULL");
+        }
+        Some(false) => {
+            b.push(" AND NOT (u.active AND u.deactivated_at IS NULL)");
+        }
+        None => {}
+    }
+    if let Some((key, id)) = after {
+        b.push(" AND (u.created_at, u.id) < (")
+            .push_bind(key)
+            .push("::timestamptz, ")
+            .push_bind(id)
+            .push(")");
+    }
+    b.push(" ORDER BY u.created_at DESC, u.id DESC LIMIT ")
+        .push_bind(limit + 1);
+    let mut rows: Vec<UserListItem> = match b.build_query_as().fetch_all(&state.pool).await {
+        Ok(r) => r,
+        // A tampered cursor key that is not a timestamp.
+        Err(sqlx::Error::Database(db)) if db.code().is_some_and(|c| c.starts_with("22")) => {
+            return Err(AppError::InvalidRequest);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let more = rows.len() as i64 > limit;
+    rows.truncate(limit as usize);
+    let next_cursor = match (more, rows.last()) {
+        (true, Some(last)) => Some(encode_cursor(&fp, last.sort_key.clone(), last.id)?),
+        _ => None,
+    };
+    Ok(Json(UserList {
+        items: rows,
+        next_cursor,
+    }))
 }

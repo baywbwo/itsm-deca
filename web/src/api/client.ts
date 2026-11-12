@@ -43,6 +43,10 @@ import {
   isReportRun,
   isReportExportResult,
   isWorkspacePermissions,
+  isTemporaryPassword,
+  isUserCreated,
+  isUserDeactivated,
+  isUserList,
 } from './guards';
 import type {
   ActivityPage,
@@ -111,6 +115,11 @@ import type {
   ReportExportResult,
   Workspace,
   WorkspacePermissions,
+  TemporaryPassword,
+  UserCreateRequest,
+  UserCreated,
+  UserDeactivated,
+  UserList,
 } from './types';
 
 export interface TransportRequest {
@@ -256,6 +265,7 @@ export function createApi(transport: Transport) {
   }
   const toSession = (v: Session): Session => ({
     user: v.user, banner: v.banner, uatSuperadmin: v.uatSuperadmin, mustChangePassword: v.mustChangePassword === true,
+    platformAdmin: v.platformAdmin === true,
   });
 
   const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);
@@ -566,6 +576,29 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
       }, isIntegrationResult),
+    /**
+     * CP3b platform user directory (platform_admin only; 403 otherwise). `active` is
+     * `true`/`false`/`all`; the cursor is only valid for the same search and filter.
+     */
+    listUsers: (filter: { q?: string; active?: 'true' | 'false' | 'all' }, cursor: string | null, signal?: AbortSignal): Promise<UserList> => {
+      const q = new URLSearchParams();
+      if (filter.q?.trim()) q.set('q', filter.q.trim());
+      if (filter.active) q.set('active', filter.active);
+      return get(`/api/v1/users${withParam(q.toString(), 'cursor', cursor)}`, isUserList, signal);
+    },
+    /** US-1.3: the temporary password in the answer is shown once and never kept by the client. */
+    createUser: (body: UserCreateRequest): Promise<UserCreated> =>
+      call({ method: 'POST', path: '/api/v1/users', headers: csrf(), body }, isUserCreated, 201),
+    /** US-1.5: a new one-time temporary password; every session of that user is revoked. */
+    resetUserPassword: (userId: string): Promise<TemporaryPassword> =>
+      call({
+        method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/password-reset`, headers: csrf(),
+      }, isTemporaryPassword),
+    /** US-1.7: 409 `user_inactive` or `last_admin`. */
+    deactivateUser: (userId: string): Promise<UserDeactivated> =>
+      call({
+        method: 'PATCH', path: `/api/v1/users/${encodeURIComponent(userId)}`, headers: csrf(), body: { active: false },
+      }, isUserDeactivated),
     /** Headers for unsafe methods (D06+ mutations). */
     csrfHeaders: csrf,
   };

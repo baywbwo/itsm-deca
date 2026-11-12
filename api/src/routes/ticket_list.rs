@@ -185,7 +185,7 @@ pub struct TicketQuery {
     pub order: Order,
 }
 
-fn non_empty(raw: Option<&str>) -> Option<&str> {
+pub(crate) fn non_empty(raw: Option<&str>) -> Option<&str> {
     raw.filter(|s| !s.is_empty())
 }
 
@@ -424,7 +424,7 @@ struct CursorBody {
     i: Uuid,
 }
 
-fn encode_cursor(fp: &str, key: String, id: Uuid) -> Result<String, AppError> {
+pub(crate) fn encode_cursor(fp: &str, key: String, id: Uuid) -> Result<String, AppError> {
     let body = CursorBody {
         v: 1,
         f: fp.to_owned(),
@@ -435,7 +435,7 @@ fn encode_cursor(fp: &str, key: String, id: Uuid) -> Result<String, AppError> {
     Ok(URL_SAFE_NO_PAD.encode(json))
 }
 
-fn decode_cursor(raw: &str, fp: &str) -> Result<(String, Uuid), AppError> {
+pub(crate) fn decode_cursor(raw: &str, fp: &str) -> Result<(String, Uuid), AppError> {
     if raw.len() > MAX_CURSOR_CHARS {
         return Err(AppError::InvalidRequest);
     }
@@ -450,7 +450,7 @@ fn decode_cursor(raw: &str, fp: &str) -> Result<(String, Uuid), AppError> {
     Ok((body.k, body.i))
 }
 
-fn parse_limit(raw: Option<&str>, default: i64, max: i64) -> Result<i64, AppError> {
+pub(crate) fn parse_limit(raw: Option<&str>, default: i64, max: i64) -> Result<i64, AppError> {
     match non_empty(raw) {
         None => Ok(default),
         Some(s) => s

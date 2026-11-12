@@ -36,6 +36,16 @@ describe('routes', () => {
     expect(allowedPages(['integration.recovery'], false).map((p) => p.id)).toEqual(['integrations']);
   });
 
+  it('CP3b: Pengguna only for a platform admin session, never from workspace permissions or UAT', () => {
+    const all = PAGES.flatMap((p) => p.anyOf);
+    expect(allowedPages(all, true).map((p) => p.id)).not.toContain('users');
+    expect(allowedPages([], false, true).map((p) => p.id)).toEqual(['users']);
+    expect(allowedPages(['admin.settings'], false, true).map((p) => p.id)).toEqual(['settings', 'users']);
+    // All three sit in the Administrasi nav section.
+    expect(PAGES.filter((p) => p.admin).map((p) => p.id)).toEqual(['settings', 'integrations', 'users']);
+    expect(parseHash('#/w/abc/users')).toEqual({ workspaceId: 'abc', page: 'users', query: '' });
+  });
+
   it('carries drilldown filters in the hash query without touching the path', () => {
     const id = '7f1c2a8e-0000-4000-8000-000000000001';
     const hash = drilldownHash(id, {

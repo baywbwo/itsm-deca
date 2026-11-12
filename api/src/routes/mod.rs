@@ -37,6 +37,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/session/csrf"),
     ("post", "/api/v1/session/logout-all"),
     ("post", "/api/v1/account/password"),
+    ("get", "/api/v1/users"),
     ("post", "/api/v1/users"),
     ("patch", "/api/v1/users/{user_id}"),
     ("post", "/api/v1/users/{user_id}/password-reset"),
@@ -208,7 +209,7 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/session/logout-all", post(session::logout_all))
         .route("/api/v1/account/password", post(password::change_password))
-        .route("/api/v1/users", post(users::create))
+        .route("/api/v1/users", get(users::list).merge(post(users::create)))
         .route("/api/v1/users/{user_id}", patch(users::update))
         .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))

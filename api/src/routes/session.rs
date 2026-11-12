@@ -62,6 +62,8 @@ pub struct SessionView {
     uat_superadmin: bool,
     /// US-1.4: the client shows only the change-password screen until this is false.
     must_change_password: bool,
+    /// CP3b: the client shows the "Pengguna" admin page only when true (password mode only).
+    platform_admin: bool,
 }
 
 #[derive(Serialize)]
@@ -113,6 +115,7 @@ pub async fn uat_enter(State(state): State<AppState>) -> Result<Response, AppErr
             banner: Some(UAT_BANNER),
             uat_superadmin: true,
             must_change_password: false,
+            platform_admin: false,
         },
         csrf_token: issued.csrf_token,
     };
@@ -135,6 +138,8 @@ pub async fn current(
         .bind(s.user_id)
         .fetch_one(&state.pool)
         .await?;
+    let platform_admin = state.config.access_mode == AccessMode::Password
+        && super::users::is_platform_admin(&state.pool, s.user_id).await?;
     Ok(Json(SessionView {
         user: UserView {
             id: s.user_id,
@@ -143,6 +148,7 @@ pub async fn current(
         banner: (state.config.access_mode == AccessMode::UatSuperadmin).then_some(UAT_BANNER),
         uat_superadmin: s.uat_superadmin,
         must_change_password: s.must_change_password,
+        platform_admin,
     }))
 }
 

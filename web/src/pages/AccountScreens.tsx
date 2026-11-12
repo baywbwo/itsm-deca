@@ -9,6 +9,7 @@ import { Popover } from '../components/Popover';
 import { initials } from '../app/labels';
 import {
   MIN_PASSWORD_LENGTH,
+  PASSWORD_CHANGED_TEXT,
   passwordChangeError,
   validatePasswordChange,
   type PasswordErrors,
@@ -112,15 +113,14 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
 }
 
 /**
- * US-1.4 forced change: the only screen while `mustChangePassword` is set (the server refuses the
- * rest with 403). Success keeps this session; the app then loads the workspace as usual.
+ * The CP3a own-password form (US-1.4), shared by the forced screen and the voluntary dialog.
+ * Success keeps this session (the server ends the others); every field is cleared after.
  */
-export function ChangePasswordScreen({ api, session, username, onChanged, onLogout }: {
+function PasswordChangeForm({ api, username, onChanged, actions }: {
   api: Api;
-  session: Session;
   username: string | null;
   onChanged: () => void;
-  onLogout: () => void;
+  actions: (busy: boolean) => ReactNode;
 }) {
   const [currentPassword, setCurrent] = useState('');
   const [newPassword, setNew] = useState('');
@@ -166,51 +166,108 @@ export function ChangePasswordScreen({ api, session, username, onChanged, onLogo
   }
 
   return (
+    <form ref={formRef} className="auth-form" onSubmit={(e) => void submit(e)} noValidate>
+      <TextField label="Kata sandi saat ini" name="currentPassword" type="password" autoComplete="current-password"
+        maxLength={1024} value={currentPassword} onChange={(e) => setCurrent(e.target.value)} disabled={busy}
+        error={errors.currentPassword} />
+      <TextField label="Kata sandi baru" name="newPassword" type="password" autoComplete="new-password"
+        maxLength={1024} value={newPassword} onChange={(e) => setNew(e.target.value)} disabled={busy}
+        hint={`Minimal ${MIN_PASSWORD_LENGTH} karakter, tidak sama dengan nama pengguna atau kata sandi saat ini.`}
+        error={errors.newPassword} />
+      <TextField label="Ulangi kata sandi baru" name="confirmPassword" type="password" autoComplete="new-password"
+        maxLength={1024} value={confirmPassword} onChange={(e) => setConfirm(e.target.value)} disabled={busy}
+        error={errors.confirmPassword} />
+      {formError && <p role="alert" className="auth-error">{formError}</p>}
+      {actions(busy)}
+    </form>
+  );
+}
+
+/**
+ * US-1.4 forced change: the only screen while `mustChangePassword` is set (the server refuses the
+ * rest with 403). Success keeps this session; the app then loads the workspace as usual.
+ */
+export function ChangePasswordScreen({ api, session, username, onChanged, onLogout }: {
+  api: Api;
+  session: Session;
+  username: string | null;
+  onChanged: () => void;
+  onLogout: () => void;
+}) {
+  return (
     <AuthLayout>
       <h1>Ganti kata sandi</h1>
       <p className="muted">Halo, {session.user.displayName}. Kata sandi Anda bersifat sementara. Buat kata sandi baru sebelum membuka workspace.</p>
-      <form ref={formRef} className="auth-form" onSubmit={(e) => void submit(e)} noValidate>
-        <TextField label="Kata sandi saat ini" name="currentPassword" type="password" autoComplete="current-password"
-          maxLength={1024} value={currentPassword} onChange={(e) => setCurrent(e.target.value)} disabled={busy}
-          error={errors.currentPassword} />
-        <TextField label="Kata sandi baru" name="newPassword" type="password" autoComplete="new-password"
-          maxLength={1024} value={newPassword} onChange={(e) => setNew(e.target.value)} disabled={busy}
-          hint={`Minimal ${MIN_PASSWORD_LENGTH} karakter, tidak sama dengan nama pengguna atau kata sandi saat ini.`}
-          error={errors.newPassword} />
-        <TextField label="Ulangi kata sandi baru" name="confirmPassword" type="password" autoComplete="new-password"
-          maxLength={1024} value={confirmPassword} onChange={(e) => setConfirm(e.target.value)} disabled={busy}
-          error={errors.confirmPassword} />
-        {formError && <p role="alert" className="auth-error">{formError}</p>}
-        <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Menyimpan…' : 'Simpan kata sandi baru'}</Button>
-        <Button variant="ghost" disabled={busy} onClick={onLogout}>Keluar</Button>
-      </form>
+      <PasswordChangeForm api={api} username={username} onChanged={onChanged} actions={(busy) => (
+        <>
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Menyimpan…' : 'Simpan kata sandi baru'}</Button>
+          <Button variant="ghost" disabled={busy} onClick={onLogout}>Keluar</Button>
+        </>
+      )} />
       <p className="tiny muted">Sesi lain milik akun ini akan diakhiri setelah kata sandi diganti.</p>
     </AuthLayout>
   );
 }
 
-/** Avatar menu in the top bar: who is signed in, and (password mode) US-1.6 logout everywhere. */
-export function AccountMenu({ api, session, passwordMode, onLoggedOutAll }: {
+/** CP3b voluntary change from the account menu: same form; this session stays signed in. */
+export function ChangePasswordDialog({ api, open, username, onClose, onDone }: {
+  api: Api;
+  open: boolean;
+  username: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} title="Ganti kata sandi" initialFocus="input">
+      {open && (
+        <>
+          <p className="tiny muted">Anda tetap masuk di perangkat ini. Sesi lain milik akun ini diakhiri setelah kata sandi diganti.</p>
+          <PasswordChangeForm api={api} username={username} onChanged={onDone} actions={(busy) => (
+            <div className="row">
+              <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Menyimpan…' : 'Simpan kata sandi baru'}</Button>
+              <Button disabled={busy} onClick={onClose}>Batal</Button>
+            </div>
+          )} />
+        </>
+      )}
+    </Dialog>
+  );
+}
+
+/**
+ * Avatar menu in the top bar: who is signed in and, in password mode, the voluntary password
+ * change (CP3b) and US-1.6 logout everywhere.
+ */
+export function AccountMenu({ api, session, passwordMode, username, onLoggedOutAll, onNotice }: {
   api: Api;
   session: Session;
   passwordMode: boolean;
+  /** Username typed at login in this tab (client-side "not the username" check), else null. */
+  username: string | null;
   onLoggedOutAll: () => void;
+  onNotice: (text: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [changing, setChanging] = useState(false);
   return (
     <>
       <Popover className="account-menu" label="Menu akun"
-        trigger={<span className="avatar top-avatar" aria-hidden="true">{initials(session.user.displayName)}</span>}>
+        trigger={<><span className="sr-only">Menu akun</span><span className="avatar top-avatar" aria-hidden="true">{initials(session.user.displayName)}</span></>}>
         {(close) => (
           <div className="account-menu-body">
             <span className="sr-only">Akun: </span><strong>{session.user.displayName}</strong>
-            <p className="tiny muted">{session.uatSuperadmin ? 'Superadmin UAT · data dummy' : 'Pengguna'}</p>
+            <p className="tiny muted">{session.uatSuperadmin ? 'Superadmin UAT · data dummy' : session.platformAdmin ? 'Admin platform' : 'Pengguna'}</p>
             {passwordMode && (
-              <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
+              <>
+                <Button onClick={() => { close(); setChanging(true); }}>Ganti kata sandi</Button>
+                <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
+              </>
             )}
           </div>
         )}
       </Popover>
+      <ChangePasswordDialog api={api} open={changing} username={username} onClose={() => setChanging(false)}
+        onDone={() => { setChanging(false); onNotice(PASSWORD_CHANGED_TEXT); }} />
       <LogoutAllDialog api={api} open={confirming} onClose={() => setConfirming(false)} onDone={onLoggedOutAll} />
     </>
   );

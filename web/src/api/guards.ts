@@ -46,6 +46,11 @@ import type {
   ReportRunList,
   ReportExportResult,
   BrandKey,
+  TemporaryPassword,
+  UserCreated,
+  UserDeactivated,
+  UserList,
+  UserListItem,
   Workspace,
   WorkspacePermissions,
 } from './types';
@@ -85,7 +90,9 @@ export function isSession(v: unknown): v is Session {
     isStrOrNull(v.banner) && typeof v.uatSuperadmin === 'boolean' &&
     // US-1.4. Absent in responses recorded before CP3a (review package): read as false; the
     // server still refuses every other route while the password must be changed.
-    (v.mustChangePassword === undefined || typeof v.mustChangePassword === 'boolean')
+    (v.mustChangePassword === undefined || typeof v.mustChangePassword === 'boolean') &&
+    // CP3b: absent before CP3b (review package): read as false, so no admin page is offered.
+    (v.platformAdmin === undefined || typeof v.platformAdmin === 'boolean')
   );
 }
 
@@ -422,3 +429,23 @@ export const isReportRunList = (v: unknown): v is ReportRunList =>
 
 export const isReportExportResult = (v: unknown): v is ReportExportResult =>
   isObj(v) && isReportRun(v.run) && typeof v.replayed === 'boolean';
+
+// CP3b user administration. The temporary password must be a non-empty string; it is shown once.
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean';
+const isTemp = (v: unknown) => isStr(v) && v.length > 0;
+
+export const isUserListItem = (v: unknown): v is UserListItem =>
+  isObj(v) && isStr(v.id) && isStrOrNull(v.username) && isStr(v.displayName) && isStrOrNull(v.email) &&
+  isBool(v.active) && isBool(v.mustChangePassword) && isBool(v.locked) && isBool(v.platformAdmin) &&
+  isStr(v.createdAt) && isStrOrNull(v.deactivatedAt);
+
+export const isUserList = (v: unknown): v is UserList =>
+  isObj(v) && isArr(v.items, isUserListItem) && isStrOrNull(v.nextCursor);
+
+export const isUserCreated = (v: unknown): v is UserCreated =>
+  isObj(v) && isTemp(v.temporaryPassword) && isObj(v.user) && isStr(v.user.id) && isStr(v.user.username) &&
+  isStr(v.user.displayName) && isBool(v.user.active) && isBool(v.user.mustChangePassword);
+
+export const isTemporaryPassword = (v: unknown): v is TemporaryPassword => isObj(v) && isTemp(v.temporaryPassword);
+
+export const isUserDeactivated = (v: unknown): v is UserDeactivated => isObj(v) && isStr(v.id) && v.active === false;

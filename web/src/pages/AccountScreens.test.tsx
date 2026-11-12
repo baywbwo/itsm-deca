@@ -2,8 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { createApi } from '../api/client';
 import type { Meta, Session } from '../api/types';
-import { SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from '../app/account';
-import { ChangePasswordScreen, LoginScreen } from './AccountScreens';
+import { PASSWORD_CHANGED_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from '../app/account';
+import { ChangePasswordDialog, ChangePasswordScreen, LoginScreen } from './AccountScreens';
+import { TemporaryPasswordDialog } from './UsersPage';
 
 // CP3a markup (server render, no DOM): labelled fields, the "Sesi berakhir" reason on the login,
 // and a change screen that offers nothing but the change and logout.
@@ -39,5 +40,31 @@ describe('CP3a account screens', () => {
     const buttons = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
     expect(buttons).toEqual(['Simpan kata sandi baru', 'Keluar']);
     expect(html).not.toMatch(/href="#\//);
+  });
+});
+
+describe('CP3b account and user administration markup', () => {
+  it('voluntary change dialog: same three fields, save and cancel, says this session stays', () => {
+    const html = renderToStaticMarkup(<ChangePasswordDialog api={api} open username="sari" onClose={noop} onDone={noop} />);
+    expect(html.match(/type="password"/g)).toHaveLength(3);
+    expect(html).toContain('Anda tetap masuk di perangkat ini');
+    const buttons = [...html.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]);
+    expect(buttons).toContain('Simpan kata sandi baru');
+    expect(buttons).toContain('Batal');
+    expect(PASSWORD_CHANGED_TEXT).toContain('sesi lain');
+  });
+
+  it('closed dialog renders no password field', () => {
+    const html = renderToStaticMarkup(<ChangePasswordDialog api={api} open={false} username={null} onClose={noop} onDone={noop} />);
+    expect(html).not.toContain('type="password"');
+  });
+
+  it('temporary password: labelled read-only value, copy button, cannot-see-again warning', () => {
+    const html = renderToStaticMarkup(<TemporaryPasswordDialog onClose={noop}
+      secret={{ title: 'Pengguna dibuat', who: 'Budi Santoso', username: 'budi.santoso', password: 'contoh-sandi-sementara-0001' }} />);
+    expect(html).toMatch(/for="temp-password">Kata sandi sementara<\/label><input id="temp-password"[^>]*readOnly=""[^>]*value="contoh-sandi-sementara-0001"/i);
+    expect(html).toContain('>Salin</button>');
+    expect(html).toContain('Tidak dapat dilihat lagi');
+    expect(html).toContain('Saya sudah menyimpannya');
   });
 });

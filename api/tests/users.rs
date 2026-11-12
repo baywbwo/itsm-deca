@@ -451,3 +451,167 @@ async fn us_1_7_deactivate_revokes_sessions_keeps_history_and_protects_last_admi
         1
     );
 }
+/// Every item of a `GET /users` page, following `nextCursor` until the end.
+async fn list_all(pool: &PgPool, a: &(String, String), query: &str) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let path = match &cursor {
+            Some(c) => format!("/api/v1/users?{query}&cursor={c}"),
+            None => format!("/api/v1/users?{query}"),
+        };
+        let (status, body) = call(pool, "GET", &path, Value::Null, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::OK, "{path} {body}");
+        items.extend(body["items"].as_array().expect("items").iter().cloned());
+        match body["nextCursor"].as_str() {
+            Some(c) => cursor = Some(c.to_owned()),
+            None => return items,
+        }
+    }
+}
+fn usernames(items: &[Value]) -> Vec<&str> {
+    items
+        .iter()
+        .filter_map(|i| i["username"].as_str())
+        .collect()
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_3_list_users_searches_filters_pages_and_hides_secrets(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    let a = admin(&pool).await;
+    let (status, body) = call(
+        &pool,
+        "POST",
+        "/api/v1/users",
+        json!({"username":"beta.list@example.test","displayName":"Beta Sintetis","email":"Beta.Mail@Example.Test"}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (gone, _) = create_user(&pool, &a, "gamma.list@example.test").await;
+    let (status, _) = call(
+        &pool,
+        "PATCH",
+        &format!("/api/v1/users/{gone}"),
+        json!({"active":false}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&pool)
+        .await
+        .expect("users");
+
+    // Whole directory, newest first; only directory fields, never credential material.
+    let all = list_all(&pool, &a, "limit=100").await;
+    assert_eq!(all.len() as i64, total);
+    let first = all[0].as_object().expect("item");
+    let mut keys: Vec<&str> = first.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "active",
+            "createdAt",
+            "deactivatedAt",
+            "displayName",
+            "email",
+            "id",
+            "locked",
+            "mustChangePassword",
+            "platformAdmin",
+            "username"
+        ]
+    );
+    assert_eq!(first["username"], "gamma.list@example.test");
+    let text = Value::Array(all.clone()).to_string();
+    assert!(!text.contains("$argon2") && !text.contains("credentialVersion"));
+    let me = all
+        .iter()
+        .find(|i| i["id"] == admin_id.to_string())
+        .expect("admin listed");
+    assert_eq!(me["platformAdmin"], true);
+    let other = all
+        .iter()
+        .find(|i| i["id"] == plain.to_string())
+        .expect("plain listed");
+    assert_eq!(other["platformAdmin"], false);
+
+    // Keyset paging (limit 1) returns the same rows in the same order, without repeats.
+    let paged = list_all(&pool, &a, "limit=1").await;
+    let ids = |v: &[Value]| v.iter().map(|i| i["id"].clone()).collect::<Vec<_>>();
+    assert_eq!(ids(&paged), ids(&all));
+
+    // Case-insensitive search on username, display name and email; LIKE wildcards are literal.
+    for (q, expect) in [
+        ("BETA.LIST", vec!["beta.list@example.test"]),
+        ("beta%20sintetis", vec!["beta.list@example.test"]),
+        ("beta.mail@", vec!["beta.list@example.test"]),
+        ("%25", vec![]),
+        ("_", vec![]),
+    ] {
+        let found = list_all(&pool, &a, &format!("q={q}")).await;
+        assert_eq!(usernames(&found), expect, "q={q}");
+    }
+    let found = list_all(&pool, &a, "q=.list@&active=false").await;
+    assert_eq!(usernames(&found), ["gamma.list@example.test"]);
+    assert!(found[0]["deactivatedAt"].is_string());
+    let found = list_all(&pool, &a, "q=.list@&active=true").await;
+    assert_eq!(usernames(&found), ["beta.list@example.test"]);
+    assert_eq!(found[0]["mustChangePassword"], true);
+    assert_eq!(found[0]["email"], "beta.mail@example.test");
+    assert_eq!(list_all(&pool, &a, "q=.list@&active=all").await.len(), 2);
+
+    // Bad filters and a cursor replayed under other filters are 400.
+    let (_, page) = call(
+        &pool,
+        "GET",
+        "/api/v1/users?limit=1",
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    let cursor = page["nextCursor"].as_str().expect("cursor").to_owned();
+    for path in [
+        "/api/v1/users?active=maybe".to_owned(),
+        "/api/v1/users?limit=0".to_owned(),
+        "/api/v1/users?limit=101".to_owned(),
+        format!("/api/v1/users?q={}", "x".repeat(101)),
+        format!("/api/v1/users?limit=1&active=true&cursor={cursor}"),
+        "/api/v1/users?cursor=not*base64".to_owned(),
+    ] {
+        let (status, _) = call(&pool, "GET", &path, Value::Null, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+
+    // Session shows the admin flag so the client can offer the page; plain users get 403.
+    let (_, session) = call(&pool, "GET", "/api/v1/session", Value::Null, (&a.0, &a.1)).await;
+    assert_eq!(session["platformAdmin"], true);
+    let (status, body, cookie) = request(
+        &pool,
+        "password",
+        "/api/v1/login",
+        "POST",
+        json!({"username":"plain@example.test","password":ADMIN_PASSWORD}),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["platformAdmin"], false);
+    let p = (
+        cookie.expect("cookie"),
+        body["csrfToken"].as_str().expect("csrf").to_owned(),
+    );
+    let (_, session) = call(&pool, "GET", "/api/v1/session", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(session["platformAdmin"], false);
+    let before = count(&pool, "SELECT count(*) FROM platform_audit_events WHERE actor_id=$1 AND capability='platform.users'", plain).await;
+    let (status, body) = call(&pool, "GET", "/api/v1/users", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.get("items").is_none());
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM platform_audit_events WHERE actor_id=$1 AND capability='platform.users'", plain).await,
+        before + 1
+    );
+}

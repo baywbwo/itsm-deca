@@ -266,7 +266,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). User directory, newest first (created_at, id), keyset-paged. Never returns password hashes, lockout counters or credential versions. */
+        get: operations["listUsers"];
         put?: never;
         /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets. */
         post: operations["createUser"];
@@ -1271,7 +1272,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -1294,12 +1295,31 @@ export interface components {
             id: string;
             displayName: string;
         };
+        UserListItem: {
+            /** Format: uuid */
+            id: string;
+            /** @description Null for users without a local credential. */
+            username: string | null;
+            displayName: string;
+            email: string | null;
+            active: boolean;
+            mustChangePassword: boolean;
+            /** @description Currently locked out after failed logins. */
+            locked: boolean;
+            platformAdmin: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deactivatedAt: string | null;
+        };
         Session: {
             user: components["schemas"]["User"];
             banner: string | null;
             uatSuperadmin: boolean;
             /** @description US-1.4: true while the user must change the password; every route except the account and session paths answers 403 until then. */
             mustChangePassword: boolean;
+            /** @description CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then. */
+            platformAdmin: boolean;
         };
         SessionIssued: components["schemas"]["Session"] & {
             /** @description Returned once; keep in memory only. */
@@ -3373,6 +3393,42 @@ export interface operations {
             403: components["responses"]["CsrfFailed"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive substring of username, display name or email. LIKE wildcards are literal. */
+                q?: string;
+                /** @description true = active only, false = deactivated only, all (default) = both. */
+                active?: "true" | "false" | "all";
+                limit?: number;
+                /** @description Opaque `nextCursor` of the previous page. A cursor from other filters is 400. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of users */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["UserListItem"][];
+                        nextCursor: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
         };
     };

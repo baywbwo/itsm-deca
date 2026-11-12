@@ -1,7 +1,9 @@
 // Types come from the generated OpenAPI schema (npm run gen:api); never hand-copied.
-import type { components } from './schema';
+import type { components, operations } from './schema';
 
 type S = components['schemas'];
+type Body<O extends keyof operations, C extends keyof operations[O]['responses']> =
+  operations[O]['responses'][C] extends { content: { 'application/json': infer T } } ? T : never;
 export type Meta = S['Meta'];
 export type UatNotice = S['UatNotice'];
 export type Session = S['Session'];
@@ -108,3 +110,11 @@ export type ReportFormat = ReportRun['format'];
 export type ReportRunList = S['ReportRunList'];
 export type ReportExportRequest = S['ReportExportRequest'];
 export type ReportExportResult = S['ReportExportResult'];
+
+// CP3b platform user administration (password mode, platform_admin only).
+export type UserListItem = S['UserListItem'];
+export type UserList = Body<'listUsers', 200>;
+export type UserCreateRequest = NonNullable<operations['createUser']['requestBody']>['content']['application/json'];
+export type UserCreated = Body<'createUser', 201>;
+export type TemporaryPassword = Body<'resetUserPassword', 200>;
+export type UserDeactivated = Body<'updateUser', 200>;
