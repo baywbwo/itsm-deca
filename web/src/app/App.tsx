@@ -143,7 +143,6 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
   // It is derived in the same render as the route, so a switch never shows the previous company.
   const brand = activeBrand(route.workspaceId ? listed : first ?? null);
   useLayoutEffect(() => { document.title = pageTitle(brand); }, [brand.key, brand.name]);
-  const sandbox = meta.environment === 'uat';
   const groups = data ? navGroups(pages, route, data.permissions.permissions.includes('ticket.create')) : [];
   const canSearch = !!route.workspaceId && pages.some((p) => p.id === 'tickets');
   const logout = () => {
@@ -258,10 +257,6 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
             </div>
             <div className="top-right">
               {canSearch && <TicketSearch onSearch={search} shortcut />}
-              <span className={sandbox ? 'chip-env' : 'chip-env chip-env-prod'} role="note"
-                title={sandbox ? 'Database latihan terpisah dari operasional. Gunakan data contoh, bukan informasi pelanggan asli.' : undefined}>
-                {sandbox ? (meta.accessMode === 'password' ? 'Sandbox — data latihan' : meta.uat?.banner ?? 'Sandbox') : 'Operasional'}
-              </span>
               <Popover className="icon-menu" label="Notifikasi" title="Notifikasi"
                 trigger={<><Icon name="bell" /><span className="sr-only">Notifikasi</span></>}>
                 {() => (
@@ -271,7 +266,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
                   </div>
                 )}
               </Popover>
-              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'} sandbox={sandbox}
+              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'}
                 username={username} onLoggedOutAll={onLoggedOutAll} onLogout={logout} onNotice={setToast} />
             </div>
           </header>
@@ -280,7 +275,7 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Qash Service Desk · {sandbox ? 'Sandbox' : 'Operasional'}</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Qash Service Desk</div>
           </div>
         </main>
       </div>
@@ -458,7 +453,7 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
 }) {
   switch (id) {
     case 'dashboard':
-      return <DashboardPage api={api} workspace={data.workspace} uat={uat} query={query}
+      return <DashboardPage api={api} workspace={data.workspace} query={query}
         canReports={data.permissions.permissions.includes('report.view')} />;
     case 'tickets':
       return <TicketsPage api={api} workspace={data.workspace} userId={userId} permissions={data.permissions} query={query} />;
@@ -466,7 +461,7 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
       return <SettingsPage api={api} workspace={data.workspace} uat={uat} permissions={data.permissions.permissions} onNotice={onNotice}
         onWorkspacesChanged={onWorkspacesChanged} />;
     case 'reports':
-      return <ReportsPage api={api} workspace={data.workspace} uat={uat} query={query} onNotice={onNotice} />;
+      return <ReportsPage api={api} workspace={data.workspace} query={query} onNotice={onNotice} />;
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'users':

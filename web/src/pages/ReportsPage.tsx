@@ -62,10 +62,9 @@ const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math
  * preview and a real CSV or Excel (.xlsx) export of exactly the previewed spec. The spec lives in the URL so reload
  * and shared links show the same numbers. Official BI export is held (no mapping is invented).
  */
-export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
+export function ReportsPage({ api, workspace, query = '', onNotice }: {
   api: Api;
   workspace: Workspace;
-  uat: boolean;
   query?: string;
   onNotice: (text: string) => void;
 }) {
@@ -225,7 +224,7 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
         <PreviewError error={preview.error} onRetry={() => setAttempt((n) => n + 1)} onReset={reset} />
       )}
       {p && (
-        <PreviewBody p={p} uat={uat} filtered={filtered} exporting={exporting} onExport={exportFile}
+        <PreviewBody p={p} filtered={filtered} exporting={exporting} onExport={exportFile}
           exportError={exportError} lastRun={lastRun} statusRef={exportStatus} contentUrl={(id) => api.reportContentUrl(workspace.id, id)} />
       )}
 
@@ -284,9 +283,8 @@ function PreviewError({ error, onRetry, onReset }: { error: unknown; onRetry: ()
 const LEVEL_TONE: Record<string, BadgeTone> = { info: 'blue', warning: 'waiting', blocking: 'error' };
 const LEVEL_LABEL: Record<string, string> = { info: 'Info', warning: 'Perlu dicek', blocking: 'Menghambat' };
 
-function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastRun, statusRef, contentUrl }: {
+function PreviewBody({ p, filtered, exporting, onExport, exportError, lastRun, statusRef, contentUrl }: {
   p: ReportPreview;
-  uat: boolean;
   filtered: boolean;
   exporting: ReportFormat | null;
   onExport: (format: ReportFormat) => void;
@@ -386,7 +384,6 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
       )}
       <p className="tiny muted source">
         {p.notice} · per {instantLabel(p.asOf, tz)} {tzLabel(tz)} · rentang UTC {p.header.startAt} s.d. sebelum {p.header.endAt}
-        {uat ? ' · data dummy UAT' : ''}
       </p>
     </>
   );

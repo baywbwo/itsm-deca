@@ -614,7 +614,6 @@ table .subject {
 .auth-error { margin: 0; padding: 10px 12px; border-radius: 9px; background: #fdecec; color: #a22b2b; font-size: 13px; }
 .auth-notice { display: grid; gap: 2px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid #c8d8f0; border-radius: 9px; background: #e8f1fe; color: #1b4ea8; font-size: 13px; }
 .auth-help { text-align: center; margin-top: 18px; }
-.auth-screen .deployment-picker { margin-bottom: 0; }
 @media (max-width: 860px) {
   .auth-screen { grid-template-columns: 1fr; }
   .auth-hero { padding: 24px; }
@@ -627,11 +626,8 @@ table .subject {
 .account-menu-body { display: grid; gap: 4px; }
 .account-id { display: flex; gap: 10px; align-items: center; padding: 2px 2px 10px; border-bottom: 1px solid var(--line); }
 .account-id p { margin: 0; }
-.account-menu-body .deployment-picker { margin: 8px 0 0; }
 .account-logout { color: var(--danger-ink); }
-.deployment-picker { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--canvas); margin-bottom: 15px; }
 .account-menu-body .btn { margin-top: 8px; }
-.deployment-picker label { font-size:11px; font-weight:800; color:var(--ink-2); }.deployment-picker select { width:100%; padding:8px; border:1px solid var(--input-line); border-radius:6px; background:white; font:inherit; font-size:12px; }.deployment-picker small { font-size:11px; color:var(--muted); }
 
 /* CP3b user administration: load-more row and the one-time temporary password. */
 .spaced-top { margin-top: 16px; }

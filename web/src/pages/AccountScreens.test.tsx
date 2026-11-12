@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createApi } from '../api/client';
 import type { Meta, Session } from '../api/types';
 import { PASSWORD_CHANGED_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from '../app/account';
-import { ChangePasswordDialog, ChangePasswordScreen, LoginScreen } from './AccountScreens';
+import { accountRole, ChangePasswordDialog, ChangePasswordScreen, LoginScreen } from './AccountScreens';
 import { TemporaryPasswordDialog } from './UsersPage';
 
 // CP3a markup (server render, no DOM): labelled fields, the "Sesi berakhir" reason on the login,
@@ -66,5 +66,20 @@ describe('CP3b account and user administration markup', () => {
     expect(html).toContain('>Salin</button>');
     expect(html).toContain('Tidak dapat dilihat lagi');
     expect(html).toContain('Saya sudah menyimpannya');
+  });
+});
+
+// Owner 2026-11-12: the app presents as production; no UAT/sandbox banner, switch or label in the UI.
+describe('CP-UI1b no environment banner', () => {
+  it('login on a UAT deployment shows no sandbox/UAT text or environment switch', () => {
+    const uatMeta = { ...meta, environment: 'uat' } as Meta;
+    const html = renderToStaticMarkup(<LoginScreen api={api} meta={uatMeta} notice={null} onSuccess={noop} />);
+    expect(html).not.toMatch(/\b(sandbox|uat|latihan|lingkungan|dummy)\b/i);
+    expect(html).not.toContain('<select');
+  });
+
+  it('role line of the UAT superadmin carries no UAT/dummy label', () => {
+    expect(accountRole({ ...session, uatSuperadmin: true })).toBe('Superadmin');
+    expect(accountRole({ ...session, platformAdmin: true })).toBe('Admin platform');
   });
 });

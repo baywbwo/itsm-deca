@@ -370,8 +370,7 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
         <Button variant="primary" onClick={() => setAdding(true)}>＋ Tambah perusahaan</Button>
       </div>
       <p className="banner spaced-bottom" role="note">
-        Hanya Superadmin UAT (data dummy). Satu perusahaan = satu workspace, tanpa parent/child. Workspace baru dibuat tanpa anggota.
-        Di produksi bagian ini ditolak sampai SSO dan peran admin pusat ditetapkan.
+        Hanya Superadmin. Satu perusahaan = satu workspace, tanpa parent/child. Workspace baru dibuat tanpa anggota.
       </p>
       {error && <WriteAlert error={error} onReload={() => { setError(null); res.reload(); }} />}
       <DataTable caption="Perusahaan dan workspace" rows={list.items} rowKey={(c) => c.companyId}

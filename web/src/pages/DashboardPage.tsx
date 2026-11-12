@@ -49,11 +49,10 @@ const FILTER_FIELDS: readonly {
  * filters live in the URL (`#/w/<ws>/dashboard?period=…&owner=…`), so reload, back and a shared
  * link give the same numbers; a workspace switch drops the query and so resets the filters.
  */
-export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
+export function DashboardPage({ api, workspace, canReports, query = '' }: {
   api: Api;
   workspace: Workspace;
   canReports: boolean;
-  uat: boolean;
   query?: string;
 }) {
   const params = parseDashboardQuery(query);
@@ -133,7 +132,7 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
           setAttempt((n) => n + 1);
         }} />
       )}
-      {d && <DashboardBody d={d} uat={uat} filtered={filtered} canReports={canReports} />}
+      {d && <DashboardBody d={d} filtered={filtered} canReports={canReports} />}
     </>
   );
 }
@@ -168,7 +167,7 @@ function DashboardError({ error, onRetry, onReset }: {
   if (error instanceof ApiError && error.status === 403) return <ForbiddenState />;
   if (error instanceof ApiError && error.status === 404) return <NotFoundState />;
   if (error instanceof ApiError && error.status === 401) {
-    return <ErrorState title="Sesi berakhir" body="Sesi uji tidak lagi aktif. Muat ulang halaman untuk masuk lagi."
+    return <ErrorState title="Sesi berakhir" body="Sesi Anda tidak lagi aktif. Muat ulang halaman untuk masuk lagi."
       requestId={error.requestId} />;
   }
   const body = error instanceof ApiError && error.code === 'network'
@@ -202,7 +201,7 @@ function QuickActions({ workspaceId, canReports }: { workspaceId: string; canRep
   );
 }
 
-function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: boolean; filtered: boolean; canReports: boolean }) {
+function DashboardBody({ d, filtered, canReports }: { d: Dashboard; filtered: boolean; canReports: boolean }) {
   const ws = d.workspaceId;
   const t = d.totals;
   const periodText = PERIOD_LABELS[d.period.key];
@@ -355,7 +354,7 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
       )}
       <p className="tiny muted source">
         Sumber: API ITSM, agregat server seluruh {scope} · per {instantLabel(d.asOf, d.period.timezone)}{' '}
-        {tzLabel(d.period.timezone)}{uat ? ' · data dummy UAT' : ''}
+        {tzLabel(d.period.timezone)}
       </p>
     </>
   );

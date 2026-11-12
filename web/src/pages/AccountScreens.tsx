@@ -17,14 +17,6 @@ import {
   type PasswordField,
 } from '../app/account';
 
-const MODE_LINKS = { sandbox: 'https://sandbox-itsm.scowork.my.id:8443/', operational: 'https://itsm.scowork.my.id:8443/' };
-export function ModePicker({ sandbox }: { sandbox: boolean }) {
-  return <div className="deployment-picker"><label htmlFor="deployment-mode">Lingkungan</label>
-    <select id="deployment-mode" value={sandbox ? 'sandbox' : 'operational'} onChange={e => { window.location.href = MODE_LINKS[e.target.value as keyof typeof MODE_LINKS]; }}>
-      <option value="operational">Operasional · data kerja</option><option value="sandbox">Sandbox · data latihan</option>
-    </select><small>{sandbox ? 'Data latihan terpisah dari operasional.' : 'Database operasional terpisah dari sandbox.'}</small></div>;
-}
-
 /** A message carried to the login screen: why the person is back here. */
 export interface LoginNotice { title: string; text: string }
 
@@ -96,7 +88,6 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
           <span>{notice.text}</span>
         </div>
       )}
-      <ModePicker sandbox={meta.environment === 'uat'} />
       {meta.accessMode === 'password' ? (
         <form className="auth-form" onSubmit={(e) => void login(e)}>
           <TextField label="Nama pengguna" name="username" autoComplete="username" required maxLength={254}
@@ -108,7 +99,7 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
         </form>
       ) : <p>Akses SSO belum dikonfigurasi.</p>}
       <p className="tiny muted auth-help">Belum punya akses? Hubungi administrator untuk pembuatan akun.</p>
-      <p className="tiny muted">{meta.environment === 'uat' ? 'Sandbox — gunakan data latihan saja.' : 'Operasional — akses sesuai perusahaan dan peran.'}</p>
+      <p className="tiny muted">Akses sesuai perusahaan dan peran.</p>
     </AuthLayout>
   );
 }
@@ -241,14 +232,12 @@ export function ChangePasswordDialog({ api, open, username, onClose, onDone }: {
  */
 /**
  * CP-UI1 account menu behind the topbar avatar: who is signed in, own-password actions (password
- * mode), the environment switch (moved here from the sidebar) and Keluar.
+ * mode), and Keluar.
  */
-export function AccountMenu({ api, session, passwordMode, sandbox, username, onLoggedOutAll, onLogout, onNotice }: {
+export function AccountMenu({ api, session, passwordMode, username, onLoggedOutAll, onLogout, onNotice }: {
   api: Api;
   session: Session;
   passwordMode: boolean;
-  /** UAT deployment: the environment switch points at the operational one. */
-  sandbox: boolean;
   /** Username typed at login in this tab (client-side "not the username" check), else null. */
   username: string | null;
   onLoggedOutAll: () => void;
@@ -277,7 +266,6 @@ export function AccountMenu({ api, session, passwordMode, sandbox, username, onL
                 <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
               </>
             )}
-            <ModePicker sandbox={sandbox} />
             <Button className="account-logout" onClick={() => { close(); onLogout(); }}><Icon name="logout" size={16} />Keluar</Button>
           </div>
         )}
@@ -291,7 +279,7 @@ export function AccountMenu({ api, session, passwordMode, sandbox, username, onL
 
 /** Role line under the name (account menu and sidebar user card). */
 export function accountRole(session: Session): string {
-  return session.uatSuperadmin ? 'Superadmin UAT · data dummy' : session.platformAdmin ? 'Admin platform' : 'Pengguna';
+  return session.uatSuperadmin ? 'Superadmin' : session.platformAdmin ? 'Admin platform' : 'Pengguna';
 }
 
 export function LogoutAllDialog({ api, open, onClose, onDone }: {
