@@ -34,6 +34,8 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
     ("post", "/api/v1/session/csrf"),
+    ("post", "/api/v1/session/logout-all"),
+    ("post", "/api/v1/account/password"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -200,6 +202,8 @@ pub fn api_router() -> Router<AppState> {
             get(session::current).merge(delete(session::logout)),
         )
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
+        .route("/api/v1/session/logout-all", post(session::logout_all))
+        .route("/api/v1/account/password", post(password::change_password))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

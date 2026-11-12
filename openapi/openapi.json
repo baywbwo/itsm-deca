@@ -6735,6 +6735,78 @@
         }
       }
     },
+    "/api/v1/session/logout-all": {
+      "post": {
+        "operationId": "logoutAllSessions",
+        "description": "US-1.6. Revokes every session of the caller (revoked_reason logout_all), including this one, records auth event logout_all and clears the cookie. Requires the CSRF token.",
+        "responses": {
+          "204": {
+            "description": "All sessions revoked; cookie cleared"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/account/password": {
+      "post": {
+        "operationId": "changeOwnPassword",
+        "description": "US-1.4. Password mode only. Changes the caller's own password: new password at least 12 characters, not the username, not the current password. Raises credential_version, revokes the caller's other sessions (password_change) and keeps this one; clears must_change_password. While must_change_password is set, every other route except session, CSRF refresh, logout-all and meta answers 403 forbidden. Requires the CSRF token. Failures are audited without secrets.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "currentPassword",
+                  "newPassword"
+                ],
+                "properties": {
+                  "currentPassword": {
+                    "type": "string",
+                    "maxLength": 1024
+                  },
+                  "newPassword": {
+                    "type": "string",
+                    "minLength": 12,
+                    "maxLength": 1024
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Password changed"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
     "/api/v1/workspaces": {
       "get": {
         "operationId": "listWorkspaces",

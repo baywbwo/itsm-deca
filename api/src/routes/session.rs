@@ -154,6 +154,33 @@ pub async fn logout(State(state): State<AppState>, s: Session) -> Result<Respons
         .into_response())
 }
 
+/// US-1.6: "Keluar dari semua perangkat". Revokes every session of the caller, this one included.
+pub async fn logout_all(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE sessions SET revoked_at = now(), revoked_reason = 'logout_all' \
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(s.user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'logout_all', 'success')",
+    )
+    .bind(s.user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            session::clear_cookie_value(state.config.cookie_secure),
+        )],
+    )
+        .into_response())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CsrfIssued {

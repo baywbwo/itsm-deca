@@ -29,12 +29,22 @@ pub const UAT_ENTRY_PATH: &str = "/api/v1/uat/session";
 /// preflight, which no cross-site caller passes (no CORS is configured).
 pub const CSRF_REFRESH_PATH: &str = "/api/v1/session/csrf";
 pub const CSRF_REFRESH_HEADER: &str = "x-itsm-csrf-refresh";
+/// US-1.4: the only paths a session with `must_change_password` may use.
+const MUST_CHANGE_ALLOWED: &[&str] = &[
+    "/api/v1/account/password",
+    "/api/v1/session",
+    "/api/v1/session/csrf",
+    "/api/v1/session/logout-all",
+    "/api/v1/meta",
+];
 
 #[derive(Debug, Clone)]
 pub struct Session {
     pub id: Uuid,
     pub user_id: Uuid,
     pub uat_superadmin: bool,
+    /// US-1.4: until the password is changed only the account paths are reachable.
+    pub must_change_password: bool,
     csrf_hash: Vec<u8>,
 }
 
@@ -150,10 +160,12 @@ pub async fn revoke(pool: &PgPool, session_id: Uuid) -> Result<(), AppError> {
 }
 
 async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppError> {
-    let row: Option<(Uuid, Uuid, Vec<u8>, bool)> = sqlx::query_as(
+    let row: Option<(Uuid, Uuid, Vec<u8>, bool, bool)> = sqlx::query_as(
         "SELECT s.id, s.user_id, s.csrf_hash, \
                 EXISTS (SELECT 1 FROM platform_grants g \
-                        WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin') \
+                        WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin'), \
+                coalesce((SELECT c.must_change_password FROM local_credentials c \
+                          WHERE c.user_id = s.user_id), false) \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
            AND (s.idle_expires_at IS NULL OR s.idle_expires_at > now()) \
@@ -190,15 +202,18 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
             .await?;
         }
     }
-    Ok(row.map(|(id, user_id, csrf_hash, grant)| Session {
-        id,
-        user_id,
-        // The grant is honoured only while the server runs in UAT Superadmin mode;
-        // the session's access_mode was matched above.
-        uat_superadmin: grant
-            && state.config.access_mode == crate::config::AccessMode::UatSuperadmin,
-        csrf_hash,
-    }))
+    Ok(row.map(
+        |(id, user_id, csrf_hash, grant, must_change_password)| Session {
+            id,
+            user_id,
+            must_change_password,
+            // The grant is honoured only while the server runs in UAT Superadmin mode;
+            // the session's access_mode was matched above.
+            uat_superadmin: grant
+                && state.config.access_mode == crate::config::AccessMode::UatSuperadmin,
+            csrf_hash,
+        },
+    ))
 }
 
 fn csrf_matches(session: &Session, headers: &HeaderMap) -> bool {
@@ -271,6 +286,12 @@ pub async fn session_layer(
         }
     }
 
+    if session.as_ref().is_some_and(|s| s.must_change_password)
+        && !MUST_CHANGE_ALLOWED.contains(&req.uri().path())
+    {
+        return AppError::Forbidden.into_response();
+    }
+
     if let Some(s) = session {
         req.extensions_mut().insert(s);
     }
@@ -335,6 +356,7 @@ mod tests {
             id: Uuid::nil(),
             user_id: Uuid::nil(),
             uat_superadmin: false,
+            must_change_password: false,
             csrf_hash: digest("right"),
         };
         let mut h = HeaderMap::new();

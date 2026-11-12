@@ -78,7 +78,7 @@ pub async fn login(
         })?;
     let username = b.username.trim().to_lowercase();
     let mut tx = state.pool.begin().await?;
-    let row: Option<(Uuid,String,String,bool,bool)> = sqlx::query_as("SELECT u.id, u.display_name, c.password_hash, coalesce(c.locked_until > now(), false), u.active AND u.deactivated_at IS NULL FROM local_credentials c JOIN users u ON u.id=c.user_id WHERE c.username=$1 FOR UPDATE OF c")
+    let row: Option<(Uuid,String,String,bool,bool,bool)> = sqlx::query_as("SELECT u.id, u.display_name, c.password_hash, coalesce(c.locked_until > now(), false), u.active AND u.deactivated_at IS NULL, c.must_change_password FROM local_credentials c JOIN users u ON u.id=c.user_id WHERE c.username=$1 FOR UPDATE OF c")
         .bind(&username).fetch_optional(&mut *tx).await?;
     let hash = row
         .as_ref()
@@ -87,7 +87,7 @@ pub async fn login(
     let valid = tokio::task::spawn_blocking(move || verify(&hash, &b.password))
         .await
         .map_err(|_| AppError::Unavailable)?;
-    let Some((user_id, display_name, _, locked, enabled)) = row else {
+    let Some((user_id, display_name, _, locked, enabled, must_change)) = row else {
         auth_event(
             &mut tx,
             None,
@@ -162,7 +162,107 @@ pub async fn login(
     auth_event(&mut tx, Some(user_id), &username, "login", "success", None).await?;
     tx.commit().await?;
     let issued = session::issue(&state.pool, user_id, "password").await?;
-    Ok((StatusCode::CREATED,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"csrfToken":issued.csrf_token}))).into_response())
+    Ok((StatusCode::CREATED,[(header::SET_COOKIE,session::set_cookie_value(true,&issued.token))],Json(json!({"user":{"id":user_id,"displayName":display_name},"banner":null,"uatSuperadmin":false,"mustChangePassword":must_change,"csrfToken":issued.csrf_token}))).into_response())
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ChangePasswordBody {
+    current_password: String,
+    new_password: String,
+}
+/// US-1.4: policy check and hashing run off the async runtime. Returns the failure code.
+fn check_new_password(
+    hash: &str,
+    username: &str,
+    current: &str,
+    new: &str,
+) -> Result<String, &'static str> {
+    if !verify(hash, current) {
+        return Err("bad_password");
+    }
+    if new.chars().count() < 12 || new.len() > 1024 {
+        return Err("too_short");
+    }
+    if new.trim().to_lowercase() == username {
+        return Err("same_as_username");
+    }
+    if verify(hash, new) {
+        return Err("reused");
+    }
+    hash_password(new).map_err(|_| "hash_failed")
+}
+/// US-1.4: changes the caller's own password. Other sessions are revoked; this one stays.
+pub async fn change_password(
+    State(state): State<AppState>,
+    s: session::Session,
+    payload: Result<Json<ChangePasswordBody>, JsonRejection>,
+) -> Result<Response, AppError> {
+    if state.config.access_mode != AccessMode::Password {
+        return Err(AppError::NotFound);
+    }
+    let b = body(payload)?;
+    if b.current_password.len() > 1024 || b.new_password.len() > 1024 {
+        return Err(AppError::Validation("newPassword"));
+    }
+    let _permit = HASH_SLOTS
+        .try_acquire()
+        .map_err(|_| AppError::RateLimited {
+            retry_after_secs: 5,
+        })?;
+    let mut tx = state.pool.begin().await?;
+    let (username, hash): (String, String) = sqlx::query_as(
+        "SELECT username, password_hash FROM local_credentials WHERE user_id=$1 FOR UPDATE",
+    )
+    .bind(s.user_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::Forbidden)?;
+    let name = username.clone();
+    let checked = tokio::task::spawn_blocking(move || {
+        check_new_password(&hash, &name, &b.current_password, &b.new_password)
+    })
+    .await
+    .map_err(|_| AppError::Unavailable)?;
+    let new_hash = match checked {
+        Ok(h) => h,
+        Err(code) => {
+            auth_event(
+                &mut tx,
+                Some(s.user_id),
+                &username,
+                "password_change",
+                "failed",
+                Some(code),
+            )
+            .await?;
+            tx.commit().await?;
+            return Err(AppError::Validation(if code == "bad_password" {
+                "currentPassword"
+            } else {
+                "newPassword"
+            }));
+        }
+    };
+    let version: i32 = sqlx::query_scalar("UPDATE local_credentials SET password_hash=$2, credential_version=credential_version+1, must_change_password=false, password_changed_at=now(), failed_attempts=0, locked_until=NULL WHERE user_id=$1 RETURNING credential_version")
+        .bind(s.user_id).bind(new_hash).fetch_one(&mut *tx).await?;
+    sqlx::query("UPDATE sessions SET revoked_at=now(), revoked_reason='password_change' WHERE user_id=$1 AND id<>$2 AND revoked_at IS NULL")
+        .bind(s.user_id).bind(s.id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE sessions SET credential_version=$2 WHERE id=$1")
+        .bind(s.id)
+        .bind(version)
+        .execute(&mut *tx)
+        .await?;
+    auth_event(
+        &mut tx,
+        Some(s.user_id),
+        &username,
+        "password_change",
+        "success",
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 #[cfg(test)]
 mod tests {
