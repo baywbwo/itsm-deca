@@ -74,6 +74,9 @@ services:
       ITSM_CLAMD_ADDR: "${ITSM_CLAMD_ADDR:-}"
       ITSM_TRUSTED_PROXIES: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
       ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-on}
+      # Prometheus metrics (CP7a) on a separate listener: backend network only, no published port,
+      # never forwarded by the ingress (Caddy proxies /api and /health). Scrape api:9464/metrics.
+      ITSM_METRICS_BIND: "${ITSM_METRICS_BIND:-0.0.0.0:9464}"
       # Jira/Lark (CP5b). Empty = API default: simulation in UAT. live needs the keyring below.
       ITSM_INTEGRATIONS: "${ITSM_INTEGRATIONS:-}"
       ITSM_INTEGRATIONS_LAB: "${ITSM_INTEGRATIONS_LAB:-}"

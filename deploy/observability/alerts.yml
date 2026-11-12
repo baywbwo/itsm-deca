@@ -1,0 +1,127 @@
+# Prometheus alert rules for the ITSM API (CP7a). Scrape target: the API's separate metrics
+# listener (ITSM_METRICS_BIND, e.g. api:9464/metrics), job "itsm-api". The Prometheus and
+# Alertmanager services themselves arrive with CP8; until then this file is the contract.
+# Outbox gauges are read from the database and identical on every replica: aggregate with max.
+# Runbook: deploy/RUNBOOK-observability.md (one section per alert).
+groups:
+  - name: itsm-api
+    rules:
+      - alert: ItsmApiDown
+        expr: up{job="itsm-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ITSM API metrics endpoint {{ $labels.instance }} unreachable for 2m"
+          runbook: deploy/RUNBOOK-observability.md#itsmapidown
+
+      - alert: ItsmApiRestarting
+        expr: changes(itsm_process_start_time_seconds{job="itsm-api"}[30m]) > 2
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ITSM API {{ $labels.instance }} restarted more than twice in 30m"
+          runbook: deploy/RUNBOOK-observability.md#itsmapirestarting
+
+      - alert: ItsmHttp5xxRate
+        expr: |
+          sum(rate(itsm_http_requests_total{job="itsm-api",status=~"5.."}[5m]))
+            / sum(rate(itsm_http_requests_total{job="itsm-api"}[5m])) > 0.02
+          and sum(rate(itsm_http_requests_total{job="itsm-api"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 2% of ITSM API requests answer 5xx"
+          runbook: deploy/RUNBOOK-observability.md#itsmhttp5xxrate
+
+      # Latency budgets (p95): detail read 300 ms, write 600 ms, list/report 1.5 s.
+      # A GET route ending in a path parameter is a detail read; other GET routes are lists.
+      - alert: ItsmLatencyReadP95
+        expr: |
+          histogram_quantile(0.95, sum by (le, route) (rate(itsm_http_request_duration_seconds_bucket{job="itsm-api",method="GET",route=~".*[}]"}[10m]))) > 0.3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 of GET {{ $labels.route }} above 300 ms"
+          runbook: deploy/RUNBOOK-observability.md#itsmlatency
+
+      - alert: ItsmLatencyListP95
+        expr: |
+          histogram_quantile(0.95, sum by (le, route) (rate(itsm_http_request_duration_seconds_bucket{job="itsm-api",method="GET",route!~".*[}]|/health/.*|unmatched"}[10m]))) > 1.5
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 of list GET {{ $labels.route }} above 1.5 s"
+          runbook: deploy/RUNBOOK-observability.md#itsmlatency
+
+      - alert: ItsmLatencyWriteP95
+        expr: |
+          histogram_quantile(0.95, sum by (le, route, method) (rate(itsm_http_request_duration_seconds_bucket{job="itsm-api",method!="GET",route!="unmatched"}[10m]))) > 0.6
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 of {{ $labels.method }} {{ $labels.route }} above 600 ms"
+          runbook: deploy/RUNBOOK-observability.md#itsmlatency
+
+      - alert: ItsmOutboxBacklogOld
+        expr: max by (provider) (itsm_outbox_oldest_age_seconds{job="itsm-api",state="pending"}) > 600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest pending {{ $labels.provider }} outbox intent older than 10m"
+          runbook: deploy/RUNBOOK-observability.md#itsmoutboxbacklogold
+
+      - alert: ItsmOutboxFailed
+        expr: max by (provider) (delta(itsm_outbox_intents{job="itsm-api",state="failed"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "New failed {{ $labels.provider }} outbox intents in the last 15m"
+          runbook: deploy/RUNBOOK-observability.md#itsmoutboxfailed
+
+      - alert: ItsmOutboxUnknown
+        expr: max by (provider) (itsm_outbox_intents{job="itsm-api",state="unknown"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value }} {{ $labels.provider }} outbox intents with unknown outcome need reconciliation"
+          runbook: deploy/RUNBOOK-observability.md#itsmoutboxunknown
+
+      - alert: ItsmOutboxWorkerStalled
+        expr: |
+          itsm_outbox_worker_enabled{job="itsm-api"} == 1
+          and on (instance) (time() - itsm_outbox_worker_last_tick_timestamp_seconds{job="itsm-api"}) > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outbox worker on {{ $labels.instance }} has not completed a tick for 2m"
+          runbook: deploy/RUNBOOK-observability.md#itsmoutboxworkerstalled
+
+      - alert: ItsmDbPoolSaturated
+        expr: |
+          itsm_db_pool_connections{job="itsm-api",state="in_use"}
+            / ignoring (state) itsm_db_pool_max_connections{job="itsm-api"} >= 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database pool of {{ $labels.instance }} at 90% or more for 10m"
+          runbook: deploy/RUNBOOK-observability.md#itsmdbpoolsaturated
+
+      - alert: ItsmMetricsDatabaseUnreadable
+        expr: increase(itsm_metrics_scrape_errors_total{job="itsm-api"}[10m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Outbox metrics on {{ $labels.instance }} cannot be read from the database"
+          runbook: deploy/RUNBOOK-observability.md#itsmmetricsdatabaseunreadable

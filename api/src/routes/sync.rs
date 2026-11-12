@@ -296,7 +296,7 @@ pub(crate) async fn dispatch_ticket(
         };
         for id in ids {
             if let Err(e) = deliver(&st, ws, id, actor, &corr).await {
-                tracing::warn!(outbox_id = %id, error = ?e, "delivery left pending");
+                tracing::warn!(outbox_id = %id, error = %e.log_text(), "delivery left pending");
             }
         }
     });
@@ -428,7 +428,7 @@ pub async fn retry(
     .await?;
     tx.commit().await?;
     if let Err(e) = deliver(&state, ws, id, access.user_id, &corr).await {
-        tracing::warn!(outbox_id = %id, error = ?e, "retry left pending");
+        tracing::warn!(outbox_id = %id, error = %e.log_text(), "retry left pending");
     }
     let mut conn = state.pool.acquire().await?;
     Ok(Json(RecoveryResult {

@@ -107,23 +107,55 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
             "outbound calls direct (no egress proxy; DNS pinned, private addresses refused)"
         ),
     }
+    // CP7a: metrics on their own listener (internal network only), bound before serving so a
+    // wrong address stops the start instead of failing silently later.
+    let metrics_listener = match config.metrics_bind {
+        Some(addr) => {
+            let l = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|e| format!("metrics bind failed: {e}"))?;
+            tracing::info!(metrics_bind = %addr, "metrics listening (/metrics)");
+            Some(l)
+        }
+        None => None,
+    };
     let state = AppState {
         config: Arc::new(config),
         pool,
     };
     let (stop, stopped) = tokio::sync::watch::channel(false);
+    let stop = Arc::new(stop);
+    // SIGTERM (docker stop, orchestrators) or Ctrl-C: stop accepting, finish in-flight requests.
+    tokio::spawn({
+        let stop = stop.clone();
+        async move {
+            let signal = shutdown_signal().await;
+            tracing::info!(signal, "shutdown requested");
+            let _ = stop.send(true);
+        }
+    });
     let worker = state
         .config
         .outbox_worker
-        .then(|| outbox::spawn(state.clone(), stopped));
+        .then(|| outbox::spawn(state.clone(), stopped.clone()));
+    let metrics = metrics_listener.map(|l| {
+        let app = itsm_api::observe::metrics_app(state.clone());
+        let stopped = stopped.clone();
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(l, app)
+                .with_graceful_shutdown(wait_stop(stopped))
+                .await
+            {
+                tracing::error!(error = %e, "metrics server stopped");
+            }
+        })
+    });
     // Peer address feeds the rate limiter for requests without a session.
     let served = axum::serve(
         listener,
         app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+    .with_graceful_shutdown(wait_stop(stopped))
     .await
     .map_err(|e| format!("server error: {e}"));
     // Let an in-progress tick finish; an unsettled claim is swept to unknown on next start.
@@ -131,5 +163,36 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
     if let Some(worker) = worker {
         let _ = worker.await;
     }
+    if let Some(metrics) = metrics {
+        let _ = metrics.await;
+    }
     served
+}
+
+async fn wait_stop(mut stopped: tokio::sync::watch::Receiver<bool>) {
+    let _ = stopped.wait_for(|stop| *stop).await;
+}
+
+/// Resolves on SIGTERM or SIGINT (Ctrl-C) and names which one.
+async fn shutdown_signal() -> &'static str {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => tokio::select! {
+                _ = term.recv() => "SIGTERM",
+                _ = tokio::signal::ctrl_c() => "SIGINT",
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGTERM handler unavailable; Ctrl-C only");
+                let _ = tokio::signal::ctrl_c().await;
+                "SIGINT"
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+        "SIGINT"
+    }
 }

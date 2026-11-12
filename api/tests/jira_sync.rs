@@ -1059,6 +1059,14 @@ async fn cp6a_ticket_transition_moves_the_jira_issue_through_the_outbox(pool: Pg
         "{t:?}"
     );
     assert_eq!(calls(&stub, "POST", "/issue/OPS-1/transitions"), 1);
+    // The failure is visible to monitoring (CP7a alert ItsmOutboxFailed).
+    let metrics = itsm_api::observe::render(&st).await;
+    assert!(
+        metrics
+            .lines()
+            .any(|l| l == "itsm_outbox_intents{provider=\"jira\",state=\"failed\"} 1"),
+        "{metrics}"
+    );
 
     // pending_engineering → pending_customer: unmapped, nothing queued.
     let r = transition(&st, &fx, ticket, "pending_customer").await;

@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod live;
 pub mod mfa;
+pub mod observe;
 pub mod oidc;
 pub mod outbox;
 pub mod password_bootstrap;
@@ -30,7 +31,6 @@ use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetReques
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
 
@@ -46,7 +46,8 @@ pub struct AppState {
 }
 
 pub fn app(state: AppState) -> Router {
-    let request_id = HeaderName::from_static("x-request-id");
+    observe::init();
+    let request_id = HeaderName::from_static(observe::REQUEST_ID_HEADER);
     let session = axum::middleware::from_fn_with_state(state.clone(), session::session_layer);
     let denied = axum::middleware::from_fn_with_state(state.clone(), denied_audit::layer);
     // One limiter per router: clones of the returned router share it.
@@ -92,7 +93,8 @@ pub fn app(state: AppState) -> Router {
             HeaderValue::from_static("nosniff"),
         ))
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
-        .layer(TraceLayer::new_for_http())
+        // CP7a: access log + HTTP metrics by route template (never the URI or query).
+        .layer(axum::middleware::from_fn(observe::access))
         .layer(SetSensitiveHeadersLayer::new([
             header::COOKIE,
             header::SET_COOKIE,
@@ -101,4 +103,5 @@ pub fn app(state: AppState) -> Router {
             HeaderName::from_static("x-hub-signature"),
         ]))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
+        .layer(axum::middleware::from_fn(observe::sanitize_request_id))
 }

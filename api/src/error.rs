@@ -107,6 +107,16 @@ impl AppError {
         AppError::Internal(Box::new(err))
     }
 
+    /// CP7a: text for a log line. `Internal` shows its source's Display (for sqlx: the server
+    /// message, never the `detail` that `Debug` prints with row values such as
+    /// "Key (username)=(budi)"); every other variant is its stable code. Never log `{:?}`.
+    pub fn log_text(&self) -> String {
+        match self {
+            AppError::Internal(err) => err.to_string(),
+            other => other.to_string(),
+        }
+    }
+
     fn parts(&self) -> (StatusCode, &'static str, &'static str) {
         match self {
             AppError::Unauthenticated => (
@@ -329,6 +339,17 @@ impl IntoResponse for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_text_is_the_code_or_the_source_display() {
+        assert_eq!(AppError::Conflict("username_taken").log_text(), "conflict");
+        assert_eq!(
+            AppError::Validation("email").log_text(),
+            "validation_failed"
+        );
+        let e = AppError::internal(sqlx::Error::PoolTimedOut);
+        assert_eq!(e.log_text(), sqlx::Error::PoolTimedOut.to_string());
+    }
 
     #[test]
     fn new_codes_have_safe_generic_messages() {

@@ -167,6 +167,9 @@ pub struct Config {
     pub auth: AuthConfig,
     /// CP6b forward proxy for every outbound call (providers and IdPs), see [`EgressProxy`].
     pub egress_proxy: Option<EgressProxy>,
+    /// CP7a: `ITSM_METRICS_BIND` (e.g. `0.0.0.0:9464`) serves `/metrics` on its own listener,
+    /// for the internal network only (never routed by the ingress). Absent = no metrics endpoint.
+    pub metrics_bind: Option<SocketAddr>,
 }
 
 /// CP6b: `ITSM_EGRESS_PROXY=http://host:port` (+ `ITSM_EGRESS_PROXY_AUTH_FILE` holding
@@ -320,6 +323,14 @@ impl Config {
             Some(v) => v
                 .parse()
                 .map_err(|_| ConfigError::Invalid { name: "ITSM_BIND" })?,
+        };
+        let metrics_bind = match vars.get("ITSM_METRICS_BIND").map(|v| v.trim()) {
+            None | Some("") => None,
+            Some(v) => Some(v.parse::<SocketAddr>().ok().filter(|m| *m != bind).ok_or(
+                ConfigError::Invalid {
+                    name: "ITSM_METRICS_BIND",
+                },
+            )?),
         };
         let cookie_secure = match vars.get("ITSM_COOKIE_SECURE").map(|v| v.trim()) {
             None | Some("") | Some("true") => true,
@@ -526,6 +537,7 @@ impl Config {
             keyring,
             auth,
             egress_proxy,
+            metrics_bind,
         })
     }
 }
@@ -1056,6 +1068,29 @@ mod tests {
         let printed = format!("{cfg:?}");
         assert!(!printed.contains("secret"));
         assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn cp7a_metrics_listener_is_optional_and_separate_from_the_api() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.metrics_bind.is_none()));
+        let mut v = base();
+        v.push(("ITSM_METRICS_BIND", "0.0.0.0:9464"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.metrics_bind == Some(SocketAddr::from(([0, 0, 0, 0], 9464))))
+        );
+        for bad in ["9464", "metrics:9464", "127.0.0.1:8080"] {
+            let mut v = base();
+            v.push(("ITSM_METRICS_BIND", bad));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid {
+                    name: "ITSM_METRICS_BIND"
+                }),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

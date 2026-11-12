@@ -372,7 +372,7 @@ pub async fn prune_webhook_events(state: &AppState) -> Result<u64, AppError> {
 pub async fn run_once(state: &AppState) -> Result<Tick, AppError> {
     let expired = sweep_expired(state).await?;
     if let Err(e) = prune_webhook_events(state).await {
-        tracing::warn!(error = ?e, "webhook event prune failed");
+        tracing::warn!(error = %e.log_text(), "webhook event prune failed");
     }
     let claims = {
         let mut conn = state.pool.acquire().await?;
@@ -388,7 +388,9 @@ pub async fn run_once(state: &AppState) -> Result<Tick, AppError> {
             Ok(Settled::LeaseLost) => {}
             Ok(_) => tick.settled += 1,
             // Left claimed; the sweeper turns it into unknown after the lease.
-            Err(e) => tracing::warn!(outbox_id = %claim.id, error = ?e, "worker settle failed"),
+            Err(e) => {
+                tracing::warn!(outbox_id = %claim.id, error = %e.log_text(), "worker settle failed")
+            }
         }
     }
     Ok(tick)
@@ -404,7 +406,9 @@ pub fn spawn(state: AppState, mut shutdown: watch::Receiver<bool>) -> tokio::tas
             "outbox worker started"
         );
         loop {
-            match run_once(&state).await {
+            let tick = run_once(&state).await;
+            crate::observe::worker_tick(tick.is_ok());
+            match tick {
                 Ok(t) if t.expired > 0 || t.claimed > 0 => {
                     tracing::info!(
                         expired = t.expired,
@@ -414,7 +418,7 @@ pub fn spawn(state: AppState, mut shutdown: watch::Receiver<bool>) -> tokio::tas
                     )
                 }
                 Ok(_) => {}
-                Err(e) => tracing::warn!(error = ?e, "outbox tick failed"),
+                Err(e) => tracing::warn!(error = %e.log_text(), "outbox tick failed"),
             }
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
