@@ -25,6 +25,9 @@ pub enum AppError {
     NotFound,
     #[error("version_conflict")]
     VersionConflict,
+    /// A state conflict with a stable code (`username_taken`, `user_inactive`, `last_admin`).
+    #[error("conflict")]
+    Conflict(&'static str),
     /// A database domain guard refused the change. The guard's own message is never sent
     /// to the client (it may name tables or values); the client gets a generic rule error.
     #[error("rule_violation")]
@@ -101,6 +104,11 @@ impl AppError {
                 StatusCode::CONFLICT,
                 "version_conflict",
                 "Data sudah diubah pihak lain. Muat ulang lalu coba lagi.",
+            ),
+            AppError::Conflict(code) => (
+                StatusCode::CONFLICT,
+                code,
+                "Permintaan bertentangan dengan keadaan data saat ini.",
             ),
             AppError::RuleViolation => (
                 StatusCode::UNPROCESSABLE_ENTITY,

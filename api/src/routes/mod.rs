@@ -17,6 +17,7 @@ pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
 pub mod tickets;
+pub mod users;
 pub mod workspaces;
 
 use axum::Router;
@@ -36,6 +37,9 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/session/csrf"),
     ("post", "/api/v1/session/logout-all"),
     ("post", "/api/v1/account/password"),
+    ("post", "/api/v1/users"),
+    ("patch", "/api/v1/users/{user_id}"),
+    ("post", "/api/v1/users/{user_id}/password-reset"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -204,6 +208,9 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/session/logout-all", post(session::logout_all))
         .route("/api/v1/account/password", post(password::change_password))
+        .route("/api/v1/users", post(users::create))
+        .route("/api/v1/users/{user_id}", patch(users::update))
+        .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

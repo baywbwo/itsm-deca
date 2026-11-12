@@ -11,7 +11,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
-static HASH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+pub(crate) static HASH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 const DUMMY: &str = "$argon2id$v=19$m=19456,t=2,p=1$MTIzNDU2Nzg5MDEyMzQ1Ng$RErWP3YjxuMHT9L/ITq8biVGsJy3t58HdRDSuZqSwSc";
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,7 +40,7 @@ fn verify(hash: &str, password: &str) -> bool {
     })
 }
 /// Appends an auth audit row. Unknown usernames are kept only as a SHA-256 digest; no secrets.
-async fn auth_event(
+pub(crate) async fn auth_event(
     tx: &mut sqlx::PgConnection,
     user_id: Option<Uuid>,
     username: &str,
