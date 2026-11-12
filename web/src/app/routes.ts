@@ -303,10 +303,48 @@ export interface ReportParams {
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** First day of the current month to today, in the workspace time zone. */
-export function defaultReportPeriod(timeZone: string, now = Date.now()): { periodStart: string; periodEnd: string } {
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
-  return { periodStart: `${today.slice(0, 8)}01`, periodEnd: today };
+/** CP-UI3b period presets of the report filter (owner prototype 07); anything else is "Rentang kustom". */
+export const REPORT_PRESETS = [
+  { id: '7d', label: '7 hari terakhir' },
+  { id: '30d', label: '30 hari terakhir' },
+  { id: 'month', label: 'Bulan ini' },
+  { id: 'prev-month', label: 'Bulan lalu' },
+] as const;
+export type ReportPreset = (typeof REPORT_PRESETS)[number]['id'];
+type Period = { periodStart: string; periodEnd: string };
+
+const todayIn = (timeZone: string, now: number) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+/** Calendar arithmetic on YYYY-MM-DD (UTC noon avoids any DST edge). */
+const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+/** Inclusive dates of a preset, counted in the workspace time zone. */
+export function reportPresetPeriod(preset: ReportPreset, timeZone: string, now = Date.now()): Period {
+  const today = todayIn(timeZone, now);
+  const monthStart = `${today.slice(0, 8)}01`;
+  switch (preset) {
+    case '7d': return { periodStart: addDays(today, -6), periodEnd: today };
+    case '30d': return { periodStart: addDays(today, -29), periodEnd: today };
+    case 'month': return { periodStart: monthStart, periodEnd: today };
+    case 'prev-month': {
+      const end = addDays(monthStart, -1);
+      return { periodStart: `${end.slice(0, 8)}01`, periodEnd: end };
+    }
+  }
+}
+
+/** The preset that yields exactly these dates today, else 'custom'. 30 days wins a tie (the default). */
+export function reportPresetOf(p: Period, timeZone: string, now = Date.now()): ReportPreset | 'custom' {
+  const order: ReportPreset[] = ['30d', '7d', 'month', 'prev-month'];
+  return order.find((id) => {
+    const r = reportPresetPeriod(id, timeZone, now);
+    return r.periodStart === p.periodStart && r.periodEnd === p.periodEnd;
+  }) ?? 'custom';
+}
+
+/** Default report period: the last 30 days up to today, in the workspace time zone (prototype 07). */
+export function defaultReportPeriod(timeZone: string, now = Date.now()): Period {
+  return reportPresetPeriod('30d', timeZone, now);
 }
 
 /** Missing or malformed dates fall back to the default period; the server still validates the rest. */

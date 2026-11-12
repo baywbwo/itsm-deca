@@ -74,6 +74,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const restored = useRef(drafts.dirty(userId, workspace.id));
   const [draft, setDraftState] = useState<IntakeDraft>(() => drafts.get(userId, workspace.id) ?? fresh(tz));
   const [errors, setErrors] = useState<IntakeFieldError[]>([]);
+  const [assist, setAssist] = useState(false);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -188,7 +189,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
     required?: boolean; empty?: string; hint?: ReactNode; disabled?: boolean; full?: boolean;
   } = {}) => (
     <div className={opts.full ? 'field full' : 'field'}>
-      <label htmlFor={fid(k)}>{label}{opts.required ? ' *' : ''}</label>
+      <label htmlFor={fid(k)}>{label}{opts.required && <Req />}</label>
       <select id={fid(k)} className="field-control" value={f[k]} disabled={locked || opts.disabled}
         aria-required={opts.required || undefined} aria-invalid={errorOf(k) ? true : undefined}
         aria-describedby={[opts.hint ? `${fid(k)}-hint` : '', errorOf(k) ? `${fid(k)}-error` : ''].filter(Boolean).join(' ') || undefined}
@@ -206,7 +207,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
     type?: 'text' | 'email' | 'tel'; required?: boolean; full?: boolean; max?: number; autoComplete?: string;
   } = {}) => (
     <div className={opts.full ? 'field full' : 'field'}>
-      <label htmlFor={fid(key)}>{label}{opts.required ? ' *' : ''}</label>
+      <label htmlFor={fid(key)}>{label}{opts.required && <Req />}</label>
       <input id={fid(key)} type={opts.type ?? 'text'} className="field-control" value={f[key]} maxLength={opts.max ?? 254}
         placeholder={placeholder} autoComplete={opts.autoComplete ?? 'off'} aria-required={opts.required || undefined}
         aria-invalid={errorOf(key) ? true : undefined}
@@ -295,22 +296,30 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
             {select('priorityId', 'Prioritas', catalog(data.catalogs.priorities))}
             {select('productId', 'Produk / layanan', catalog(data.catalogs.products), { empty: 'Belum ditentukan' })}
             <div className="field full">
-              <label htmlFor={fid('chronology')}>Kronologi *</label>
+              <label htmlFor={fid('chronology')}>Kronologi<Req /></label>
               <textarea id={fid('chronology')} className="field-control" value={f.chronology} maxLength={20000} aria-required
                 placeholder="Uraikan kejadian: waktu, gejala, langkah yang sudah dicoba…"
                 aria-invalid={errorOf('chronology') ? true : undefined}
                 aria-describedby={`${fid('chronology')}-hint${errorOf('chronology') ? ` ${fid('chronology')}-error` : ''}`}
                 onChange={(e) => set('chronology', e.target.value)} />
-              <span id={`${fid('chronology')}-hint`} className="field-hint">Maks. 20.000 karakter. Dapat memuat data pribadi: tidak disalin ke audit, log, Jira atau Lark.</span>
+              <div className="row between intake-chrono-foot">
+                <span id={`${fid('chronology')}-hint`} className="field-hint">Maks. 20.000 karakter. Dapat memuat data pribadi: tidak disalin ke audit, log, Jira atau Lark.</span>
+                <Button className="btn-small" aria-expanded={assist} aria-controls={`${id}-assist`} onClick={() => setAssist((v) => !v)}>
+                  <span aria-hidden="true">✦</span> Bantu tulis
+                </Button>
+              </div>
               {errorOf('chronology') && <span id={`${fid('chronology')}-error`} className="field-error">{errorOf('chronology')}</span>}
             </div>
-            <div className="full"><WordingAssistant key={workspace.id} api={api} workspaceId={workspace.id} text={f.chronology}
-              mode="chronology" disabled={locked} onApply={text => set('chronology', text)} /></div>
+            {/* CP-UI3b: the GPT assistant opens only on "Bantu tulis" (prototype 06), as on the ticket detail. */}
+            <div className="full" id={`${id}-assist`} hidden={!assist}>
+              {assist && <WordingAssistant key={workspace.id} api={api} workspaceId={workspace.id} text={f.chronology}
+                mode="chronology" disabled={locked} onApply={text => set('chronology', text)} />}
+            </div>
             <details className="intake-operations full" open={operationError || undefined}>
               <summary>Data penerimaan & penanganan <span>Waktu diterima, PIC, unit, wilayah, dan direktori merchant</span></summary>
               <div className="formgrid spaced">
                 <div className="field">
-                  <label htmlFor={fid('receivedLocal')}>Waktu diterima *</label>
+                  <label htmlFor={fid('receivedLocal')}>Waktu diterima<Req /></label>
                   <input id={fid('receivedLocal')} type="datetime-local" className="field-control" value={f.receivedLocal}
                     max={wallTime(Date.now() + 5 * 60000, tz)} aria-required
                     aria-invalid={errorOf('receivedLocal') ? true : undefined}
@@ -336,8 +345,8 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
             <summary>Assignment & notifikasi <span>Pekerjaan Jira dan channel Lark (opsional)</span></summary>
             <fieldset className="plain-fieldset formgrid spaced" disabled={locked}>
               <legend className="sr-only">Assignment & notifikasi</legend>
-              <p className="tiny muted full"><Badge tone="waiting">SIMULASI</Badge> PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait. Pilihan provider
-                di sini adalah simulasi konfigurasi workspace {workspace.code}: tidak ada issue atau pesan yang benar-benar dikirim.
+              <p className="tiny muted full"><Badge tone="waiting">Belum tersambung</Badge> PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait.
+                Jira dan Lark belum tersambung: tidak ada issue atau pesan yang benar-benar dikirim.
                 Tiket tetap tersimpan bila Jira/Lark gagal.</p>
               <div className="field">
                 <label htmlFor={fid('jiraMode')}>Pekerjaan Jira</label>
@@ -345,8 +354,8 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                   aria-describedby={`${fid('jiraMode')}-hint`} aria-invalid={errorOf('jiraMode') ? true : undefined}
                   onChange={(e) => set('jiraMode', e.target.value as IntakeForm['jiraMode'])}>
                   <option value="none">Tidak ditautkan</option>
-                  {jiraUsable && <option value="create">Buat issue — simulasi</option>}
-                  {jiraUsable && <option value="link">Tautkan issue — simulasi</option>}
+                  {jiraUsable && <option value="create">Buat issue</option>}
+                  {jiraUsable && <option value="link">Tautkan issue</option>}
                 </select>
                 <span id={`${fid('jiraMode')}-hint`} className="field-hint">{providerHint(jira)}</span>
                 {errorOf('jiraMode') && <span className="field-error">{errorOf('jiraMode')}</span>}
@@ -355,30 +364,30 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                 <>
                   {f.jiraMode === 'link' && (
                     <div className="field">
-                      <label htmlFor={fid('jiraIssueKey')}>Kunci issue *</label>
+                      <label htmlFor={fid('jiraIssueKey')}>Kunci issue<Req /></label>
                       <input id={fid('jiraIssueKey')} className="field-control" value={f.jiraIssueKey} maxLength={64}
                         placeholder={`mis. SIM-${workspace.code}-101`} aria-required
                         aria-invalid={errorOf('jiraIssueKey') ? true : undefined}
                         aria-describedby={`${fid('jiraIssueKey')}-hint${errorOf('jiraIssueKey') ? ` ${fid('jiraIssueKey')}-error` : ''}`}
                         onChange={(e) => set('jiraIssueKey', e.target.value)} />
-                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue dummy yang dikenal simulasi workspace ini.</span>
+                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue yang dikenal direktori Jira workspace ini.</span>
                       {errorOf('jiraIssueKey') && <span id={`${fid('jiraIssueKey')}-error`} className="field-error">{errorOf('jiraIssueKey')}</span>}
                     </div>
                   )}
                   <div className="field">
-                    <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? 'Judul issue *' : 'Judul pekerjaan terkait'}</label>
+                    <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? <>Judul issue<Req /></> : 'Judul pekerjaan terkait'}</label>
                     <input id={fid('jiraTitle')} className="field-control" value={f.jiraTitle} maxLength={300}
                       aria-required={f.jiraMode === 'create' || undefined} aria-invalid={errorOf('jiraTitle') ? true : undefined}
                       aria-describedby={errorOf('jiraTitle') ? `${fid('jiraTitle')}-error` : undefined}
                       placeholder="Tanpa identitas pelanggan" onChange={(e) => set('jiraTitle', e.target.value)} />
                     {errorOf('jiraTitle') && <span id={`${fid('jiraTitle')}-error`} className="field-error">{errorOf('jiraTitle')}</span>}
                   </div>
-                  {select('jiraAssigneeId', 'Assignee Jira', (jira?.options ?? []).map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })), {
+                  {select('jiraAssigneeId', 'Assignee Jira', (jira?.options ?? []).map((o) => ({ id: o.id, label: o.displayName })), {
                     empty: 'Belum ditugaskan',
                   })}
                 </>
               )}
-              {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })) : [], {
+              {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: o.displayName })) : [], {
                 empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark),
               })}
             </fieldset>
@@ -392,7 +401,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   if (asPage) {
     return (
       <section className="pcard intake-page" aria-labelledby={`${id}-title`}>
-        <div className="hd"><h2 id={`${id}-title`}>Data tiket</h2><span className="sub">* wajib diisi</span></div>
+        <div className="hd"><h2 id={`${id}-title`}>Data tiket</h2><span className="sub"><span className="req" aria-hidden="true">*</span> wajib diisi</span></div>
         <div className="bd">
           {body}
           <div className="intake-foot">
@@ -416,6 +425,9 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
 
 const OPERATION_FIELDS: readonly string[] = ['receivedLocal', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'];
 const PROVIDER_FIELDS: readonly string[] = ['jiraMode', 'jiraIssueKey', 'jiraTitle', 'jiraAssigneeId', 'larkDestinationId'];
+
+/** Required marker: red, hidden from screen readers (the control already carries aria-required). */
+const Req = () => <span className="req" aria-hidden="true">*</span>;
 
 function fresh(tz: string): IntakeDraft {
   const form = emptyForm(wallTime(Date.now(), tz));
@@ -570,7 +582,7 @@ export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial
   return (
     <section className="card integration-panel" aria-labelledby={`${ticketId}-int`}>
       <div className="row between">
-        <h3 id={`${ticketId}-int`}>Integrasi <Badge tone="waiting">SIMULASI</Badge></h3>
+        <h3 id={`${ticketId}-int`}>Integrasi <Badge tone="waiting">Belum tersambung</Badge></h3>
         <Button className="btn-small" onClick={() => void refresh()} disabled={loading} aria-busy={loading}>
           {loading ? 'Memuat…' : 'Muat ulang status'}
         </Button>

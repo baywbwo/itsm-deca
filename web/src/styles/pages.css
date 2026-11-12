@@ -341,3 +341,15 @@ fieldset.brand-presets { display: grid; gap: 8px; }
   .usr-tools .toolbar-search .field-control { min-width: 0; }
   .usr-tools .toolbar-select, .usr-tools .toolbar-select .field-control { width: 100%; max-width: none; }
 }
+
+/* CP-UI3b — Laporan (07): empty preview, collapsed validation; Katalog (08) chips + footer; required marker. */
+.rep-period .rep-dates { margin-top: 8px; }
+.rep-empty > p { margin: 0; padding: 28px 16px; text-align: center; font-size: 12.5px; color: var(--muted); }
+.rep-validation > summary h2 { font-size: 13px; }
+.cat-hd { padding: 10px 14px; }
+.cat-hd .pchips { min-width: 0; }
+.cat-prio { border-top: 0; border-bottom: 1px solid var(--line-soft); margin: 0; font-size: 11.5px; color: var(--muted); }
+.set-sec > .set-note.hintline { margin: 0; font-size: 11px; }
+.req { color: var(--danger-ink, #a22b2b); margin-left: 2px; }
+.intake-chrono-foot { gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+.intake-chrono-foot .field-hint { flex: 1 1 260px; min-width: 0; }

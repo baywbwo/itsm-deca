@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultReportPeriod, parseReportQuery, reportExportBody, reportQuery } from '../app/routes';
+import { defaultReportPeriod, parseReportQuery, reportExportBody, reportPresetOf, reportPresetPeriod, reportQuery } from '../app/routes';
 import { createApi, type TransportRequest, type TransportResponse } from './client';
 import { isReportPreview, isReportRun } from './guards';
 
@@ -38,10 +38,10 @@ const run = {
 };
 
 describe('D10 report query', () => {
-  it('defaults to the current Jakarta month and keeps a canonical order', () => {
+  it('defaults to the last 30 Jakarta days and keeps a canonical order', () => {
     // 2026-10-31T17:30Z is already 1 November in Jakarta.
     expect(defaultReportPeriod('Asia/Jakarta', Date.parse('2026-10-31T17:30:00Z')))
-      .toEqual({ periodStart: '2026-11-01', periodEnd: '2026-11-01' });
+      .toEqual({ periodStart: '2026-10-03', periodEnd: '2026-11-01' });
     const p = parseReportQuery('status=closed,new,bogus,new&periodEnd=2026-10-31&periodStart=2026-10-01&owner=unassigned&basis=x', 'Asia/Jakarta');
     expect(p.status).toEqual(['new', 'closed']);
     expect(p.basis).toBe('received');
@@ -51,11 +51,29 @@ describe('D10 report query', () => {
 
   it('falls back on malformed dates and builds the export body of exactly that spec', () => {
     const p = parseReportQuery('periodStart=2026-1-1&periodEnd=abc&basis=resolved', 'Asia/Jakarta', Date.parse('2026-10-15T00:00:00Z'));
-    expect(p).toMatchObject({ periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', status: [] });
+    expect(p).toMatchObject({ periodStart: '2026-09-16', periodEnd: '2026-10-15', basis: 'resolved', status: [] });
     expect(reportExportBody({ ...p, status: ['resolved'], filters: { owner: null, channel: 'none', category: null, priority: null } }))
-      .toEqual({ reportType: 'operational', format: 'csv', periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', status: ['resolved'], channel: 'none' });
+      .toEqual({ reportType: 'operational', format: 'csv', periodStart: '2026-09-16', periodEnd: '2026-10-15', basis: 'resolved', status: ['resolved'], channel: 'none' });
     expect(reportExportBody({ ...p, status: [], filters: { owner: 'unassigned', channel: null, category: null, priority: null } }, 'xlsx'))
-      .toEqual({ reportType: 'operational', format: 'xlsx', periodStart: '2026-10-01', periodEnd: '2026-10-15', basis: 'resolved', owner: 'unassigned' });
+      .toEqual({ reportType: 'operational', format: 'xlsx', periodStart: '2026-09-16', periodEnd: '2026-10-15', basis: 'resolved', owner: 'unassigned' });
+  });
+});
+
+describe('CP-UI3b report period presets', () => {
+  const now = Date.parse('2026-11-12T03:00:00Z'); // 12 Nov 2026, 10.00 Jakarta
+  it('computes each preset in the workspace time zone', () => {
+    expect(reportPresetPeriod('7d', 'Asia/Jakarta', now)).toEqual({ periodStart: '2026-11-06', periodEnd: '2026-11-12' });
+    expect(reportPresetPeriod('30d', 'Asia/Jakarta', now)).toEqual({ periodStart: '2026-10-14', periodEnd: '2026-11-12' });
+    expect(reportPresetPeriod('month', 'Asia/Jakarta', now)).toEqual({ periodStart: '2026-11-01', periodEnd: '2026-11-12' });
+    expect(reportPresetPeriod('prev-month', 'Asia/Jakarta', now)).toEqual({ periodStart: '2026-10-01', periodEnd: '2026-10-31' });
+    // January: last month is December of the previous year.
+    expect(reportPresetPeriod('prev-month', 'Asia/Jakarta', Date.parse('2027-01-05T03:00:00Z')))
+      .toEqual({ periodStart: '2026-12-01', periodEnd: '2026-12-31' });
+  });
+  it('recognises a preset from the URL dates and calls anything else custom', () => {
+    expect(reportPresetOf(defaultReportPeriod('Asia/Jakarta', now), 'Asia/Jakarta', now)).toBe('30d');
+    expect(reportPresetOf({ periodStart: '2026-10-01', periodEnd: '2026-10-31' }, 'Asia/Jakarta', now)).toBe('prev-month');
+    expect(reportPresetOf({ periodStart: '2026-11-01', periodEnd: '2026-11-02' }, 'Asia/Jakarta', now)).toBe('custom');
   });
 });
 
