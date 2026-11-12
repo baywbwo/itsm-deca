@@ -10,6 +10,7 @@ pub mod domain;
 pub mod error;
 pub mod live;
 pub mod mfa;
+pub mod oidc;
 pub mod outbox;
 pub mod password_bootstrap;
 pub mod providers;

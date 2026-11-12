@@ -207,6 +207,16 @@ impl Target {
         timeout: Duration,
     ) -> Result<Self, CallError> {
         let base = provider_base_url(provider, raw_base, lab).ok_or(CallError::Refused)?;
+        Self::prepare_origin(base, lab, timeout).await
+    }
+
+    /// Resolves and pins an origin `scheme://host[:port]` that the caller already validated against
+    /// its own allowlist (CP5c: OIDC endpoints of a configured IdP). Same address rules as above.
+    pub async fn prepare_origin(
+        base: String,
+        lab: bool,
+        timeout: Duration,
+    ) -> Result<Self, CallError> {
         let url = Url::parse(&base).map_err(|_| CallError::Refused)?;
         let host = url.host_str().ok_or(CallError::Refused)?.to_owned();
         let port = url.port_or_known_default().ok_or(CallError::Refused)?;
@@ -238,6 +248,32 @@ impl Target {
         Ok(Self { base, client })
     }
 
+    /// GET returning the parsed JSON body of a 2xx answer (CP5c discovery and JWKS).
+    pub async fn get_json(&self, path_and_query: &str) -> Result<Value, CallError> {
+        self.call(Method::GET, path_and_query, None, None).await
+    }
+
+    /// POST of an `application/x-www-form-urlencoded` body (CP5c token endpoint).
+    pub async fn post_form(
+        &self,
+        path_and_query: &str,
+        auth: &HeaderValue,
+        form: &[(&str, &str)],
+    ) -> Result<Value, CallError> {
+        let body = form
+            .iter()
+            .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
+            .collect::<Vec<_>>()
+            .join("&");
+        self.send(
+            Method::POST,
+            path_and_query,
+            Some(auth),
+            Some(("application/x-www-form-urlencoded", body.into_bytes())),
+        )
+        .await
+    }
+
     /// Sends one request and returns the parsed JSON body of a 2xx answer.
     async fn call(
         &self,
@@ -246,6 +282,23 @@ impl Target {
         auth: Option<&HeaderValue>,
         body: Option<&Value>,
     ) -> Result<Value, CallError> {
+        let body = match body {
+            Some(b) => Some((
+                "application/json; charset=utf-8",
+                serde_json::to_vec(b).map_err(|_| CallError::Protocol)?,
+            )),
+            None => None,
+        };
+        self.send(method, path_and_query, auth, body).await
+    }
+
+    async fn send(
+        &self,
+        method: Method,
+        path_and_query: &str,
+        auth: Option<&HeaderValue>,
+        body: Option<(&'static str, Vec<u8>)>,
+    ) -> Result<Value, CallError> {
         let mut req = self
             .client
             .request(method, format!("{}{path_and_query}", self.base))
@@ -253,10 +306,8 @@ impl Target {
         if let Some(a) = auth {
             req = req.header(AUTHORIZATION, a.clone());
         }
-        if let Some(b) = body {
-            req = req
-                .header(CONTENT_TYPE, "application/json; charset=utf-8")
-                .body(serde_json::to_vec(b).map_err(|_| CallError::Protocol)?);
+        if let Some((content_type, b)) = body {
+            req = req.header(CONTENT_TYPE, content_type).body(b);
         }
         let mut resp = req.send().await.map_err(classify)?;
         let status = resp.status();
@@ -288,7 +339,7 @@ fn classify(e: reqwest::Error) -> CallError {
     }
 }
 
-fn sensitive(value: String) -> Result<HeaderValue, CallError> {
+pub(crate) fn sensitive(value: String) -> Result<HeaderValue, CallError> {
     let mut v = HeaderValue::from_str(&value).map_err(|_| CallError::Protocol)?;
     v.set_sensitive(true);
     Ok(v)
@@ -299,7 +350,7 @@ fn parse<T: for<'de> Deserialize<'de>>(v: Value) -> Result<T, CallError> {
 }
 
 /// Percent-encodes one path segment or query value.
-fn enc(raw: &str) -> String {
+pub(crate) fn enc(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for b in raw.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {

@@ -1012,6 +1012,7 @@ dependencies = [
  "http-body-util",
  "regex",
  "reqwest",
+ "ring",
  "rust_xlsxwriter",
  "serde",
  "serde_json",
