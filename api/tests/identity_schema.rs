@@ -1,0 +1,148 @@
+//! R1 I-1 CP2a: identity lifecycle schema (0019).
+use std::fmt::Display;
+
+use itsm_api::{db, seed};
+use sqlx::PgPool;
+use uuid::Uuid;
+
+fn ok<T, E: Display>(r: Result<T, E>, what: &str) -> T {
+    match r {
+        Ok(v) => v,
+        Err(e) => panic!("{what}: {e}"),
+    }
+}
+
+async fn user(pool: &PgPool) -> Uuid {
+    let name: String = ok(
+        sqlx::query_scalar("SELECT current_database()")
+            .fetch_one(pool)
+            .await,
+        "db",
+    );
+    ok(seed::seed_uat(pool, &name).await, "seed");
+    ok(
+        sqlx::query_scalar("SELECT id FROM users ORDER BY id LIMIT 1")
+            .fetch_one(pool)
+            .await,
+        "user",
+    )
+}
+
+fn sql_state(r: Result<sqlx::postgres::PgQueryResult, sqlx::Error>, what: &str) -> String {
+    match r {
+        Err(sqlx::Error::Database(e)) => e.code().map(|c| c.into_owned()).unwrap_or_default(),
+        other => panic!("{what}: not refused: {other:?}"),
+    }
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_6_auth_events_are_append_only(pool: PgPool) {
+    let uid = user(&pool).await;
+    ok(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'login', 'failed')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "insert",
+    );
+    for (what, q) in [
+        ("update", "UPDATE auth_events SET outcome = 'success'"),
+        ("delete", "DELETE FROM auth_events"),
+        ("truncate", "TRUNCATE auth_events"),
+    ] {
+        let code = sql_state(sqlx::query(q).execute(&pool).await, what);
+        assert_eq!(code, "42501", "{what}");
+    }
+    let n: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM auth_events")
+            .fetch_one(&pool)
+            .await,
+        "count",
+    );
+    assert_eq!(n, 1);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_4_one_active_reset_token_per_user_stored_as_digest(pool: PgPool) {
+    let uid = user(&pool).await;
+    let insert = |hash: Vec<u8>| {
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, issued_by, expires_at) \
+             VALUES ($1, $2, $1, now() + interval '1 hour')",
+        )
+        .bind(uid)
+        .bind(hash)
+    };
+    ok(insert(vec![1; 32]).execute(&pool).await, "first token");
+    let code = sql_state(insert(vec![2; 32]).execute(&pool).await, "second active");
+    assert_eq!(code, "23505");
+    let code = sql_state(insert(vec![3; 16]).execute(&pool).await, "non-digest");
+    assert_eq!(code, "23514");
+    let code = sql_state(
+        sqlx::query(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, issued_by, expires_at) \
+             VALUES ($1, $2, $1, now() + interval '25 hours')",
+        )
+        .bind(uid)
+        .bind(vec![4u8; 32])
+        .execute(&pool)
+        .await,
+        "ttl over 24h",
+    );
+    assert_eq!(code, "23514");
+    ok(
+        sqlx::query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1")
+            .bind(uid)
+            .execute(&pool)
+            .await,
+        "use token",
+    );
+    ok(
+        insert(vec![2; 32]).execute(&pool).await,
+        "new token after use",
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0019_rolls_back_and_reapplies(pool: PgPool) {
+    let uid = user(&pool).await;
+    ok(db::MIGRATOR.undo(&pool, 18).await, "undo to 0018");
+    let left: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT (SELECT count(*) FROM information_schema.tables \
+                      WHERE table_name IN ('auth_events','password_reset_tokens')) \
+             + (SELECT count(*) FROM information_schema.columns \
+                 WHERE (table_name = 'users' AND column_name IN ('email','created_by','deactivated_at')) \
+                    OR (table_name = 'local_credentials' AND column_name = 'must_change_password') \
+                    OR (table_name = 'sessions' AND column_name = 'idle_expires_at')) \
+             + (SELECT count(*) FROM pg_proc WHERE proname = 'itsm_auth_events_append_only')",
+        )
+        .fetch_one(&pool)
+        .await,
+        "left",
+    );
+    assert_eq!(left, 0);
+    ok(db::MIGRATOR.run(&pool).await, "re-apply");
+    ok(
+        sqlx::query(
+            "INSERT INTO platform_grants (user_id, grant_code) VALUES ($1, 'platform_admin')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "platform_admin grant",
+    );
+    // Down is refused once platform_admin grants exist (data-loss guard).
+    assert!(db::MIGRATOR.undo(&pool, 18).await.is_err());
+    let still: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'auth_events'",
+        )
+        .fetch_one(&pool)
+        .await,
+        "still",
+    );
+    assert_eq!(still, 1);
+}

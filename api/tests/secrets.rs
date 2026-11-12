@@ -174,9 +174,12 @@ async fn migrations_0017_0018_roll_back_and_reapply(pool: PgPool) {
     assert_eq!(left, 0);
     ok(db::MIGRATOR.run(&pool).await, "re-apply");
     let triggers: i64 = ok(
-        sqlx::query_scalar("SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%\\_no\\_truncate'")
-            .fetch_one(&pool)
-            .await,
+        sqlx::query_scalar(
+            "SELECT count(*) FROM pg_trigger WHERE tgname LIKE '%\\_no\\_truncate' \
+             AND tgname <> 'auth_events_no_truncate'",
+        )
+        .fetch_one(&pool)
+        .await,
         "triggers",
     );
     assert_eq!(triggers, 5);
