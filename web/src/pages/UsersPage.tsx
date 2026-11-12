@@ -198,7 +198,7 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice, onWorkspacesChang
                   {
                     key: 'company', header: 'Perusahaan',
                     cell: (u) => (u.company
-                      ? <span><span>{u.company.name}</span><span className="tiny muted usr-login">{ROLE_LABEL[u.company.role]}</span></span>
+                      ? <span className="usr-company"><span>{u.company.name}</span><span className="tiny muted">{ROLE_LABEL[u.company.role]}</span></span>
                       : <span className="muted">Belum ada perusahaan</span>),
                   },
                   {
@@ -362,7 +362,7 @@ function CompanyDialog({ api, user, self, onClose, onSaved }: {
             onChange={(e) => setRole(e.target.value as SetUserCompanyRequest['role'])}>
             {(['cs', 'lead_cs'] as const).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
           </SelectField>
-          <fieldset className="full">
+          <fieldset className="full usr-grants">
             <legend>Hak tambahan</legend>
             {GRANTS.map((g) => (
               <label key={g} className="check">
@@ -376,7 +376,8 @@ function CompanyDialog({ api, user, self, onClose, onSaved }: {
       )}
       {moving && (
         <p className="tiny" role="note">
-          Pindah dari {user.company?.name} ke {target?.name}: keanggotaan dan hak di {user.company?.name} dicabut.
+          Pindah dari {user.company?.name} ke {target?.name}: keanggotaan dan hak di {user.company?.name} dicabut;
+          peran dan hak tambahan di {target?.name} menjadi persis yang dipilih di atas.
           {self ? ' Tampilan Anda akan berpindah ke perusahaan baru setelah disimpan.' : ''}
         </p>
       )}
