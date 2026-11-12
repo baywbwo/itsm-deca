@@ -2264,7 +2264,7 @@ export interface components {
         TicketJiraRequest: {
             /** @enum {string} */
             mode: "none" | "create" | "link";
-            /** @description Required for create; optional related-work title for link. */
+            /** @description Required for create; optional related-work title for link. Stored in ITSM only: a created Jira issue gets the server summary "[ITSM] <ticket> — <category>" (no free text leaves the app). */
             title?: string;
             /** @description link only. */
             issueKey?: string;

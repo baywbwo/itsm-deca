@@ -2816,7 +2816,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300,
-            "description": "Required for create; optional related-work title for link."
+            "description": "Required for create; optional related-work title for link. Stored in ITSM only: a created Jira issue gets the server summary \"[ITSM] <ticket> — <category>\" (no free text leaves the app)."
           },
           "issueKey": {
             "type": "string",

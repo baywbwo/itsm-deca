@@ -418,7 +418,7 @@ struct Work {
     number: i64,
     priority_code: Option<String>,
     priority_label: Option<String>,
-    title: Option<String>,
+    category_label: Option<String>,
     linked: bool,
     assignee_ref: Option<String>,
     assignee_source: Option<String>,
@@ -433,7 +433,7 @@ struct Work {
 }
 
 const WORK_SQL: &str = "SELECT o.operation, o.requested_issue_key, t.number_prefix, t.number, \
-        p.code AS priority_code, p.label AS priority_label, r.title, \
+        p.code AS priority_code, p.label AS priority_label, cat.label AS category_label, \
         (r.jira_issue_id IS NOT NULL) IS TRUE AS linked, \
         a.external_account_ref AS assignee_ref, a.source AS assignee_source, \
         d.external_chat_ref AS chat_ref, d.source AS dest_source, \
@@ -442,10 +442,22 @@ const WORK_SQL: &str = "SELECT o.operation, o.requested_issue_key, t.number_pref
      JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id \
      JOIN tickets t ON t.workspace_id = o.workspace_id AND t.id = o.ticket_id \
      LEFT JOIN priorities p ON p.workspace_id = t.workspace_id AND p.id = t.priority_id \
+     LEFT JOIN categories cat ON cat.workspace_id = t.workspace_id AND cat.id = t.category_id \
      LEFT JOIN related_work r ON r.workspace_id = o.workspace_id AND r.id = o.related_work_id \
      LEFT JOIN jira_assignees a ON a.workspace_id = r.workspace_id AND a.id = r.jira_assignee_id \
      LEFT JOIN lark_destinations d ON d.workspace_id = o.workspace_id AND d.id = o.lark_destination_id \
      WHERE o.workspace_id = $1 AND o.id = $2 AND o.claim_token = $3";
+
+/// Summary of a created Jira issue, built by the server (CP5B-05): ticket number and category
+/// only, at most 120 characters. The officer's free-text title stays in ITSM, so customer names,
+/// phone, account or ID numbers typed there never reach the provider.
+pub fn jira_summary(ticket: &str, category: Option<&str>) -> String {
+    let summary = match category.map(str::trim).filter(|c| !c.is_empty()) {
+        Some(c) => format!("[ITSM] {ticket} — {}", short(c, 80)),
+        None => format!("[ITSM] {ticket}"),
+    };
+    summary.chars().take(120).collect()
+}
 
 /// Label put on every Jira issue the outbox creates; searched first so a repeat never duplicates.
 pub fn idempotency_label(outbox_id: Uuid) -> String {
@@ -461,6 +473,12 @@ fn classify(provider: &str, e: CallError, write_started: bool) -> Attempt {
     match e {
         CallError::Refused => Attempt::Failed(note),
         CallError::Connect => Attempt::Transient(format!("{note} Dicoba ulang otomatis.")),
+        // CP5B-06: a 503 after the write was sent may come from a balancer in front of a backend
+        // that already created the issue, and Jira's label search lags; only 429 is a certain
+        // "not processed". Reconcile instead of retrying.
+        CallError::Status(503) if write_started => Attempt::Unknown(format!(
+            "{note} Hasil pengiriman tidak diketahui. Jangan kirim ulang; periksa di penyedia lalu rekonsiliasi dengan bukti."
+        )),
         e if e.is_throttle() => Attempt::Transient(format!("{note} Dicoba ulang otomatis.")),
         CallError::Timeout | CallError::Protocol | CallError::Status(500..=599)
             if write_started =>
@@ -547,7 +565,7 @@ async fn deliver(
             if let Some(found) = j.find_by_label(&label).await? {
                 return Ok(Attempt::Delivered(Some(found)));
             }
-            let summary = work.title.clone().unwrap_or_else(|| ticket.clone());
+            let summary = jira_summary(&ticket, work.category_label.as_deref());
             let description = format!(
                 "Dibuat dari tiket ITSM {ticket}. Rincian keluhan nasabah tidak dikirim; buka ITSM untuk konteks."
             );
@@ -617,6 +635,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cp5b05_jira_summary_is_a_server_template_without_free_text() {
+        assert_eq!(jira_summary("DOB-12", None), "[ITSM] DOB-12");
+        assert_eq!(jira_summary("DOB-12", Some("  ")), "[ITSM] DOB-12");
+        assert_eq!(
+            jira_summary("DOB-12", Some("Transaksi gagal")),
+            "[ITSM] DOB-12 — Transaksi gagal"
+        );
+        let long = "K".repeat(300);
+        assert!(jira_summary("DOB-12", Some(&long)).chars().count() <= 120);
+        assert_eq!(jira_summary("DOB-12", Some("a\nb")), "[ITSM] DOB-12 — ab");
+    }
+
+    #[test]
     fn write_errors_after_sending_are_unknown_never_retried() {
         assert!(matches!(
             classify("jira", CallError::Timeout, true),
@@ -626,10 +657,21 @@ mod tests {
             classify("jira", CallError::Timeout, false),
             Attempt::Transient(_)
         ));
-        assert!(matches!(
-            classify("lark", CallError::Status(503), true),
-            Attempt::Transient(_)
-        ));
+        // CP5B-06: 503 after the write is uncertain; 503 before it and 429 are not.
+        for p in ["jira", "lark"] {
+            assert!(matches!(
+                classify(p, CallError::Status(503), true),
+                Attempt::Unknown(_)
+            ));
+            assert!(matches!(
+                classify(p, CallError::Status(503), false),
+                Attempt::Transient(_)
+            ));
+            assert!(matches!(
+                classify(p, CallError::Status(429), true),
+                Attempt::Transient(_)
+            ));
+        }
         assert!(matches!(
             classify("lark", CallError::Status(400), true),
             Attempt::Failed(_)

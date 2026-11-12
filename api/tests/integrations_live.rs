@@ -52,8 +52,8 @@ struct StubState {
     slow: Option<Duration>,
     /// `/search/jql` answers with this status instead of searching.
     search_status: Option<u16>,
-    /// The next create stores the issue but answers 429 (accepted, reply lost as throttled).
-    create_then_throttle: bool,
+    /// The next create stores the issue but answers this status (accepted, reply lost).
+    create_then_status: Option<u16>,
     /// Created issues: (id, key, labels).
     issues: Vec<(String, String, Vec<String>)>,
     /// Lark messages: (chat_id, text, uuid).
@@ -175,9 +175,8 @@ async fn jira(
                 })
                 .unwrap_or_default();
             s.issues.push((id.clone(), key.clone(), labels));
-            if s.create_then_throttle {
-                s.create_then_throttle = false;
-                return json_resp(429, json!({"errorMessages": ["rate limited"]}));
+            if let Some(code) = s.create_then_status.take() {
+                return json_resp(code, json!({"errorMessages": ["busy"]}));
             }
             json_resp(201, json!({"id": id, "key": key}))
         }
@@ -493,6 +492,17 @@ const CHRONOLOGY: &str = "Kronologi uji CP5b (sintetis): nasabah fiktif 0812-000
 
 /// Intake with a Jira issue (assignee from the real user search) and a Lark chat (from the synced list).
 async fn intake(st: &AppState, fx: &Fx, lark: &Value, key: &str) -> Resp {
+    intake_titled(st, fx, lark, key, "Tindak lanjut uji CP5b", None).await
+}
+
+async fn intake_titled(
+    st: &AppState,
+    fx: &Fx,
+    lark: &Value,
+    key: &str,
+    title: &str,
+    category: Option<Uuid>,
+) -> Resp {
     let admin = tok(&st.pool, fx.admin).await;
     let lead = tok(&st.pool, fx.lead).await;
     let r = send(
@@ -560,8 +570,9 @@ async fn intake(st: &AppState, fx: &Fx, lark: &Value, key: &str) -> Resp {
         "chronology": CHRONOLOGY,
         "receivedAt": "2026-11-10T09:15:00+07:00",
         "intakeChannelId": channel(&st.pool, fx.a).await,
-        "jira": {"mode": "create", "title": "Tindak lanjut uji CP5b", "assigneeId": items[0]["id"]},
+        "jira": {"mode": "create", "title": title, "assigneeId": items[0]["id"]},
         "larkDestinationId": chat,
+        "categoryId": category,
     });
     send(
         st,
@@ -945,7 +956,7 @@ async fn transient_failures_end_permanent_and_retry_is_idempotent(pool: PgPool) 
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         g.search_status = None;
-        g.create_then_throttle = true;
+        g.create_then_status = Some(429);
     }
     let attempt = view.json["items"]
         .as_array()
@@ -1368,4 +1379,99 @@ async fn cp5b02_configure_accepts_only_provider_hosts_on_443(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.json);
+}
+
+fn issue_bodies(st: &Stub) -> Vec<Value> {
+    st.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .bodies
+        .iter()
+        .filter_map(|b| serde_json::from_str::<Value>(b).ok())
+        .filter(|b| b["fields"]["summary"].is_string())
+        .collect()
+}
+
+/// CP5B-05: the officer's free-text Jira title (here full of synthetic customer data) stays in
+/// ITSM; the issue summary is the server template "[ITSM] <ticket> — <category>".
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5b05_jira_summary_never_carries_the_free_text_title(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let st = state(&pool, LIVE);
+    let (stub, base) = stub().await;
+    let (_, lark) = go_live(&st, &fx, &base).await;
+    let (category_id, category): (Uuid, String) = ok(
+        sqlx::query_as(
+            "SELECT id, label FROM categories WHERE workspace_id = $1 AND active ORDER BY sort_order, code LIMIT 1",
+        )
+        .bind(fx.a)
+        .fetch_one(&pool)
+        .await,
+        "category",
+    );
+    let pii = [
+        "Budi Santoso",
+        "3201234567890123",
+        "081234567890",
+        "1234567890123",
+    ];
+    let title = format!(
+        "Nasabah {} NIK {} HP {} rek {}",
+        pii[0], pii[1], pii[2], pii[3]
+    );
+    let r = intake_titled(&st, &fx, &lark, "cp5b05-0001", &title, Some(category_id)).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    assert_eq!(sync_of(&r.json, "jira")["state"], "success", "{}", r.json);
+    let number = s(&r.json["ticket"]["displayNumber"]);
+    let bodies = issue_bodies(&stub);
+    assert_eq!(bodies.len(), 1);
+    let summary = s(&bodies[0]["fields"]["summary"]);
+    assert_eq!(summary, format!("[ITSM] {number} — {category}"));
+    let all = stub
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .bodies
+        .join("\n");
+    for p in pii {
+        assert!(!all.contains(p), "{p} left the app: {all}");
+    }
+    // The title is kept locally for officers.
+    let local: String = ok(
+        sqlx::query_scalar(
+            "SELECT title FROM related_work WHERE workspace_id = $1 AND title IS NOT NULL",
+        )
+        .bind(fx.a)
+        .fetch_one(&pool)
+        .await,
+        "local title",
+    );
+    assert_eq!(local, title);
+}
+
+/// CP5B-06: Jira stores the issue but a balancer answers 503: the outcome is unknown (no
+/// automatic retry that could create a second issue while the label search lags).
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5b06_503_after_the_create_is_unknown_not_retried(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let st = state(&pool, LIVE);
+    let (stub, base) = stub().await;
+    let (_, lark) = go_live(&st, &fx, &base).await;
+    stub.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .create_then_status = Some(503);
+    let r = intake(&st, &fx, &lark, "cp5b06-0001").await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
+    let j = sync_of(&r.json, "jira").clone();
+    assert_eq!(j["state"], "unknown", "{j}");
+    let id = ok(Uuid::parse_str(&s(&j["id"])), "id");
+    make_due(&pool, id).await;
+    let t = ok(outbox::run_once(&st).await, "tick");
+    assert_eq!(t.settled, 0, "unknown is never claimed again");
+    let (state_now, _, err) = outbox_state(&pool, id).await;
+    assert_eq!(state_now, "unknown");
+    assert!(err.unwrap_or_default().contains("rekonsiliasi"));
+    assert_eq!(
+        calls(&stub, "POST", "/rest/api/3/issue"),
+        1,
+        "one create only"
+    );
 }

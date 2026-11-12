@@ -385,8 +385,11 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                     <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? <>Judul issue<Req /></> : 'Judul pekerjaan terkait'}</label>
                     <input id={fid('jiraTitle')} className="field-control" value={f.jiraTitle} maxLength={300}
                       aria-required={f.jiraMode === 'create' || undefined} aria-invalid={errorOf('jiraTitle') ? true : undefined}
-                      aria-describedby={errorOf('jiraTitle') ? `${fid('jiraTitle')}-error` : undefined}
+                      aria-describedby={`${fid('jiraTitle')}-hint${errorOf('jiraTitle') ? ` ${fid('jiraTitle')}-error` : ''}`}
                       placeholder="Tanpa identitas pelanggan" onChange={(e) => set('jiraTitle', e.target.value)} />
+                    <span id={`${fid('jiraTitle')}-hint`} className="field-hint">
+                      Hanya disimpan di ITSM. Jira menerima judul otomatis "[ITSM] nomor tiket — kategori"; jangan tulis data pribadi nasabah.
+                    </span>
                     {errorOf('jiraTitle') && <span id={`${fid('jiraTitle')}-error`} className="field-error">{errorOf('jiraTitle')}</span>}
                   </div>
                   {live && (
