@@ -297,7 +297,7 @@ export function CompanyCrumb({ company, page }: { company: Workspace | null; pag
 /** Mobile drawer counterpart of {@link CompanyCrumb}: a label, not a field. */
 export function DrawerCompany({ company }: { company: Workspace | null }) {
   if (!company) return null;
-  return <p className="drawer-field drawer-company"><span className="tiny muted">Perusahaan</span><b>{companyName(company)}</b></p>;
+  return <p className="drawer-field drawer-company"><span>Perusahaan</span><b>{companyName(company)}</b></p>;
 }
 
 const companyName = (w: Workspace) => w.brandName || w.name;
