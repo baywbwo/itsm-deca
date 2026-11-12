@@ -151,14 +151,6 @@ pub async fn rotate_csrf(pool: &PgPool, session_id: Uuid) -> Result<String, AppE
     Ok(csrf_token)
 }
 
-pub async fn revoke(pool: &PgPool, session_id: Uuid) -> Result<(), AppError> {
-    sqlx::query("UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
-        .bind(session_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppError> {
     let row: Option<(Uuid, Uuid, Vec<u8>, bool, bool)> = sqlx::query_as(
         "SELECT s.id, s.user_id, s.csrf_hash, \

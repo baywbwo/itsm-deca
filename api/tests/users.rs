@@ -615,3 +615,54 @@ async fn us_1_3_list_users_searches_filters_pages_and_hides_secrets(pool: PgPool
         before + 1
     );
 }
+
+/// CP3c (found end to end): the administrator created by `init-password` is the first account
+/// of a fresh deployment, so it must hold `platform_admin` to create the other users.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_3_initial_admin_from_init_password_can_administer_users(pool: PgPool) {
+    let name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&pool)
+        .await
+        .expect("db");
+    seed::seed_uat(&pool, &name).await.expect("seed");
+    let cfg = state(&pool, "password").config;
+    itsm_api::password_bootstrap::bootstrap(&pool, &cfg, " Admin.Awal ", &name, ADMIN_PASSWORD)
+        .await
+        .expect("bootstrap");
+    let admin_id: Uuid =
+        sqlx::query_scalar("SELECT user_id FROM local_credentials WHERE username='admin.awal'")
+            .fetch_one(&pool)
+            .await
+            .expect("admin");
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM platform_grants WHERE user_id=$1 AND grant_code='platform_admin'",
+            admin_id
+        )
+        .await,
+        1
+    );
+    let (status, cookie, csrf) = login(&pool, "admin.awal", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let a = (cookie, csrf);
+    let (_, session) = call(&pool, "GET", "/api/v1/session", Value::Null, (&a.0, &a.1)).await;
+    assert_eq!(session["platformAdmin"], true);
+    let (status, _) = call(&pool, "GET", "/api/v1/users", Value::Null, (&a.0, &a.1)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (id, _) = create_user(&pool, &a, "pengguna.pertama").await;
+    let actor: Option<Uuid> = sqlx::query_scalar(
+        "SELECT actor_id FROM auth_events WHERE event='user_create' AND user_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("event");
+    assert_eq!(actor, Some(admin_id));
+    // A second bootstrap never adds another administrator.
+    assert!(
+        itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.kedua", &name, ADMIN_PASSWORD)
+            .await
+            .is_err()
+    );
+}

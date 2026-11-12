@@ -152,8 +152,22 @@ pub async fn current(
     }))
 }
 
+/// Ends this session only. In password mode the logout is audited (TM-15, found in CP3c E2E).
 pub async fn logout(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
-    session::revoke(&state.pool, s.id).await?;
+    let mut tx = state.pool.begin().await?;
+    let revoked = sqlx::query(
+        "UPDATE sessions SET revoked_at = now(), revoked_reason = 'logout' \
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(s.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if revoked == 1 && state.config.access_mode == AccessMode::Password {
+        super::password::auth_event(&mut tx, Some(s.user_id), "", "logout", "success", None)
+            .await?;
+    }
+    tx.commit().await?;
     Ok((
         StatusCode::NO_CONTENT,
         [(

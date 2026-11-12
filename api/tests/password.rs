@@ -670,3 +670,44 @@ async fn us_1_6_logout_all_revokes_every_session_and_is_audited(pool: PgPool) {
     assert_eq!(revoked(&pool, "logout_all").await, 2);
     assert_eq!(events(&pool, "logout_all", "success").await, 1);
 }
+
+/// CP3c (found end to end): a plain logout ends only this session, records the reason and is
+/// audited once (TM-15); the other session of the same user keeps working.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_6_logout_revokes_only_this_session_with_reason_and_is_audited(pool: PgPool) {
+    let user = fixture(&pool).await;
+    let other = login_ok(&pool).await;
+    let (_, cookie, csrf, _) = login_csrf(&pool, "synthetic-password-123").await;
+    let logout = |csrf: String| {
+        let (pool, cookie) = (pool.clone(), cookie.clone());
+        async move {
+            let req = Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/session")
+                .header("cookie", cookie)
+                .header("x-csrf-token", csrf)
+                .body(Body::empty())
+                .expect("request");
+            app(state(&pool, "password"))
+                .oneshot(req)
+                .await
+                .expect("response")
+                .status()
+        }
+    };
+    assert_eq!(logout(csrf.clone()).await, StatusCode::NO_CONTENT);
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(workspaces(&pool, &other).await, StatusCode::OK);
+    assert_eq!(revoked(&pool, "logout").await, 1);
+    let actor: Option<Uuid> = sqlx::query_scalar(
+        "SELECT actor_id FROM auth_events WHERE event='logout' AND outcome='success' AND user_id=$1",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .expect("one logout event");
+    assert_eq!(actor, None);
+    // The ended session cannot log out again, so no second event.
+    assert_eq!(logout(csrf).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(events(&pool, "logout", "success").await, 1);
+}
