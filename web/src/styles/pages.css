@@ -117,6 +117,18 @@ button.tno { border: 0; background: none; padding: 0; font: inherit; font-weight
 /* Counts: muted ink, not opacity (opacity fails WCAG contrast on both chip states). */
 .pchip .n { color: var(--muted); font-weight: 700; }
 .pchip[aria-pressed='true'] .n { color: #d6e2f1; }
+/* Wide screens: the toolbar and the chip row stay on one line each (owner prototype 03). */
+@media (min-width: 1360px) {
+  .list-card .ticket-toolbar .toolbar-row { flex-wrap: nowrap; }
+  .list-card .ticket-toolbar .toolbar-search { flex: 1 1 200px; min-width: 160px; }
+  .list-card .ticket-toolbar .toolbar-row > .toolbar-select { flex: 0 1 150px; min-width: 110px; }
+  .list-card .ticket-toolbar .toolbar-row > .toolbar-select .field-control { width: 100%; }
+  .toolbar-tools { flex: none; flex-wrap: nowrap; }
+  .chip-rows { flex-wrap: nowrap; gap: 8px 10px; }
+  .chip-rows .pchips { gap: 4px; }
+  .chip-rows .pchips.presets { flex: none; }
+  .chip-rows .pchip { padding: 4px 7px; min-height: 28px; font-size: 11px; }
+}
 .ppager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 11px 16px; border-top: 1px solid var(--line-soft); font-size: 12px; color: var(--muted); }
 .ppager .r { margin-left: auto; display: flex; gap: 6px; }
 .basis-foot { border-top: 1px solid var(--line-soft); font-size: 11.5px; color: var(--muted); padding-top: 10px; }

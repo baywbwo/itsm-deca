@@ -386,7 +386,7 @@ function AttentionTable({ api, d }: { api: Api; d: Dashboard }) {
           {s.items.map((r) => (
             <tr key={r.id}>
               <td><a className="tno" href={toHash({ workspaceId: d.workspaceId, page: 'tickets', query: withDetail('', r.id, true) })}>{r.displayNumber}</a></td>
-              <td><span className="tsub">{r.subject}</span><span className="tmeta">{[r.priority?.label, r.category?.label].filter(Boolean).join(' · ') || 'Belum ditugaskan'}</span></td>
+              <td><span className="tsub">{r.subject}</span><span className="tmeta">{r.priority?.label ?? 'Tanpa prioritas'} · {r.category?.label ?? 'Tanpa kategori'}</span></td>
               <td><Badge tone={statusTone(r.status)}>{r.status.label}</Badge></td>
               <td className="nowrap"><b>{ageLabel(r.ageSeconds)}</b></td>
             </tr>
