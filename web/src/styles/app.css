@@ -17,8 +17,10 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
 }
 :root[data-brand='deca'] {
-  --accent: #244f37; --accent-hover: #183c27; --soft: #edf7e8;
-  --nav-current: #edf8e7; --nav-ink: #254f31; --kpi: #163961;
+  --accent: #003571; --accent-hover: #002a5a; --soft: #d5fdc8;
+  --nav-current: #e7eef8; --nav-ink: #003571; --kpi: #003571;
+  /* QASH 2025: gradien resmi -45° (Qash Green → Volt Blue), hanya untuk aksen dekoratif. */
+  --brand-stripe: linear-gradient(-45deg, #58ea60, #0077ff);
 }
 /* AJR: purple carries text and buttons; magenta and yellow are decoration only (never text). */
 :root[data-brand='ajr'] {
