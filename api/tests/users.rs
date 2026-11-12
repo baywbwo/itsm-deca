@@ -571,6 +571,7 @@ async fn us_1_3_list_users_searches_filters_pages_and_hides_secrets(pool: PgPool
         keys,
         [
             "active",
+            "company",
             "createdAt",
             "deactivatedAt",
             "displayName",
