@@ -72,8 +72,11 @@ a.kpi2:hover { border-color: var(--sapphire); }
 .tno { font-weight: 800; color: var(--sapphire); text-decoration: none; }
 a.tno:hover, button.tno:hover { text-decoration: underline; }
 button.tno { border: 0; background: none; padding: 0; font: inherit; font-weight: 800; color: var(--sapphire); cursor: pointer; }
-.tsub { font-weight: 700; color: var(--ink); white-space: normal; min-width: 220px; max-width: 420px; }
+.tsub { display: block; font-weight: 700; color: var(--ink); white-space: normal; max-width: 420px; }
 .tmeta { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+/* Beats the older table.tickets cell rules: one-line cells, only the subject wraps (min 260 px). */
+.ptable table.tickets td, .ptable table.tickets td .badge { white-space: nowrap; }
+.ptable table.tickets td.subj { white-space: normal; min-width: 260px; }
 .ptable .subj { white-space: normal; }
 .nowrap { white-space: nowrap; }
 .muted-cell { color: var(--muted); }
