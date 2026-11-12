@@ -16,6 +16,7 @@ fn state(pool: &PgPool, mode: &str) -> AppState {
         ("ITSM_ACCESS_MODE", mode),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
+        ("ITSM_MFA", "on"),
         // Synthetic test-only MFA key material (US-1.2): admins must enrol before administering.
         (
             "ITSM_KEYRING",
@@ -749,6 +750,14 @@ async fn cp4b_sensitive_user_admin_needs_a_fresh_step_up(pool: PgPool) {
     let (_, temp) = create_user(&pool, &a, "fresh.step@example.test").await;
     assert!(!temp.is_empty());
     expire_step_up(&pool, admin_id).await;
+    sqlx::query(
+        "UPDATE local_credentials SET failed_attempts=5, locked_until=now()+interval '15 minutes' \
+         WHERE user_id=$1",
+    )
+    .bind(plain)
+    .execute(&pool)
+    .await
+    .expect("lock");
     // A UAT Superadmin grant changes nothing in password mode (the grant counts only in UAT mode).
     sqlx::query("INSERT INTO platform_grants(user_id,grant_code) VALUES($1,'uat_superadmin')")
         .bind(admin_id)
@@ -776,6 +785,8 @@ async fn cp4b_sensitive_user_admin_needs_a_fresh_step_up(pool: PgPool) {
             format!("/api/v1/users/{plain}/mfa-reset"),
             json!({"reason": "Perangkat hilang (uji sintetis)"}),
         ),
+        // Unlock needs a step-up too (04-fsd, S-12; decided after CP4b).
+        ("POST", format!("/api/v1/users/{plain}/unlock"), Value::Null),
     ] {
         let (status, body) = call(&pool, method, &path, body, (&a.0, &a.1)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
@@ -799,16 +810,25 @@ async fn cp4b_sensitive_user_admin_needs_a_fresh_step_up(pool: PgPool) {
         .await,
         1
     );
-    // Unlock is not a step-up action (04b E1).
-    let (status, _) = call(
-        &pool,
-        "POST",
-        &format!("/api/v1/users/{plain}/unlock"),
-        Value::Null,
-        (&a.0, &a.1),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM local_credentials WHERE user_id=$1 AND locked_until > now()",
+            plain
+        )
+        .await,
+        1,
+        "unlock refused without step-up leaves the lock"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM auth_events WHERE user_id=$1 AND event='user_unlock'",
+            plain
+        )
+        .await,
+        0
+    );
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]

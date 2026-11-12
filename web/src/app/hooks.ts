@@ -26,10 +26,12 @@ export type Boot =
   | { status: 'loading' }
   | { status: 'ready'; meta: Meta; session: Session; workspaces: Workspace[] }
   | { status: 'no_access'; meta: Meta }
+  /** US-1.2 (TM-02 b): a role that needs MFA without an authenticator may only enrol (and log out). */
+  | { status: 'mfa_setup'; meta: Meta; session: Session }
+  /** PR #18: an enrolled MFA role whose session predates verification (403 on workspaces) logs in again. */
+  | { status: 'mfa_relogin'; meta: Meta; session: Session }
   /** US-1.4: only the change-password screen (and logout) until the password is changed. */
   | { status: 'must_change'; meta: Meta; session: Session }
-  | { status: 'mfa_setup'; meta: Meta; session: Session }
-  | { status: 'mfa_relogin'; meta: Meta; session: Session }
   | { status: 'error'; error: unknown };
 
 /**
@@ -48,12 +50,16 @@ export async function loadBoot(api: Api, signal: AbortSignal): Promise<Boot> {
     if (meta.accessMode === 'password') return { status: 'no_access', meta };
     session = await api.enterUat(signal);
   }
-  if (session.mfaRequired && !session.mfaEnrolled) return { status: 'mfa_setup', meta, session };
+  // MFA first, then the forced password change: the server checks them in that order.
+  // ITSM_MFA=off (default) leaves mfaEnabled false: no enrolment gate and no MFA re-login.
+  const mfaGate = meta.accessMode === 'password' && session.mfaEnabled && session.mfaRequired;
+  if (mfaGate && !session.mfaEnrolled) return { status: 'mfa_setup', meta, session };
   if (session.mustChangePassword) return { status: 'must_change', meta, session };
   let workspaces: Workspace[];
-  try { workspaces = await api.listWorkspaces(signal); }
-  catch (e) {
-    if (session.mfaRequired && e instanceof ApiError && e.status === 403) return { status: 'mfa_relogin', meta, session };
+  try {
+    workspaces = await api.listWorkspaces(signal);
+  } catch (e) {
+    if (mfaGate && e instanceof ApiError && e.status === 403) return { status: 'mfa_relogin', meta, session };
     throw e;
   }
   return { status: 'ready', meta, session, workspaces };

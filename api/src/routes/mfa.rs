@@ -38,7 +38,7 @@ pub(crate) async fn status(
 }
 
 fn keys(state: &AppState) -> Result<Arc<MfaKeys>, AppError> {
-    if state.config.access_mode != AccessMode::Password {
+    if state.config.access_mode != AccessMode::Password || !state.config.mfa_enabled {
         return Err(AppError::NotFound);
     }
     state.config.mfa.clone().ok_or_else(|| {
@@ -358,7 +358,7 @@ pub async fn login_mfa(
 
 /// GET /me/mfa
 pub async fn get_status(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
-    if state.config.access_mode != AccessMode::Password {
+    if state.config.access_mode != AccessMode::Password || !state.config.mfa_enabled {
         return Err(AppError::NotFound);
     }
     let mut conn = state.pool.acquire().await?;

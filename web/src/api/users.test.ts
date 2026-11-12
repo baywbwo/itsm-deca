@@ -7,7 +7,7 @@ import { userWriteError } from '../app/users';
 // Synthetic data only; the temporary password is a placeholder string.
 const item = {
   id: 'u-2', username: 'budi.santoso', displayName: 'Budi Santoso', email: 'budi@contoh.test', active: true,
-  mustChangePassword: true, locked: false, platformAdmin: false, createdAt: '2026-11-12T03:00:00Z', deactivatedAt: null,
+  mustChangePassword: true, locked: false, platformAdmin: false, mfaEnrolled: false, createdAt: '2026-11-12T03:00:00Z', deactivatedAt: null,
 };
 const TEMP = 'contoh-sandi-sementara-0001';
 
@@ -72,6 +72,7 @@ describe('CP3b user administration client', () => {
     expect(isUserCreated({ user: { id: 'u', username: 'a', displayName: 'A', active: true, mustChangePassword: true } })).toBe(false);
     expect(isUserList({ items: [item], nextCursor: null })).toBe(true);
     expect(isUserList({ items: [{ ...item, locked: undefined }], nextCursor: null })).toBe(false);
+    expect(isUserList({ items: [{ ...item, mfaEnrolled: undefined }], nextCursor: null })).toBe(false);
     // The list never carries secrets; an unexpected extra field is ignored, not shown.
     expect(Object.keys(item)).not.toContain('passwordHash');
   });

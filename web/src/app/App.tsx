@@ -7,7 +7,8 @@ import { Icon, type IconName } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
-import { AccountMenu, ChangePasswordScreen, LoginScreen, MfaSetupScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { MfaEnrolScreen, MfaReloginScreen, StepUpDialog } from '../pages/MfaScreens';
 import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
@@ -61,8 +62,12 @@ export function App({ api }: { api: Api }) {
   if (boot.status === 'no_access') {
     return <LoginScreen api={api} meta={boot.meta} notice={notice} onSuccess={loggedIn} />;
   }
-  if (boot.status === 'mfa_setup' || boot.status === 'mfa_relogin') {
-    return <MfaSetupScreen api={api} reauthenticate={boot.status === 'mfa_relogin'} onDone={retry} />;
+  if (boot.status === 'mfa_relogin') {
+    return <MfaReloginScreen onLogout={() => { void api.logout().finally(retry); }} />;
+  }
+  if (boot.status === 'mfa_setup') {
+    return <MfaEnrolScreen api={api} session={boot.session} onDone={retry}
+      onLogout={() => { void api.logout().finally(retry); }} />;
   }
   if (boot.status === 'must_change') {
     return <ChangePasswordScreen api={api} session={boot.session} username={username} onChanged={retry}
@@ -271,10 +276,11 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
               </Popover>
               <AccountMenu api={api} session={session} role={role} passwordMode={meta.accessMode === 'password'}
                 username={username} onLoggedOutAll={onLoggedOutAll} onLogout={logout} onNotice={setToast} />
+              <StepUpDialog api={api} />
             </div>
           </header>
           <div className="content">
-          <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
+          <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} mfaEnabled={session.mfaEnabled} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
@@ -377,9 +383,10 @@ function Profile({ session, role }: { session: Session; role: string }) {
   );
 }
 
-function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, listed, onWorkspacesChanged, onRetry, onReenter, onNotice }: {
+function Content({ api, userId, mfaEnabled, scope, page, pages, query, uat, firstWorkspace, listed, onWorkspacesChanged, onRetry, onReenter, onNotice }: {
   api: Api;
   userId: string;
+  mfaEnabled: boolean;
   scope: ReturnType<typeof useScope>;
   page: PageDef;
   pages: PageDef[];
@@ -424,7 +431,7 @@ function Content({ api, userId, scope, page, pages, query, uat, firstWorkspace, 
   return (
     <PageChunkBoundary key={page.id}>
       <Suspense fallback={<LoadingState label="Memuat halaman…" />}>
-        <Page id={page.id} api={api} userId={userId} data={data} query={query} uat={uat} onNotice={onNotice}
+        <Page id={page.id} api={api} userId={userId} mfaEnabled={mfaEnabled} data={data} query={query} uat={uat} onNotice={onNotice}
           onWorkspacesChanged={onWorkspacesChanged} />
       </Suspense>
     </PageChunkBoundary>
@@ -450,8 +457,8 @@ class PageChunkBoundary extends Component<{ children: ReactNode }, { failed: boo
   }
 }
 
-function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged }: {
-  id: PageId; api: Api; userId: string; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
+function Page({ id, api, userId, mfaEnabled, data, query, uat, onNotice, onWorkspacesChanged }: {
+  id: PageId; api: Api; userId: string; mfaEnabled: boolean; data: ScopeData; query: string; uat: boolean; onNotice: (text: string) => void;
   onWorkspacesChanged: () => void;
 }) {
   switch (id) {
@@ -469,7 +476,7 @@ function Page({ id, api, userId, data, query, uat, onNotice, onWorkspacesChanged
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'users':
-      return <UsersPage api={api} userId={userId} onNotice={onNotice} />;
+      return <UsersPage api={api} userId={userId} mfaEnabled={mfaEnabled} onNotice={onNotice} />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }

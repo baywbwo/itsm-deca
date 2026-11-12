@@ -118,6 +118,10 @@ export type UserCreateRequest = NonNullable<operations['createUser']['requestBod
 export type UserCreated = Body<'createUser', 201>;
 export type TemporaryPassword = Body<'resetUserPassword', 200>;
 export type UserDeactivated = Body<'updateUser', 200>;
+// CP4c (US-1.2) own MFA.
+export type MfaStatus = S['MfaStatus'];
+export type MfaEnrollment = S['MfaEnrollment'];
+export type RecoveryCodes = S['RecoveryCodes'];
 /* D18 — setelan koneksi LLM & MCP (tanpa rahasia di klien). */
 export type AiProviderView = S['AiProviderView'];
 export type AiSettingsView = S['AiSettingsView'];

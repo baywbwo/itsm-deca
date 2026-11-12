@@ -10,7 +10,7 @@ import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { initials } from '../app/labels';
-import { ACTIVE_FILTERS, userWriteError, type ActiveFilter, type UserWriteError } from '../app/users';
+import { ACTIVE_FILTERS, MFA_RESET_REASON_MAX, userWriteError, validateMfaResetReason, type ActiveFilter, type UserWriteError } from '../app/users';
 import { ConfirmDialog, useLoad } from './adminKit';
 
 /** A temporary password on screen: only while its dialog is open, never logged or kept after. */
@@ -18,13 +18,36 @@ interface Secret { title: string; who: string; username: string; password: strin
 
 const CREATED = new Intl.DateTimeFormat('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 
-type Pending = { kind: 'reset' | 'deactivate'; user: UserListItem };
+type Pending = { kind: 'reset' | 'deactivate' | 'unlock' | 'mfa_reset'; user: UserListItem };
+
+/** CP4c confirmation words per action (reset/unlock/MFA reset need a fresh step-up on the server). */
+const CONFIRM: Record<Pending['kind'], { title: (n: string) => string; impact: string; label: string }> = {
+  reset: {
+    title: (n) => `Reset kata sandi ${n}?`, label: 'Reset kata sandi',
+    impact: 'Kata sandi lama tidak berlaku lagi dan semua sesi pengguna ini diakhiri. Kata sandi sementara baru ditampilkan sekali; pengguna wajib menggantinya saat masuk.',
+  },
+  deactivate: {
+    title: (n) => `Nonaktifkan ${n}?`, label: 'Nonaktifkan',
+    impact: 'Pengguna ini tidak dapat masuk lagi dan semua sesinya diakhiri. Riwayat tiket dan audit tetap tersimpan. Pengaktifan kembali belum tersedia di aplikasi.',
+  },
+  unlock: {
+    title: (n) => `Buka kunci ${n}?`, label: 'Buka kunci',
+    impact: 'Kunci karena salah kata sandi atau salah kode autentikator dihapus sebelum waktunya. Sesi pengguna tidak berubah.',
+  },
+  mfa_reset: {
+    title: (n) => `Reset MFA ${n}?`, label: 'Reset MFA',
+    impact: 'Autentikator dan semua recovery code pengguna ini dihapus, dan semua sesinya diakhiri. Bila perannya wajib MFA, pengguna harus mendaftarkan autentikator lagi saat masuk.',
+  },
+};
 
 /**
  * CP3b platform user administration (US-1.3/1.5/1.7, password mode, platform_admin only). The
  * server decides access; this page only exists in the nav when the session says platformAdmin.
  */
-export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string; onNotice: (t: string) => void }) {
+/** `mfaEnabled` false (server ITSM_MFA off, the default): no MFA badge and no Reset MFA. */
+export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
+  api: Api; userId: string; mfaEnabled: boolean; onNotice: (t: string) => void;
+}) {
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
   const [active, setActive] = useState<ActiveFilter>('all');
@@ -40,6 +63,9 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
   const [pending, setPending] = useState<Pending | null>(null);
   const [actionError, setActionError] = useState<UserWriteError | null>(null);
   const [secret, setSecret] = useState<Secret | null>(null);
+  const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState<string | undefined>();
+  const reasonId = useId();
 
   useEffect(() => { setMore(null); setMoreError(null); setChanged({}); }, [key]);
 
@@ -74,6 +100,20 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
         setSecret({ title: 'Kata sandi sementara baru', who: name, username: p.user.username ?? '', password: r.temporaryPassword });
         setChanged((c) => ({ ...c, [p.user.id]: { ...p.user, mustChangePassword: true, locked: false } }));
         onNotice(`Kata sandi ${name} direset; semua sesinya diakhiri. Tercatat di audit.`);
+      } else if (p.kind === 'unlock') {
+        await api.unlockUser(p.user.id);
+        setPending(null);
+        setChanged((c) => ({ ...c, [p.user.id]: { ...p.user, locked: false } }));
+        onNotice(`Kunci ${name} dibuka. Tercatat di audit.`);
+      } else if (p.kind === 'mfa_reset') {
+        const invalid = validateMfaResetReason(reason);
+        setReasonError(invalid ?? undefined);
+        if (invalid) return;
+        await api.resetUserMfa(p.user.id, reason.trim());
+        setPending(null);
+        setReason('');
+        setChanged((c) => ({ ...c, [p.user.id]: { ...p.user, mfaEnrolled: false } }));
+        onNotice(`MFA ${name} direset; semua sesinya diakhiri. Tercatat di audit.`);
       } else {
         await api.deactivateUser(p.user.id);
         setPending(null);
@@ -160,6 +200,7 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                         {u.platformAdmin && <Badge tone="blue">Admin platform</Badge>}
                         {u.active && u.mustChangePassword && <Badge tone="waiting">Wajib ganti sandi</Badge>}
                         {u.active && u.locked && <Badge tone="error">Terkunci</Badge>}
+                        {mfaEnabled && u.username && <Badge tone={u.mfaEnrolled ? 'violet' : 'neutral'}>{u.mfaEnrolled ? 'MFA aktif' : 'Belum MFA'}</Badge>}
                     </div>
                   ),
                 },
@@ -169,14 +210,23 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                   cell: (u) => {
                     if (u.id === userId) return <span className="tiny muted">Pakai menu akun</span>;
                     if (!u.active) return <span className="tiny muted">—</span>;
+                    const ask = (kind: Pending['kind']) => {
+                      setActionError(null); setReason(''); setReasonError(undefined); setPending({ kind, user: u });
+                    };
                     return (
                       <div className="row usr-actions">
+                        {u.locked && (
+                          <Button className="btn-small" aria-label={`Buka kunci ${u.displayName}`} onClick={() => ask('unlock')}>Buka kunci</Button>
+                        )}
+                        {mfaEnabled && u.username && u.mfaEnrolled && (
+                          <Button className="btn-small" aria-label={`Reset MFA ${u.displayName}`} onClick={() => ask('mfa_reset')}>Reset MFA</Button>
+                        )}
                         {u.username && (
                           <Button className="btn-small" aria-label={`Reset kata sandi ${u.displayName}`}
-                            onClick={() => { setActionError(null); setPending({ kind: 'reset', user: u }); }}>Reset kata sandi</Button>
+                            onClick={() => ask('reset')}>Reset kata sandi</Button>
                         )}
                         <Button className="btn-small" aria-label={`Nonaktifkan ${u.displayName}`}
-                          onClick={() => { setActionError(null); setPending({ kind: 'deactivate', user: u }); }}>Nonaktifkan</Button>
+                          onClick={() => ask('deactivate')}>Nonaktifkan</Button>
                       </div>
                     );
                   },
@@ -204,13 +254,21 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
       )}
       {pending && (
         <ConfirmDialog
-          title={pending.kind === 'reset' ? `Reset kata sandi ${pending.user.displayName}?` : `Nonaktifkan ${pending.user.displayName}?`}
-          impact={pending.kind === 'reset'
-            ? 'Kata sandi lama tidak berlaku lagi dan semua sesi pengguna ini diakhiri. Kata sandi sementara baru ditampilkan sekali; pengguna wajib menggantinya saat masuk.'
-            : 'Pengguna ini tidak dapat masuk lagi dan semua sesinya diakhiri. Riwayat tiket dan audit tetap tersimpan. Pengaktifan kembali belum tersedia di aplikasi.'}
-          confirmLabel={pending.kind === 'reset' ? 'Reset kata sandi' : 'Nonaktifkan'}
+          title={CONFIRM[pending.kind].title(pending.user.displayName)}
+          impact={CONFIRM[pending.kind].impact}
+          confirmLabel={CONFIRM[pending.kind].label}
           onConfirm={() => confirm(pending)} onClose={() => { setPending(null); setActionError(null); }}>
           <p className="tiny muted">{pending.user.username ?? 'Tanpa kata sandi lokal'}{pending.user.email ? ` · ${pending.user.email}` : ''}</p>
+          {pending.kind === 'mfa_reset' && (
+            <div className="field">
+              <label htmlFor={`${reasonId}-reason`}>Alasan (wajib, tercatat di audit)</label>
+              <textarea id={`${reasonId}-reason`} className="field-control" rows={3} value={reason} maxLength={MFA_RESET_REASON_MAX}
+                aria-invalid={reasonError ? true : undefined} aria-describedby={reasonError ? `${reasonId}-reason-error` : undefined}
+                onChange={(e) => setReason(e.target.value)} />
+              {reasonError && <span id={`${reasonId}-reason-error`} className="field-error">{reasonError}</span>}
+            </div>
+          )}
+          <p className="tiny muted">Bila diminta, verifikasi ulang dengan kode autentikator Anda.</p>
           {actionError && <p role="alert" className="auth-error">{actionError.text}</p>}
         </ConfirmDialog>
       )}

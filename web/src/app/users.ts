@@ -1,7 +1,16 @@
 import { ApiError, isSessionReloadNeeded, rateLimitText, sessionReloadText } from '../api/client';
 
 /** CP3b user administration actions, for the words of a refusal. */
-export type UserAction = 'create' | 'reset' | 'deactivate';
+export type UserAction = 'create' | 'reset' | 'deactivate' | 'unlock' | 'mfa_reset';
+
+/** CP4c: the Reset MFA reason (TM-02 g), 1–500 characters after trimming. */
+export const MFA_RESET_REASON_MAX = 500;
+export function validateMfaResetReason(reason: string): string | null {
+  const n = reason.trim().length;
+  if (n === 0) return 'Alasan wajib diisi.';
+  if (n > MFA_RESET_REASON_MAX) return `Alasan maksimal ${MFA_RESET_REASON_MAX} karakter.`;
+  return null;
+}
 
 export type UserField = 'username' | 'displayName' | 'email';
 
@@ -34,6 +43,10 @@ export function userWriteError(e: unknown, action: UserAction): UserWriteError {
       return { field: 'email', text: 'Email sudah dipakai akun lain.', reload: false };
     case 'last_admin':
       return msg('Tidak dapat menonaktifkan admin platform terakhir. Harus tetap ada minimal satu admin platform aktif.');
+    case 'step_up_required':
+      return msg('Verifikasi ulang dibatalkan atau belum berhasil. Tidak ada yang berubah.');
+    case 'self_mfa_reset':
+      return msg('MFA akun sendiri tidak direset dari sini. Pakai menu akun → Keamanan akun.');
     case 'user_inactive':
       return msg(action === 'reset'
         ? 'Pengguna ini sudah nonaktif; kata sandinya tidak dapat direset. Daftar dimuat ulang.'
@@ -42,6 +55,7 @@ export function userWriteError(e: unknown, action: UserAction): UserWriteError {
       break;
   }
   if (e.status === 422 && isField(e.field)) return { field: e.field, text: FIELD_TEXT[e.field], reload: false };
+  if (e.status === 422 && e.field === 'reason') return msg(`Alasan wajib diisi, maksimal ${MFA_RESET_REASON_MAX} karakter.`);
   if (e.status === 429) return msg(`${rateLimitText(e)} Tidak ada yang berubah.`);
   if (e.status === 403) return msg('Hanya admin platform yang dapat mengelola pengguna. Tidak ada yang berubah.');
   if (e.status === 404) return msg('Pengguna tidak ditemukan atau tidak memiliki kata sandi lokal. Daftar dimuat ulang.', true);

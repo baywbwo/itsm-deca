@@ -92,7 +92,11 @@ pub struct Config {
     pub report_max_rows: i64,
     /// Per-process request rate limits (see `rate_limit`).
     pub rate_limit: RateLimitConfig,
-    /// US-1.2 MFA keys: `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
+    /// `ITSM_MFA=on|off` (default off, owner 2026-11-12: plain password login). Off = no login
+    /// challenge, no pre-MFA session, no step-up, MFA endpoints answer 404 and the keys below are
+    /// neither required nor loaded. Stored factors stay in the database for a later re-enable.
+    pub mfa_enabled: bool,
+    /// US-1.2 MFA keys (only with `ITSM_MFA=on`): `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
     /// `ITSM_MFA_RECOVERY_PEPPER` (recovery-code HMAC). Required in production; absent in UAT
     /// = MFA endpoints answer 503 and users who must use MFA cannot finish signing in.
     pub mfa: Option<std::sync::Arc<crate::mfa::MfaKeys>>,
@@ -282,11 +286,17 @@ impl Config {
             },
         };
 
+        let mfa_enabled = match optional("ITSM_MFA").as_deref() {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(_) => return Err(ConfigError::Invalid { name: "ITSM_MFA" }),
+        };
         let mfa = match (
             optional("ITSM_KEYRING"),
             optional("ITSM_KEYRING_ACTIVE"),
             optional("ITSM_MFA_RECOVERY_PEPPER"),
         ) {
+            _ if !mfa_enabled => None,
             (None, None, None) if environment == Environment::Uat => None,
             (keyring, active, pepper) => {
                 let keyring = crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
@@ -323,6 +333,7 @@ impl Config {
             outbox_poll_ms,
             report_max_rows,
             rate_limit,
+            mfa_enabled,
             mfa,
         })
     }
@@ -419,6 +430,7 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_MFA", "on"),
         ];
         assert_eq!(
             Config::from_map(&vars(&prod)).err(),
@@ -448,15 +460,17 @@ mod tests {
 
     #[test]
     fn uat_without_mfa_keys_starts_but_partial_keys_are_refused() {
-        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
-        assert!(matches!(&cfg, Ok(c) if c.mfa.is_none()));
-        let mut v = base();
+        let mut on = base();
+        on.push(("ITSM_MFA", "on"));
+        let cfg = Config::from_map(&vars(&on)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.mfa.is_none() && c.mfa_enabled));
+        let mut v = on.clone();
         v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
             Some(ConfigError::Missing("ITSM_KEYRING"))
         );
-        let mut v = base();
+        let mut v = on.clone();
         v.push(("ITSM_KEYRING", "k1:bad"));
         v.push(("ITSM_KEYRING_ACTIVE", "k1"));
         assert_eq!(
@@ -464,6 +478,28 @@ mod tests {
             Some(ConfigError::Invalid {
                 name: "ITSM_KEYRING"
             })
+        );
+    }
+
+    #[test]
+    fn mfa_is_off_by_default_and_then_needs_no_keys() {
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
+        let mut v = prod.clone();
+        v.push(("ITSM_MFA", "off"));
+        v.push(("ITSM_KEYRING", "k1:bad"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
+        let mut v = prod.clone();
+        v.push(("ITSM_MFA", "yes"));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid { name: "ITSM_MFA" })
         );
     }
 

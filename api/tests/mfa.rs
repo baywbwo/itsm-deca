@@ -27,6 +27,7 @@ fn state(pool: &PgPool, keys: bool) -> AppState {
         ("ITSM_ACCESS_MODE", "password"),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
+        ("ITSM_MFA", "on"),
     ];
     if keys {
         pairs.extend([

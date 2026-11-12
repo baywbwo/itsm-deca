@@ -50,6 +50,9 @@ import {
   isUserCreated,
   isUserDeactivated,
   isUserList,
+  isMfaStatus,
+  isMfaEnrollment,
+  isRecoveryCodes,
 } from './guards';
 import type {
   ActivityPage,
@@ -129,6 +132,9 @@ import type {
   UserCreated,
   UserDeactivated,
   UserList,
+  MfaStatus,
+  MfaEnrollment,
+  RecoveryCodes,
 } from './types';
 
 export interface TransportRequest {
@@ -149,10 +155,6 @@ export interface TransportResponse {
 export type Transport = (req: TransportRequest) => Promise<TransportResponse>;
 
 /** Failure with a stable code; `status` 0 means the network or the payload shape failed. */
-export class MfaChallenge extends Error {
-  constructor(readonly challengeId: string) { super("Verifikasi MFA diperlukan"); }
-}
-
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -163,9 +165,22 @@ export class ApiError extends Error {
     readonly field: string | null = null,
     /** rate_limited only: seconds until the server accepts the next request (Retry-After). */
     readonly retryAfterSeconds: number | null = null,
+    /** mfa_required only (password login): the single-use challenge for the second step. */
+    readonly challengeId: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
+  }
+}
+
+/**
+ * 401 mfa_required at password login (PR #18): the second step's challenge. Still an ApiError with
+ * code mfa_required, so callers that check the code keep working. Only reachable with ITSM_MFA=on.
+ */
+export class MfaChallenge extends ApiError {
+  constructor(challengeId: string, requestId: string | null = null) {
+    super(401, 'mfa_required', 'Verifikasi MFA diperlukan', requestId, null, null, challengeId);
+    this.name = 'MfaChallenge';
   }
 }
 
@@ -282,10 +297,24 @@ export function createApi(transport: Transport) {
   }
   const toSession = (v: Session): Session => ({
     user: v.user, banner: v.banner, uatSuperadmin: v.uatSuperadmin, mustChangePassword: v.mustChangePassword === true,
-    platformAdmin: v.platformAdmin === true, mfaEnrolled: v.mfaEnrolled === true, mfaRequired: v.mfaRequired === true,
+    platformAdmin: v.platformAdmin === true, mfaEnabled: v.mfaEnabled === true, mfaEnrolled: v.mfaEnrolled === true, mfaRequired: v.mfaRequired === true,
   });
 
   const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login', '/api/v1/login/mfa']);
+
+  // CP4c (A-9): a 401 step_up_required is answered before the handler changes anything (the
+  // guard runs after the permission check, before validation and writes). The registered prompt
+  // asks for a code once (shared by concurrent refusals); after a successful step-up the same
+  // request is sent exactly once more. Cancel, or no prompt, returns the refusal to the caller.
+  let stepUpPrompt: (() => Promise<boolean>) | null = null;
+  let stepUpPending: Promise<boolean> | null = null;
+  const needsStepUp = (r: TransportResponse) =>
+    r.status === 401 && isErrorBody(r.body) && r.body.error.code === 'step_up_required';
+  function askStepUp(): Promise<boolean> {
+    if (!stepUpPrompt) return Promise.resolve(false);
+    stepUpPending ??= stepUpPrompt().catch(() => false).finally(() => { stepUpPending = null; });
+    return stepUpPending;
+  }
 
   // Shared by concurrent callers; each caller still stops at its own abort or timeout.
   function refreshCsrf(signal?: AbortSignal): Promise<string> {
@@ -317,19 +346,20 @@ export function createApi(transport: Transport) {
   }
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
-    const res = await send(req);
-    if (res.status === 401 && isErrorBody(res.body) && res.body.error.code === 'mfa_required') {
-      const challenge = (res.body.error as { challengeId?: unknown }).challengeId;
-      if (typeof challenge === 'string') throw new MfaChallenge(challenge);
-    }
+    let res = await send(req);
+    if (needsStepUp(res) && req.path !== '/api/v1/session/step-up' && (await askStepUp())) res = await send(req);
     if (endsSession(res)) sessionEnded();
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
-      const { field, retryAfterSeconds: wait } = res.body.error as { field?: unknown; retryAfterSeconds?: unknown };
+      const { field, retryAfterSeconds: wait, challengeId } = res.body.error as { field?: unknown; retryAfterSeconds?: unknown; challengeId?: unknown };
+      if (res.status === 401 && res.body.error.code === 'mfa_required' && typeof challengeId === 'string') {
+        throw new MfaChallenge(challengeId, res.requestId);
+      }
       throw new ApiError(res.status, res.body.error.code, res.body.error.message, res.requestId,
         typeof field === 'string' ? field : null,
-        typeof wait === 'number' && Number.isFinite(wait) ? wait : null);
+        typeof wait === 'number' && Number.isFinite(wait) ? wait : null,
+        typeof challengeId === 'string' ? challengeId : null);
     }
     if (okStatus) {
       throw new ApiError(0, 'bad_response', 'Respons server tidak sesuai kontrak.', res.requestId);
@@ -353,21 +383,48 @@ export function createApi(transport: Transport) {
       sessionActive = true;
       return toSession(issued);
     },
-    async loginMfa(challengeId: string, code: string, recovery = false): Promise<Session> {
-      const issued = await call({ method: 'POST', path: '/api/v1/login/mfa', headers: { 'X-ITSM-Login': '1' },
-        body: { challengeId, ...(recovery ? { recoveryCode: code } : { code }) } }, isSessionIssued);
+    /**
+     * US-1.2 second login step after a 401 mfa_required (`ApiError.challengeId`): exactly one of
+     * a 6-digit TOTP code or a recovery code. Every refusal is 401 mfa_invalid; 410
+     * mfa_challenge_expired means the password step starts over.
+     */
+    async loginMfa(challengeId: string, factor: { code: string } | { recoveryCode: string }): Promise<Session> {
+      const issued = await call({
+        method: 'POST', path: '/api/v1/login/mfa', headers: { 'X-ITSM-Login': '1' }, body: { challengeId, ...factor },
+      }, isSessionIssued, 200);
       csrfToken = issued.csrfToken;
       sessionActive = true;
       return toSession(issued);
     },
-    startMfaEnrollment: () => call({ method: 'POST', path: '/api/v1/me/mfa/enrollment', headers: csrf() },
-      (v: unknown): v is { enrollmentId: string; otpauthUri: string; expiresAt: string } => !!v && typeof v === 'object' &&
-        'enrollmentId' in v && typeof v.enrollmentId === 'string' && 'otpauthUri' in v && typeof v.otpauthUri === 'string' &&
-        'expiresAt' in v && typeof v.expiresAt === 'string', 201),
-    confirmMfaEnrollment: (id: string, code: string) => call({ method: 'POST', path: `/api/v1/me/mfa/enrollment/${encodeURIComponent(id)}/confirm`,
-      headers: csrf(), body: { code } },
-      (v: unknown): v is { recoveryCodes: string[] } => !!v && typeof v === 'object' && 'recoveryCodes' in v &&
-        Array.isArray(v.recoveryCodes) && v.recoveryCodes.every(c => typeof c === 'string')),
+    /** US-1.2: own MFA state (allowed in a pre-MFA session). Never carries the seed or codes. */
+    getMyMfa: (signal?: AbortSignal): Promise<MfaStatus> => get('/api/v1/me/mfa', isMfaStatus, signal),
+    /** US-1.2: a new TOTP seed as an otpauth URI, shown once; confirm within 10 minutes. */
+    startMfaEnrollment: (): Promise<MfaEnrollment> =>
+      call({ method: 'POST', path: '/api/v1/me/mfa/enrollment', headers: csrf() }, isMfaEnrollment, 201),
+    /** US-1.2: first valid code activates MFA, verifies this session and returns 10 recovery codes once. */
+    confirmMfaEnrollment: (enrollmentId: string, code: string): Promise<RecoveryCodes> =>
+      call({
+        method: 'POST', path: `/api/v1/me/mfa/enrollment/${encodeURIComponent(enrollmentId)}/confirm`, headers: csrf(), body: { code },
+      }, isRecoveryCodes, 200),
+    /** New batch of 10 recovery codes (step-up); every earlier code is spent. */
+    regenerateRecoveryCodes: (): Promise<RecoveryCodes> =>
+      call({ method: 'POST', path: '/api/v1/me/mfa/recovery-codes', headers: csrf() }, isRecoveryCodes, 201),
+    /** Removes the own authenticator (step-up); 409 mfa_required_for_role when MFA is mandatory. */
+    deleteMyMfa: async (): Promise<void> => {
+      await call({ method: 'DELETE', path: '/api/v1/me/mfa', headers: csrf() }, isEmpty, 204);
+    },
+    /** A-9: re-enter a TOTP or recovery code; sensitive actions are open for 5 minutes. */
+    stepUp: async (code: string): Promise<void> => {
+      await call({ method: 'POST', path: '/api/v1/session/step-up', headers: csrf(), body: { code } }, isEmpty, 204);
+    },
+    /**
+     * CP4c: the prompt that asks for a step-up code when a request answers step_up_required.
+     * Resolve true after a successful `stepUp` (the request is re-sent once), false on cancel.
+     */
+    onStepUpRequired(prompt: () => Promise<boolean>): () => void {
+      stepUpPrompt = prompt;
+      return () => { if (stepUpPrompt === prompt) stepUpPrompt = null; };
+    },
     async logout(): Promise<void> {
       sessionActive = false;
       await call({ method: 'DELETE', path: '/api/v1/session', headers: csrf() }, isEmpty, 204);
@@ -635,6 +692,16 @@ export function createApi(transport: Transport) {
       call({
         method: 'PATCH', path: `/api/v1/users/${encodeURIComponent(userId)}`, headers: csrf(), body: { active: false },
       }, isUserDeactivated),
+    /** TM-02 (g): removes another user's authenticator and revokes their sessions (step-up). */
+    resetUserMfa: async (userId: string, reason: string): Promise<void> => {
+      await call({
+        method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/mfa-reset`, headers: csrf(), body: { reason },
+      }, isEmpty, 204);
+    },
+    /** PD-1: clears the password and TOTP lockout (step-up). */
+    unlockUser: async (userId: string): Promise<void> => {
+      await call({ method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/unlock`, headers: csrf() }, isEmpty, 204);
+    },
     /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
     getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
       get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),

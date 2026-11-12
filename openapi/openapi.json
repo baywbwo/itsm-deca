@@ -748,7 +748,10 @@
                   "mfa_challenge_expired",
                   "mfa_enrollment_expired",
                   "mfa_already_enrolled",
-                  "mfa_not_enrolled"
+                  "mfa_not_enrolled",
+                  "step_up_required",
+                  "mfa_required_for_role",
+                  "self_mfa_reset"
                 ]
               },
               "message": {
@@ -907,6 +910,7 @@
           "uatSuperadmin",
           "mustChangePassword",
           "platformAdmin",
+          "mfaEnabled",
           "mfaEnrolled",
           "mfaRequired"
         ],
@@ -930,6 +934,10 @@
           "platformAdmin": {
             "type": "boolean",
             "description": "CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then."
+          },
+          "mfaEnabled": {
+            "type": "boolean",
+            "description": "ITSM_MFA (default off): the server offers MFA at all. False = plain password login, no pre-MFA session, no step-up, the /me/mfa, /login/mfa and /session/step-up routes answer 404 and the client hides every MFA screen. Always false in UAT Superadmin mode."
           },
           "mfaEnrolled": {
             "type": "boolean",
@@ -10991,7 +10999,7 @@
             "$ref": "#/components/responses/InvalidRequest"
           },
           "401": {
-            "description": "unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false).",
+            "description": "unauthenticated (generic for every password failure), or mfa_required with challengeId after a correct password when the user has MFA: no session yet, continue with POST /api/v1/login/mfa. Users who must use MFA but have not enrolled get 201 with a pre-MFA session (mfaRequired true, mfaEnrolled false). Only with ITSM_MFA=on; with it off (default) every correct password gets a full session.",
             "content": {
               "application/json": {
                 "schema": {
@@ -11270,13 +11278,20 @@
             }
           }
         ],
-        "description": "CP4b. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). No step-up (04b E1). Idempotent. Requires the CSRF token. Audited as user_unlock with actor.",
+        "description": "CP4b/CP4c. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required (04-fsd, S-12); the guard runs after the permission check, so a caller without the right still gets 403. Idempotent. Requires the CSRF token. Audited as user_unlock with actor.",
         "responses": {
           "204": {
             "description": "Lockout cleared"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
