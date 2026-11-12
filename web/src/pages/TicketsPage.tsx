@@ -38,6 +38,7 @@ import { Dialog } from '../components/Dialog';
 import { PageHeader } from '../components/PageHeader';
 import { Popover } from '../components/Popover';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
+import { planDrop } from '../app/boardDnd';
 import { statusTone } from './DashboardPage';
 import { AssignDialog } from './AssignDialog';
 import { IntakeDialog } from './IntakeDialog';
@@ -681,13 +682,15 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
     setOver(null);
     const t = dragging;
     setDragging(null);
-    if (!t || t.status.code === to) return;
-    const action = t.allowedActions.find((a) => a.to.code === to);
-    if (!action) {
-      onRefused(`${t.displayNumber} tidak dapat dipindah ke status ini. Tidak ada perubahan.`);
+    if (!t) return;
+    const plan = planDrop(t, to);
+    if (plan.kind === 'ignore') return;
+    if (plan.kind === 'refuse') {
+      onRefused(plan.message);
       return;
     }
-    onTransition(t, to);
+    // Resolve/reopen need a mandatory note, so the same dialog opens with the target preselected.
+    onTransition(t, plan.to);
   }
 
   if (board.total === 0) {
