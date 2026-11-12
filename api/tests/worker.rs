@@ -346,7 +346,7 @@ async fn transient_failures_back_off_then_fail_and_retry_resets_budget(pool: PgP
         } else {
             assert_eq!(r.state, "failed", "{r:?}");
             assert!(r.wait_secs.is_none());
-            assert!(r.safe_error.unwrap_or_default().contains("batas 5"));
+            assert!(r.safe_error.unwrap_or_default().contains("Batas 5"));
         }
     }
     assert_eq!(waits, vec![2.0, 4.0, 8.0, 16.0]);

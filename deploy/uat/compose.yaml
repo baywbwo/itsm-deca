@@ -71,6 +71,13 @@ services:
       ITSM_CLAMD_ADDR: "${ITSM_CLAMD_ADDR:-}"
       ITSM_TRUSTED_PROXIES: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
       ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-on}
+      # Jira/Lark (CP5b). Empty = API default: simulation in UAT. live needs the keyring below.
+      ITSM_INTEGRATIONS: "${ITSM_INTEGRATIONS:-}"
+      ITSM_INTEGRATIONS_LAB: "${ITSM_INTEGRATIONS_LAB:-}"
+      ITSM_INTEGRATIONS_TIMEOUT_MS: "${ITSM_INTEGRATIONS_TIMEOUT_MS:-}"
+      # Encrypts stored provider credentials (and TOTP seeds when ITSM_MFA=on). Value only in .env.
+      ITSM_KEYRING: "${ITSM_KEYRING:-}"
+      ITSM_KEYRING_ACTIVE: "${ITSM_KEYRING_ACTIVE:-}"
       RUST_LOG: ${RUST_LOG:-info}
     secrets: [pg_password]
     volumes:

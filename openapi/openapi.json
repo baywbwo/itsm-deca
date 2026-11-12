@@ -752,7 +752,12 @@
                   "step_up_required",
                   "mfa_required_for_role",
                   "self_mfa_reset",
-                  "user_in_other_company"
+                  "user_in_other_company",
+                  "keyring_missing",
+                  "integration_not_live",
+                  "provider_error",
+                  "integration_not_configured",
+                  "integration_mode_mismatch"
                 ]
               },
               "message": {
@@ -2785,7 +2790,7 @@
         "required": [
           "mode"
         ],
-        "description": "Jira SIMULATION: no real provider. create = new related work + simulated issue; link = existing issue key of this workspace's simulated provider.",
+        "description": "Jira link for the new ticket. create = new related work + Jira issue (live: created via the outbox, idempotent); link = existing issue key (live: verified at delivery).",
         "properties": {
           "mode": {
             "type": "string",
@@ -2810,7 +2815,7 @@
           "assigneeId": {
             "type": "string",
             "format": "uuid",
-            "description": "Dummy Jira assignee of this workspace's connection."
+            "description": "Jira assignee of this workspace's connection (live: from the Jira user search)."
           }
         }
       },
@@ -2993,7 +2998,8 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
+              "simulation",
+              "live"
             ]
           },
           "nextAttemptAt": {
@@ -3012,6 +3018,13 @@
           "inFlight": {
             "type": "boolean",
             "description": "An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown."
+          },
+          "issueUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "https link to the Jira issue (live only)."
           }
         }
       },
@@ -3082,8 +3095,11 @@
           "source": {
             "type": "string",
             "enum": [
-              "dummy"
-            ]
+              "dummy",
+              "jira",
+              "lark"
+            ],
+            "description": "dummy rows are offered only in simulation mode."
           }
         }
       },
@@ -3097,6 +3113,7 @@
           "state",
           "simulatedOutcome",
           "version",
+          "usable",
           "options"
         ],
         "properties": {
@@ -3110,7 +3127,8 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
+              "simulation",
+              "live"
             ]
           },
           "state": {
@@ -3140,7 +3158,11 @@
             "items": {
               "$ref": "#/components/schemas/DirectoryEntry"
             },
-            "description": "Jira: dummy assignees. Lark: dummy destinations. Empty when disabled."
+            "description": "Jira: assignees picked before (search Jira for more). Lark: chats the bot belongs to. Empty when not usable."
+          },
+          "usable": {
+            "type": "boolean",
+            "description": "Active and configured for the server mode."
           }
         }
       },
@@ -3179,6 +3201,7 @@
         "additionalProperties": false,
         "required": [
           "workspaceId",
+          "integrationsMode",
           "jira",
           "lark",
           "merchants"
@@ -3214,6 +3237,13 @@
             "items": {
               "$ref": "#/components/schemas/MerchantOption"
             }
+          },
+          "integrationsMode": {
+            "type": "string",
+            "enum": [
+              "simulation",
+              "live"
+            ]
           }
         }
       },
@@ -3574,7 +3604,7 @@
           "externalStatus",
           "safeUrl"
         ],
-        "description": "Simulated provider link; status is informational and never completes work.",
+        "description": "Jira issue link; status is informational and never completes work.",
         "properties": {
           "issueKey": {
             "type": "string"
@@ -4940,11 +4970,12 @@
           "state",
           "testedAt",
           "lastTestNote",
+          "lastTestOk",
           "simulatedOutcome",
           "version",
           "directoryCount",
+          "settings",
           "credential",
-          "mapping",
           "recent"
         ],
         "properties": {
@@ -4961,8 +4992,10 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
-            ]
+              "simulation",
+              "live"
+            ],
+            "description": "Mode the connection was last configured/tested in; a connection from the other mode is not used."
           },
           "state": {
             "type": "string",
@@ -4998,22 +5031,22 @@
             "format": "int64"
           },
           "credential": {
-            "type": "string",
-            "enum": [
-              "not_available"
-            ]
-          },
-          "mapping": {
-            "type": "string",
-            "enum": [
-              "not_available"
-            ]
+            "$ref": "#/components/schemas/IntegrationCredential"
           },
           "recent": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/IntegrationLogEntry"
             }
+          },
+          "lastTestOk": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/IntegrationSettings"
           }
         },
         "additionalProperties": false
@@ -5022,9 +5055,13 @@
         "type": "object",
         "required": [
           "workspaceId",
+          "integrationsMode",
+          "keyringConfigured",
           "items",
           "creatable",
-          "canManageCredentials"
+          "canManageCredentials",
+          "priorities",
+          "ticketStatuses"
         ],
         "properties": {
           "workspaceId": {
@@ -5045,6 +5082,30 @@
           },
           "canManageCredentials": {
             "type": "boolean"
+          },
+          "integrationsMode": {
+            "type": "string",
+            "enum": [
+              "simulation",
+              "live"
+            ],
+            "description": "Server switch ITSM_INTEGRATIONS."
+          },
+          "keyringConfigured": {
+            "type": "boolean",
+            "description": "ITSM_KEYRING is set (credentials can be stored)."
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationPriorityOption"
+            }
+          },
+          "ticketStatuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -6090,6 +6151,276 @@
             "type": "integer"
           }
         }
+      },
+      "IntegrationSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "baseUrl",
+          "email",
+          "projectKey",
+          "issueTypeId",
+          "appId",
+          "priorityMap",
+          "statusMap"
+        ],
+        "description": "Non-secret connection settings. Jira: baseUrl/email/projectKey/issueTypeId + mappings; Lark: appId (+ optional baseUrl).",
+        "properties": {
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issueTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priorityMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "ITSM priority code → Jira priority id."
+          },
+          "statusMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "ITSM ticket status → Jira status id (stored only; no automatic transition)."
+          }
+        }
+      },
+      "IntegrationCredential": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "updatedAt"
+        ],
+        "description": "Write-only secret: only whether it is stored and when it was replaced.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "stored"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "IntegrationPriorityOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "IntegrationConfigRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "description": "Jira: baseUrl (https, public host), email, projectKey, optional issueTypeId and mappings. Lark: appId, optional baseUrl. Changing the target returns the connection to draft.",
+        "properties": {
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 254
+          },
+          "projectKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 31
+          },
+          "issueTypeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 32
+          },
+          "appId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
+          },
+          "priorityMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "statusMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "IntegrationCredentialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secret",
+          "version"
+        ],
+        "description": "Jira API token or Lark app secret. Encrypted with the server keyring; never returned or logged.",
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "writeOnly": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "IntegrationIdName": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "JiraOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issueTypes",
+          "priorities",
+          "statuses"
+        ],
+        "properties": {
+          "issueTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          }
+        }
+      },
+      "DirectorySyncResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "auditEventId",
+          "synced",
+          "deactivated"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationConnection"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "synced": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deactivated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "JiraUserList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            }
+          }
+        }
       }
     },
     "responses": {
@@ -6274,6 +6605,36 @@
             }
           }
         },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ProviderError": {
+        "description": "The provider refused or failed the call (provider_error); message is a safe summary, never a secret",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "KeyringMissing": {
+        "description": "ITSM_KEYRING is not configured on the server (keyring_missing); credentials cannot be stored or read",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "IntegrationConflict": {
+        "description": "Stale version (version_conflict), connection not configured or without credential (integration_not_configured), configured for the other server mode (integration_mode_mismatch), or server not in live mode (integration_not_live)",
         "content": {
           "application/json": {
             "schema": {
@@ -8730,7 +9091,7 @@
     "/api/v1/workspaces/{workspace_id}/intake-directory": {
       "get": {
         "operationId": "getIntakeDirectory",
-        "summary": "Simulated Jira/Lark connections, dummy assignees/destinations and dummy merchants for intake",
+        "summary": "Jira/Lark connections usable for intake, their assignees/destinations, and dummy merchants",
         "security": [
           {
             "sessionCookie": []
@@ -10391,7 +10752,7 @@
     "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test": {
       "post": {
         "operationId": "testIntegration",
-        "summary": "Simulated test (no provider contacted)",
+        "summary": "Test the connection (live: calls the provider; simulation: nothing is contacted)",
         "security": [
           {
             "sessionCookie": [],
@@ -10440,13 +10801,19 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/VersionConflict"
+            "$ref": "#/components/responses/IntegrationConflict"
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
           }
         }
       }
@@ -10503,13 +10870,16 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/VersionConflict"
+            "$ref": "#/components/responses/IntegrationConflict"
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
           }
         }
       }
@@ -11617,6 +11987,369 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config": {
+      "put": {
+        "operationId": "configureIntegration",
+        "summary": "Save connection settings and mappings (non-secret)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential": {
+      "put": {
+        "operationId": "putIntegrationCredential",
+        "summary": "Store or replace the Jira API token / Lark app secret (write-only, encrypted)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIntegrationCredential",
+        "summary": "Delete the stored credential (connection returns to draft)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options": {
+      "get": {
+        "operationId": "getJiraOptions",
+        "summary": "Jira issue types, priorities and statuses read live (live mode, Jira only)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JiraOptions"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync": {
+      "post": {
+        "operationId": "syncLarkChats",
+        "summary": "Read the Lark chats the bot belongs to as intake destinations (live mode, Lark only)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectorySyncResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/intake/jira-users": {
+      "get": {
+        "operationId": "searchJiraUsers",
+        "summary": "Search Jira users assignable in the configured project (live mode)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JiraUserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
           }
         }
       }

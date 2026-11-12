@@ -1,14 +1,16 @@
-//! Outbox delivery worker — SIMULATION only (no real provider, no credentials).
+//! Outbox delivery worker: live provider calls or simulation, per `ITSM_INTEGRATIONS`.
 //!
-//! Every delivery attempt goes through the same two steps, whether it is started inline after
+//! Every delivery attempt goes through the same steps, whether it is started inline after
 //! intake, by a manual retry or by the background worker:
 //!
 //! 1. **Claim** (own transaction): a conditional `UPDATE` takes a pending, unclaimed, due intent,
 //!    bumps `attempt`, and stores a claim token with a lease. Concurrent claimers race on the row
 //!    lock; exactly one wins, the others see `claim_token IS NOT NULL` and skip.
-//! 2. **Settle** (own transaction): locks the row, checks the token is still ours, applies the
-//!    connection's simulated outcome, clears the claim and audits. A token that no longer matches
-//!    means the lease was lost; nothing is written.
+//! 2. **Attempt** (live only, no transaction): the provider call, bounded by
+//!    `ITSM_INTEGRATIONS_TIMEOUT_MS`.
+//! 3. **Settle** (own transaction): locks the row, checks the token is still ours, applies the
+//!    outcome (provider answer, or the simulated outcome), clears the claim and audits. A token
+//!    that no longer matches means the lease was lost; nothing is written.
 //!
 //! A claim whose lease expires without a settle (process crash, hang) is moved to `unknown` by
 //! [`sweep_expired`]: the provider may or may not have received it, so it is never retried
@@ -23,8 +25,11 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::config::IntegrationsMode;
 use crate::error::AppError;
-use crate::routes::sync::{audit_entity, link_issue, lock_intent};
+use crate::live::{self, Attempt};
+use crate::providers::IssueRef;
+use crate::routes::sync::{Intent, audit_entity, link_issue, lock_intent};
 
 /// How long a claim may stay in flight before the sweeper declares the outcome unknown.
 pub const LEASE: Duration = Duration::from_secs(30);
@@ -134,8 +139,65 @@ pub async fn claim_due(conn: &mut PgConnection, limit: i64) -> Result<Vec<Claim>
         .collect())
 }
 
-/// Applies the simulated outcome to a claimed intent. `actor` is the requesting user for inline
-/// dispatch and manual retry, `None` for the background worker.
+/// What one attempt achieved, before the retry budget is applied.
+enum Outcome {
+    /// Accepted. Jira: the issue to link (`None` when nothing new to link).
+    Success(Option<IssueRef>),
+    Failed(String),
+    Unknown(String),
+    /// Definitely not accepted; retried automatically while the budget lasts.
+    Transient(String),
+}
+
+const INACTIVE_ERROR: &str =
+    "Koneksi integrasi tidak aktif; tidak dikirim. Aktifkan koneksi lalu coba ulang.";
+const MODE_MISMATCH_ERROR: &str = "Koneksi integrasi dikonfigurasi untuk mode server yang lain; tidak dikirim. \
+     Simpan konfigurasi, uji dan aktifkan ulang koneksi lalu coba ulang.";
+
+/// Simulation (`ITSM_INTEGRATIONS=simulation`): the outcome configured on the connection.
+fn simulated(intent: &Intent, id: Uuid) -> Outcome {
+    if intent.outcome == "inactive" {
+        return Outcome::Failed(INACTIVE_ERROR.to_owned());
+    }
+    if intent.mode != "simulation" {
+        return Outcome::Failed(MODE_MISMATCH_ERROR.to_owned());
+    }
+    match intent.outcome.as_str() {
+        "failed" => Outcome::Failed(
+            "Simulasi: penyedia menolak permintaan. Aman untuk dicoba ulang oleh petugas berizin."
+                .to_owned(),
+        ),
+        "unknown" => Outcome::Unknown(
+            "Simulasi: hasil tidak diketahui (batas waktu). Jangan kirim ulang; rekonsiliasi dengan bukti."
+                .to_owned(),
+        ),
+        "transient" => Outcome::Transient(
+            "Simulasi: gangguan sementara, permintaan belum diterima penyedia.".to_owned(),
+        ),
+        _ if intent.operation == "jira_create_issue" => Outcome::Success(Some(IssueRef {
+            id: format!("sim-{id}"),
+            key: format!("SIM-{}-{}", intent.ws_code, intent.number),
+            status: Some("Simulasi".to_owned()),
+            url: None,
+        })),
+        _ => Outcome::Success(None),
+    }
+}
+
+fn from_live(a: Attempt) -> Outcome {
+    match a {
+        Attempt::Delivered(issue) => Outcome::Success(issue),
+        Attempt::Inactive => Outcome::Failed(INACTIVE_ERROR.to_owned()),
+        Attempt::ModeMismatch => Outcome::Failed(MODE_MISMATCH_ERROR.to_owned()),
+        Attempt::Failed(e) => Outcome::Failed(e),
+        Attempt::Unknown(e) => Outcome::Unknown(e),
+        Attempt::Transient(e) => Outcome::Transient(e),
+    }
+}
+
+/// Attempts a claimed intent and records the outcome. In live mode the provider call runs first,
+/// with no database lock held; the settle transaction then checks the claim token is still ours.
+/// `actor` is the requesting user for inline dispatch and manual retry, `None` for the worker.
 pub async fn settle(
     state: &AppState,
     claim: Claim,
@@ -144,66 +206,60 @@ pub async fn settle(
 ) -> Result<Settled, AppError> {
     let ws = claim.workspace_id;
     let id = claim.id;
+    let mode = state.config.integrations.mode;
+    let live = match mode {
+        IntegrationsMode::Live => Some(live::attempt(state, ws, id, claim.token).await),
+        IntegrationsMode::Simulation => None,
+    };
     let mut tx = state.pool.begin().await?;
     let intent = lock_intent(&mut tx, ws, id).await?;
     if intent.state != "pending" || intent.claim_token != Some(claim.token) {
         tracing::warn!(workspace_id = %ws, outbox_id = %id, "outbox claim lost before settle");
         return Ok(Settled::LeaseLost);
     }
-    let (next, settled, error, retry_in) = match intent.outcome.as_str() {
-        "failed" => (
-            "failed",
-            Settled::Failed,
-            Some(
-                "Simulasi: penyedia menolak permintaan. Aman untuk dicoba ulang oleh petugas berizin."
-                    .to_owned(),
-            ),
-            None,
-        ),
-        // D09: the connection was disabled (or not activated) after the intent was queued.
-        // Nothing reaches the provider; a definite failure an officer may retry once the
-        // connection is active again.
-        "inactive" => (
-            "failed",
-            Settled::Failed,
-            Some(
-                "Koneksi integrasi tidak aktif; tidak dikirim. Aktifkan koneksi lalu coba ulang."
-                    .to_owned(),
-            ),
-            None,
-        ),
-        "unknown" => (
-            "unknown",
-            Settled::Unknown,
-            Some(
-                "Simulasi: hasil tidak diketahui (batas waktu). Jangan kirim ulang; rekonsiliasi dengan bukti."
-                    .to_owned(),
-            ),
-            None,
-        ),
-        "transient" if intent.auto_attempts < MAX_AUTO_ATTEMPTS => (
+    let outcome = match live {
+        Some(a) => from_live(a),
+        None => simulated(&intent, id),
+    };
+    let (next, settled, error, retry_in) = match outcome {
+        Outcome::Success(issue) => {
+            if let Some(issue) = issue
+                && intent.related_work_id.is_some()
+            {
+                link_issue(
+                    &mut tx,
+                    ws,
+                    &intent,
+                    &issue.id,
+                    &issue.key,
+                    issue.status.as_deref(),
+                    issue.url.as_deref(),
+                )
+                .await?;
+            }
+            ("success", Settled::Success, None, None)
+        }
+        Outcome::Failed(e) => ("failed", Settled::Failed, Some(e), None),
+        Outcome::Unknown(e) => ("unknown", Settled::Unknown, Some(e), None),
+        Outcome::Transient(e) if intent.auto_attempts < MAX_AUTO_ATTEMPTS => (
             "pending",
             Settled::Rescheduled,
             Some(format!(
-                "Simulasi: gangguan sementara, permintaan belum diterima penyedia. Dicoba ulang otomatis ({} dari {}).",
+                "{e} Dicoba ulang otomatis ({} dari {}).",
                 intent.auto_attempts, MAX_AUTO_ATTEMPTS
             )),
             Some(backoff(intent.auto_attempts)),
         ),
-        "transient" => (
+        Outcome::Transient(e) => (
             "failed",
             Settled::Failed,
             Some(format!(
-                "Simulasi: gangguan sementara berulang; batas {MAX_AUTO_ATTEMPTS} percobaan otomatis habis. Petugas berizin boleh mencoba ulang."
+                "{e} Batas {MAX_AUTO_ATTEMPTS} percobaan otomatis habis. Petugas berizin boleh mencoba ulang."
             )),
             None,
         ),
-        _ => ("success", Settled::Success, None, None),
     };
-    if settled == Settled::Success && intent.operation == "jira_create_issue" {
-        let key = format!("SIM-{}-{}", intent.ws_code, intent.number);
-        link_issue(&mut tx, ws, &intent, format!("sim-{id}"), &key).await?;
-    }
+    let error: Option<String> = error.map(|e| e.chars().take(1000).collect());
     let next_attempt_at: Option<String> = sqlx::query_scalar(
         "UPDATE integration_outbox \
          SET state = $3, safe_error = $4, claim_token = NULL, claimed_until = NULL, \
@@ -233,13 +289,13 @@ pub async fn settle(
             "autoAttempt": intent.auto_attempts,
             "nextAttemptAt": next_attempt_at,
             "by": if actor.is_some() { "request" } else { "worker" },
-            "mode": "simulation",
+            "mode": mode.as_str(),
         }),
         corr,
     )
     .await?;
     tx.commit().await?;
-    tracing::info!(workspace_id = %ws, outbox_id = %id, state = next, "simulated delivery settled");
+    tracing::info!(workspace_id = %ws, outbox_id = %id, state = next, mode = mode.as_str(), "delivery settled");
     Ok(settled)
 }
 
@@ -274,7 +330,7 @@ pub async fn sweep_expired(state: &AppState) -> Result<u64, AppError> {
                 "state": "unknown",
                 "attempt": attempt,
                 "by": "worker",
-                "mode": "simulation",
+                "mode": state.config.integrations.mode.as_str(),
             }),
             &None,
         )
@@ -324,7 +380,8 @@ pub fn spawn(state: AppState, mut shutdown: watch::Receiver<bool>) -> tokio::tas
     tokio::spawn(async move {
         tracing::info!(
             poll_ms = poll.as_millis() as u64,
-            "outbox worker started (simulation)"
+            mode = state.config.integrations.mode.as_str(),
+            "outbox worker started"
         );
         loop {
             match run_once(&state).await {

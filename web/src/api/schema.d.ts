@@ -628,7 +628,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Simulated Jira/Lark connections, dummy assignees/destinations and dummy merchants for intake */
+        /** Jira/Lark connections usable for intake, their assignees/destinations, and dummy merchants */
         get: operations["getIntakeDirectory"];
         put?: never;
         post?: never;
@@ -1074,7 +1074,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Simulated test (no provider contacted) */
+        /** Test the connection (live: calls the provider; simulation: nothing is contacted) */
         post: operations["testIntegration"];
         delete?: never;
         options?: never;
@@ -1402,6 +1402,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save connection settings and mappings (non-secret) */
+        put: operations["configureIntegration"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Store or replace the Jira API token / Lark app secret (write-only, encrypted) */
+        put: operations["putIntegrationCredential"];
+        post?: never;
+        /** Delete the stored credential (connection returns to draft) */
+        delete: operations["deleteIntegrationCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Jira issue types, priorities and statuses read live (live mode, Jira only) */
+        get: operations["getJiraOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read the Lark chats the bot belongs to as intake destinations (live mode, Lark only) */
+        post: operations["syncLarkChats"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/intake/jira-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Jira users assignable in the configured project (live mode) */
+        get: operations["searchJiraUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1544,7 +1630,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company" | "keyring_missing" | "integration_not_live" | "provider_error" | "integration_not_configured" | "integration_mode_mismatch";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -2135,7 +2221,7 @@ export interface components {
             /** @description The version the client saw; stale = 409. */
             version: number;
         };
-        /** @description Jira SIMULATION: no real provider. create = new related work + simulated issue; link = existing issue key of this workspace's simulated provider. */
+        /** @description Jira link for the new ticket. create = new related work + Jira issue (live: created via the outbox, idempotent); link = existing issue key (live: verified at delivery). */
         TicketJiraRequest: {
             /** @enum {string} */
             mode: "none" | "create" | "link";
@@ -2145,7 +2231,7 @@ export interface components {
             issueKey?: string;
             /**
              * Format: uuid
-             * @description Dummy Jira assignee of this workspace's connection.
+             * @description Jira assignee of this workspace's connection (live: from the Jira user search).
              */
             assigneeId?: string;
         };
@@ -2208,7 +2294,7 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             /** @enum {string} */
-            mode: "simulation";
+            mode: "simulation" | "live";
             /**
              * Format: date-time
              * @description Transient failure: when the worker tries again automatically.
@@ -2218,6 +2304,8 @@ export interface components {
             autoAttempts: number;
             /** @description An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown. */
             inFlight: boolean;
+            /** @description https link to the Jira issue (live only). */
+            issueUrl?: string | null;
         };
         TicketCreateResult: {
             ticket: components["schemas"]["TicketListItem"];
@@ -2235,22 +2323,27 @@ export interface components {
             /** Format: uuid */
             id: string;
             displayName: string;
-            /** @enum {string} */
-            source: "dummy";
+            /**
+             * @description dummy rows are offered only in simulation mode.
+             * @enum {string}
+             */
+            source: "dummy" | "jira" | "lark";
         };
         IntegrationProvider: {
             /** Format: uuid */
             connectionId: string;
             displayName: string;
             /** @enum {string} */
-            mode: "simulation";
+            mode: "simulation" | "live";
             /** @enum {string} */
             state: "draft" | "tested" | "active" | "disabled";
             /** @enum {string} */
             simulatedOutcome: "success" | "failed" | "unknown" | "transient";
             version: number;
-            /** @description Jira: dummy assignees. Lark: dummy destinations. Empty when disabled. */
+            /** @description Jira: assignees picked before (search Jira for more). Lark: chats the bot belongs to. Empty when not usable. */
             options: components["schemas"]["DirectoryEntry"][];
+            /** @description Active and configured for the server mode. */
+            usable: boolean;
         };
         MerchantOption: {
             /** Format: uuid */
@@ -2267,6 +2360,8 @@ export interface components {
             jira: components["schemas"]["IntegrationProvider"] | null;
             lark: components["schemas"]["IntegrationProvider"] | null;
             merchants: components["schemas"]["MerchantOption"][];
+            /** @enum {string} */
+            integrationsMode: "simulation" | "live";
         };
         PersonRef: {
             /** Format: uuid */
@@ -2343,7 +2438,7 @@ export interface components {
             cause: string | null;
             foreignBranchReference: string | null;
         };
-        /** @description Simulated provider link; status is informational and never completes work. */
+        /** @description Jira issue link; status is informational and never completes work. */
         JiraLink: {
             issueKey: string;
             externalStatus: string | null;
@@ -2697,8 +2792,11 @@ export interface components {
             id: string;
             provider: components["schemas"]["ProviderCode"];
             displayName: string;
-            /** @enum {string} */
-            mode: "simulation";
+            /**
+             * @description Mode the connection was last configured/tested in; a connection from the other mode is not used.
+             * @enum {string}
+             */
+            mode: "simulation" | "live";
             /** @enum {string} */
             state: "draft" | "tested" | "active" | "disabled";
             /** Format: date-time */
@@ -2709,11 +2807,10 @@ export interface components {
             version: number;
             /** Format: int64 */
             directoryCount: number;
-            /** @enum {string} */
-            credential: "not_available";
-            /** @enum {string} */
-            mapping: "not_available";
+            credential: components["schemas"]["IntegrationCredential"];
             recent: components["schemas"]["IntegrationLogEntry"][];
+            lastTestOk: boolean | null;
+            settings: components["schemas"]["IntegrationSettings"];
         };
         IntegrationList: {
             /** Format: uuid */
@@ -2721,6 +2818,15 @@ export interface components {
             items: components["schemas"]["IntegrationConnection"][];
             creatable: components["schemas"]["ProviderCode"][];
             canManageCredentials: boolean;
+            /**
+             * @description Server switch ITSM_INTEGRATIONS.
+             * @enum {string}
+             */
+            integrationsMode: "simulation" | "live";
+            /** @description ITSM_KEYRING is set (credentials can be stored). */
+            keyringConfigured: boolean;
+            priorities: components["schemas"]["IntegrationPriorityOption"][];
+            ticketStatuses: string[];
         };
         IntegrationCreateRequest: {
             provider: components["schemas"]["ProviderCode"];
@@ -2990,6 +3096,74 @@ export interface components {
             enabled?: boolean | null;
             version: number;
         };
+        /** @description Non-secret connection settings. Jira: baseUrl/email/projectKey/issueTypeId + mappings; Lark: appId (+ optional baseUrl). */
+        IntegrationSettings: {
+            baseUrl: string | null;
+            email: string | null;
+            projectKey: string | null;
+            issueTypeId: string | null;
+            appId: string | null;
+            /** @description ITSM priority code → Jira priority id. */
+            priorityMap: {
+                [key: string]: string;
+            };
+            /** @description ITSM ticket status → Jira status id (stored only; no automatic transition). */
+            statusMap: {
+                [key: string]: string;
+            };
+        };
+        /** @description Write-only secret: only whether it is stored and when it was replaced. */
+        IntegrationCredential: {
+            /** @enum {string} */
+            state: "missing" | "stored";
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        IntegrationPriorityOption: {
+            code: string;
+            label: string;
+        };
+        /** @description Jira: baseUrl (https, public host), email, projectKey, optional issueTypeId and mappings. Lark: appId, optional baseUrl. Changing the target returns the connection to draft. */
+        IntegrationConfigRequest: {
+            baseUrl?: string | null;
+            email?: string | null;
+            projectKey?: string | null;
+            issueTypeId?: string | null;
+            appId?: string | null;
+            priorityMap?: {
+                [key: string]: string;
+            };
+            statusMap?: {
+                [key: string]: string;
+            };
+            /** Format: int32 */
+            version: number;
+        };
+        /** @description Jira API token or Lark app secret. Encrypted with the server keyring; never returned or logged. */
+        IntegrationCredentialRequest: {
+            secret: string;
+            /** Format: int32 */
+            version: number;
+        };
+        IntegrationIdName: {
+            id: string;
+            name: string;
+        };
+        JiraOptions: {
+            issueTypes: components["schemas"]["IntegrationIdName"][];
+            priorities: components["schemas"]["IntegrationIdName"][];
+            statuses: components["schemas"]["IntegrationIdName"][];
+        };
+        DirectorySyncResult: {
+            item: components["schemas"]["IntegrationConnection"];
+            /** Format: uuid */
+            auditEventId: string;
+            synced: number;
+            deactivated: number;
+        };
+        JiraUserList: {
+            items: components["schemas"]["DirectoryEntry"][];
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -3150,6 +3324,33 @@ export interface components {
             headers: {
                 /** @description Seconds until the next request is accepted. */
                 "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The provider refused or failed the call (provider_error); message is a safe summary, never a secret */
+        ProviderError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description ITSM_KEYRING is not configured on the server (keyring_missing); credentials cannot be stored or read */
+        KeyringMissing: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Stale version (version_conflict), connection not configured or without credential (integration_not_configured), configured for the other server mode (integration_mode_mismatch), or server not in live mode (integration_not_live) */
+        IntegrationConflict: {
+            headers: {
                 [name: string]: unknown;
             };
             content: {
@@ -5602,9 +5803,11 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["VersionConflict"];
+            409: components["responses"]["IntegrationConflict"];
             422: components["responses"]["RuleViolation"];
             429: components["responses"]["RateLimited"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["KeyringMissing"];
         };
     };
     activateIntegration: {
@@ -5637,9 +5840,10 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
-            409: components["responses"]["VersionConflict"];
+            409: components["responses"]["IntegrationConflict"];
             422: components["responses"]["RuleViolation"];
             429: components["responses"]["RateLimited"];
+            503: components["responses"]["KeyringMissing"];
         };
     };
     disableIntegration: {
@@ -6334,6 +6538,209 @@ export interface operations {
                 content?: never;
             };
             429: components["responses"]["RateLimited"];
+        };
+    };
+    configureIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationConfigRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    putIntegrationCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    deleteIntegrationCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IntegrationConflict"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getJiraOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Options */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraOptions"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IntegrationConflict"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    syncLarkChats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Synced */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectorySyncResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IntegrationConflict"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    searchJiraUsers: {
+        parameters: {
+            query: {
+                query: string;
+            };
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matches */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JiraUserList"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IntegrationConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            502: components["responses"]["ProviderError"];
+            503: components["responses"]["KeyringMissing"];
         };
     };
 }

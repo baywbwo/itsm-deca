@@ -86,6 +86,16 @@ pub enum AppError {
     /// (POST /session/step-up). Nothing was changed.
     #[error("step_up_required")]
     StepUpRequired,
+    /// CP5b: a credential cannot be stored or a live connection activated because the server
+    /// has no `ITSM_KEYRING`. Nothing was changed.
+    #[error("keyring_missing")]
+    KeyringMissing,
+    /// CP5b: a provider lookup (options, chat list, user search) needs `ITSM_INTEGRATIONS=live`.
+    #[error("integration_not_live")]
+    IntegrationNotLive,
+    /// CP5b: the provider lookup failed; the message is a fixed safe sentence, never provider text.
+    #[error("provider_error")]
+    Provider(&'static str),
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -215,6 +225,17 @@ impl AppError {
                 "step_up_required",
                 "Masukkan ulang kode autentikator untuk melanjutkan tindakan ini.",
             ),
+            AppError::KeyringMissing => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "keyring_missing",
+                "Kunci enkripsi (ITSM_KEYRING) belum dipasang di server: kredensial tidak dapat disimpan dan koneksi live tidak dapat diaktifkan.",
+            ),
+            AppError::IntegrationNotLive => (
+                StatusCode::CONFLICT,
+                "integration_not_live",
+                "Server berjalan dalam mode simulasi (ITSM_INTEGRATIONS); data penyedia tidak diambil.",
+            ),
+            AppError::Provider(note) => (StatusCode::BAD_GATEWAY, "provider_error", note),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dependency_unavailable",

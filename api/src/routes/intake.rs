@@ -19,8 +19,8 @@
 //! destinations) and the assignment history read used by the PIC dialog.
 
 use axum::Json;
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{Path, State};
+use axum::extract::rejection::{JsonRejection, QueryRejection};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,7 +29,9 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::authz::{self, Permission, WorkspaceAccess};
+use crate::config::IntegrationsMode;
 use crate::error::AppError;
+use crate::live;
 use crate::routes::sync::{self, SyncView};
 use crate::routes::ticket_list::{self, TicketListItem, body, correlation};
 use crate::routes::workspaces::parse_id;
@@ -263,20 +265,22 @@ pub(crate) async fn require_active(
     }
 }
 
-/// The workspace's active simulation connection for a provider, if any (D09: save → test →
-/// activate; draft, tested and disabled connections receive nothing).
+/// The workspace's connection for a provider that is active in the server mode `mode`, if any
+/// (D09: save → test → activate; draft, tested and disabled connections receive nothing).
 pub(crate) async fn connection(
     conn: &mut PgConnection,
     ws: Uuid,
     provider: &str,
+    mode: &str,
 ) -> Result<Option<Uuid>, AppError> {
     Ok(sqlx::query_scalar(
         "SELECT id FROM integration_connections \
-         WHERE workspace_id = $1 AND provider = $2 AND mode = 'simulation' AND state = 'active' \
+         WHERE workspace_id = $1 AND provider = $2 AND mode = $3 AND state = 'active' \
          ORDER BY created_at, id LIMIT 1",
     )
     .bind(ws)
     .bind(provider)
+    .bind(mode)
     .fetch_optional(&mut *conn)
     .await?)
 }
@@ -404,41 +408,62 @@ pub async fn create(
         }
     }
 
-    // Jira: connection, assignee and (link) the existing issue, all in this workspace.
+    // Jira: connection, assignee and (link) the existing issue, all in this workspace. Only a
+    // connection active in the server's mode is used; live mode never takes a dummy entry.
+    let mode = state.config.integrations.mode.as_str();
+    let live_mode = mode == "live";
     let jira_conn = match n.jira_mode {
         JiraMode::None => None,
         _ => Some(
-            connection(&mut tx, ws, "jira")
+            connection(&mut tx, ws, "jira", mode)
                 .await?
                 .ok_or(AppError::Validation("jira.mode"))?,
         ),
     };
     if let (Some(conn), Some(a)) = (jira_conn, n.jira_assignee_id) {
         let ok: Option<bool> = sqlx::query_scalar(
-            "SELECT active FROM jira_assignees WHERE workspace_id = $1 AND connection_id = $2 AND id = $3",
+            "SELECT active AND ($4 = 'simulation' OR source <> 'dummy') FROM jira_assignees \
+             WHERE workspace_id = $1 AND connection_id = $2 AND id = $3",
         )
         .bind(ws)
         .bind(conn)
         .bind(a)
+        .bind(mode)
         .fetch_optional(&mut *tx)
         .await?;
         if ok != Some(true) {
             return Err(AppError::Validation("jira.assigneeId"));
         }
     }
+    // Live: the key is checked at Jira by the delivery (an issue linked before is reused).
+    // Simulation: only an issue already known locally can be linked.
+    let requested_key: Option<String> = match (&n.jira_issue_key, live_mode) {
+        (Some(k), true) => {
+            let k = k.trim().to_ascii_uppercase();
+            if !jira_key(&k) {
+                return Err(AppError::Validation("jira.issueKey"));
+            }
+            Some(k)
+        }
+        _ => None,
+    };
     let linked_issue: Option<Uuid> = match (jira_conn, &n.jira_issue_key) {
-        (Some(conn), Some(k)) => Some(
-            sqlx::query_scalar(
+        (Some(conn), Some(k)) => {
+            let key = requested_key.clone().unwrap_or_else(|| k.clone());
+            let found: Option<Uuid> = sqlx::query_scalar(
                 "SELECT id FROM jira_issues WHERE workspace_id = $1 AND connection_id = $2 \
                  AND issue_key = $3",
             )
             .bind(ws)
             .bind(conn)
-            .bind(k)
+            .bind(&key)
             .fetch_optional(&mut *tx)
-            .await?
-            .ok_or(AppError::Validation("jira.issueKey"))?,
-        ),
+            .await?;
+            if found.is_none() && !live_mode {
+                return Err(AppError::Validation("jira.issueKey"));
+            }
+            found
+        }
         _ => None,
     };
     let lark = match n.lark_destination_id {
@@ -447,10 +472,12 @@ pub async fn create(
             let conn: Option<Uuid> = sqlx::query_scalar(
                 "SELECT d.connection_id FROM lark_destinations d \
                  JOIN integration_connections c ON c.workspace_id = d.workspace_id AND c.id = d.connection_id \
-                 WHERE d.workspace_id = $1 AND d.id = $2 AND d.active AND c.state = 'active'",
+                 WHERE d.workspace_id = $1 AND d.id = $2 AND d.active AND c.state = 'active' \
+                   AND c.mode = $3 AND ($3 = 'simulation' OR d.source <> 'dummy')",
             )
             .bind(ws)
             .bind(d)
+            .bind(mode)
             .fetch_optional(&mut *tx)
             .await?;
             Some((conn.ok_or(AppError::Validation("larkDestinationId"))?, d))
@@ -514,6 +541,7 @@ pub async fn create(
             op,
             Some(related),
             None,
+            requested_key.as_deref(),
             &corr,
         )
         .await?;
@@ -528,6 +556,7 @@ pub async fn create(
             "lark_ticket_created",
             None,
             Some(dest),
+            None,
             &corr,
         )
         .await?;
@@ -575,12 +604,26 @@ pub async fn create(
 
 // ---------- intake directory ----------
 
+/// Jira issue key as Jira issues it (`PROJ-123`).
+pub(crate) fn jira_key(k: &str) -> bool {
+    let Some((project, number)) = k.split_once('-') else {
+        return false;
+    };
+    (1..=31).contains(&project.len())
+        && project.starts_with(|c: char| c.is_ascii_uppercase())
+        && project
+            .bytes()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        && (1..=12).contains(&number.len())
+        && number.bytes().all(|c| c.is_ascii_digit())
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct DirectoryEntry {
     id: Uuid,
     display_name: String,
-    /// Always `dummy` until a real provider directory exists.
+    /// `jira` / `lark` (read from the provider) or `dummy` (simulation only).
     source: String,
 }
 
@@ -589,12 +632,15 @@ pub struct DirectoryEntry {
 pub struct ProviderView {
     connection_id: Uuid,
     display_name: String,
-    /// Always `simulation`: no real provider is connected.
+    /// Mode the connection was configured in: `live` | `simulation`.
     mode: String,
     state: String,
-    /// Outcome the simulated delivery will report (`success`/`failed`/`unknown`).
+    /// Outcome the simulated delivery will report (`success`/`failed`/`unknown`); simulation only.
     simulated_outcome: String,
     version: i32,
+    /// Usable now: active and configured for the server mode.
+    usable: bool,
+    /// Jira: assignees picked before (search Jira for more). Lark: groups the bot belongs to.
     options: Vec<DirectoryEntry>,
 }
 
@@ -602,6 +648,8 @@ pub struct ProviderView {
 #[serde(rename_all = "camelCase")]
 pub struct IntakeDirectory {
     workspace_id: Uuid,
+    /// Server switch `ITSM_INTEGRATIONS`: `live` | `simulation`.
+    integrations_mode: &'static str,
     /// `null` = not configured for this workspace (the UI says so; nothing is sent).
     jira: Option<ProviderView>,
     lark: Option<ProviderView>,
@@ -622,6 +670,7 @@ async fn provider(
     conn: &mut PgConnection,
     ws: Uuid,
     provider: &'static str,
+    server_mode: &str,
 ) -> Result<Option<ProviderView>, AppError> {
     let row: Option<(Uuid, String, String, String, String, i32)> = sqlx::query_as(
         "SELECT id, display_name, mode, state, \
@@ -638,17 +687,21 @@ async fn provider(
     };
     let sql = if provider == "jira" {
         "SELECT id, display_name, source FROM jira_assignees \
-         WHERE workspace_id = $1 AND connection_id = $2 AND active ORDER BY display_name, id"
+         WHERE workspace_id = $1 AND connection_id = $2 AND active \
+           AND ($3 = 'simulation' OR source <> 'dummy') ORDER BY display_name, id LIMIT 200"
     } else {
         "SELECT id, display_name, source FROM lark_destinations \
-         WHERE workspace_id = $1 AND connection_id = $2 AND active ORDER BY display_name, id"
+         WHERE workspace_id = $1 AND connection_id = $2 AND active \
+           AND ($3 = 'simulation' OR source <> 'dummy') ORDER BY display_name, id LIMIT 500"
     };
-    let options = if state != "active" {
+    let usable = state == "active" && mode == server_mode;
+    let options = if !usable {
         Vec::new()
     } else {
         sqlx::query_as::<_, DirectoryEntry>(sql)
             .bind(ws)
             .bind(id)
+            .bind(server_mode)
             .fetch_all(&mut *conn)
             .await?
     };
@@ -659,6 +712,7 @@ async fn provider(
         state,
         simulated_outcome,
         version,
+        usable,
         options,
     }))
 }
@@ -671,6 +725,7 @@ pub async fn directory(
     let access = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
     access.require(Permission::TicketCreate)?;
     let ws = access.workspace_id;
+    let mode = state.config.integrations.mode.as_str();
     let mut conn = state.pool.acquire().await?;
     let merchants = sqlx::query_as::<_, MerchantView>(
         "SELECT id, display_name, cif_reference AS reference, source FROM merchants \
@@ -681,10 +736,90 @@ pub async fn directory(
     .await?;
     Ok(Json(IntakeDirectory {
         workspace_id: ws,
-        jira: provider(&mut conn, ws, "jira").await?,
-        lark: provider(&mut conn, ws, "lark").await?,
+        integrations_mode: mode,
+        jira: provider(&mut conn, ws, "jira", mode).await?,
+        lark: provider(&mut conn, ws, "lark", mode).await?,
         merchants,
     }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserQuery {
+    query: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraUsers {
+    items: Vec<DirectoryEntry>,
+}
+
+/// Searches Jira users assignable in the configured project (live only). Matches are remembered
+/// locally (account id + display name) so intake can reference them by id.
+pub async fn jira_users(
+    State(state): State<AppState>,
+    s: Session,
+    Path(raw_ws): Path<String>,
+    q: Result<Query<UserQuery>, QueryRejection>,
+) -> Result<Json<JiraUsers>, AppError> {
+    let access = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
+    access.require(Permission::TicketCreate)?;
+    if state.config.integrations.mode != IntegrationsMode::Live {
+        return Err(AppError::IntegrationNotLive);
+    }
+    let Query(q) = q.map_err(|_| AppError::InvalidRequest)?;
+    let query: String = q.query.unwrap_or_default().trim().to_owned();
+    let len = query.chars().count();
+    if !(2..=100).contains(&len) || query.chars().any(char::is_control) {
+        return Err(AppError::Validation("query"));
+    }
+    let ws = access.workspace_id;
+    let id = {
+        let mut conn = state.pool.acquire().await?;
+        connection(&mut conn, ws, "jira", "live")
+            .await?
+            .ok_or(AppError::Conflict("integration_not_configured"))?
+    };
+    let conn = live::load_conn(&state, ws, id).await?;
+    let users = live::jira_users(&state, ws, &conn, &query)
+        .await
+        .map_err(live::Failure::into_app_error)?;
+    let mut tx = state.pool.begin().await?;
+    let mut items = Vec::with_capacity(users.len());
+    for u in users {
+        let account = u.account_id.trim();
+        if account.is_empty() || account.len() > 128 {
+            continue;
+        }
+        let name: String = u
+            .display_name
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(200)
+            .collect();
+        let name = if name.trim().is_empty() {
+            account.to_owned()
+        } else {
+            name
+        };
+        let entry = sqlx::query_as::<_, DirectoryEntry>(
+            "INSERT INTO jira_assignees (workspace_id, connection_id, external_account_ref, display_name, source) \
+             VALUES ($1, $2, $3, $4, 'jira') \
+             ON CONFLICT (connection_id, external_account_ref) \
+             DO UPDATE SET display_name = EXCLUDED.display_name, source = 'jira', active = true \
+             RETURNING id, display_name, source",
+        )
+        .bind(ws)
+        .bind(id)
+        .bind(account)
+        .bind(&name)
+        .fetch_one(&mut *tx)
+        .await?;
+        items.push(entry);
+    }
+    tx.commit().await?;
+    Ok(Json(JiraUsers { items }))
 }
 
 // ---------- assignment history ----------

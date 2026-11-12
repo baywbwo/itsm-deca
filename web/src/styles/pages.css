@@ -318,6 +318,11 @@ fieldset.brand-presets { display: grid; gap: 8px; }
 .int-ch-hd { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .int-channel-list p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 .int-channels { margin: 0 0 14px; }
+.int-section { margin: 0 0 16px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
+.int-section > h3 { margin: 0 0 10px; font-size: 13.5px; }
+.int-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 14px; margin: 0 0 12px; }
+.int-map { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 8px; }
+.int-map > legend { padding: 0 4px; font-weight: 700; font-size: 12.5px; }
 @media (max-width: 560px) {
   .int-grid { grid-template-columns: minmax(0, 1fr); }
   .int-kv { grid-template-columns: 104px minmax(0, 1fr); }

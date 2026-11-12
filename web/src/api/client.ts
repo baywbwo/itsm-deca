@@ -21,6 +21,9 @@ import {
   isCatalogEntryResult,
   isIntegrationList,
   isIntegrationResult,
+  isJiraOptions,
+  isDirectorySyncResult,
+  isJiraUserList,
   isAiSettingsView,
   isAiProviderView,
   isMcpServerView,
@@ -109,6 +112,11 @@ import type {
   IntegrationCreateRequest,
   IntegrationPatchRequest,
   IntegrationResult,
+  IntegrationConfigRequest,
+  IntegrationCredentialRequest,
+  JiraOptions,
+  DirectorySyncResult,
+  JiraUserList,
   VersionRequest,
   Meta,
   SavedView,
@@ -655,7 +663,7 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants/revoke`, headers: csrf(), body,
       }, isMemberResult),
-    /** Simulated connections only: no provider is contacted and no credential exists. */
+    /** Jira/Lark connections. `integrationsMode` says whether the server talks to the providers (live). */
     listIntegrations: (id: string, signal?: AbortSignal): Promise<IntegrationList> =>
       get(`${ws(id)}/integrations`, isIntegrationList, signal),
     createIntegration: (id: string, body: IntegrationCreateRequest): Promise<IntegrationResult> =>
@@ -669,6 +677,31 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
       }, isIntegrationResult),
+    /** Non-secret settings and mappings; changing the target returns the connection to draft. */
+    configureIntegration: (id: string, connectionId: string, body: IntegrationConfigRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PUT', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/config`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Write-only secret (Jira API token / Lark app secret); never returned. */
+    putIntegrationCredential: (id: string, connectionId: string, body: IntegrationCredentialRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PUT', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/credential`, headers: csrf(), body,
+      }, isIntegrationResult),
+    deleteIntegrationCredential: (id: string, connectionId: string, body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'DELETE', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/credential`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Jira issue types, priorities and statuses read from Jira (live only). */
+    getJiraOptions: (id: string, connectionId: string, signal?: AbortSignal): Promise<JiraOptions> =>
+      get(`${ws(id)}/integrations/${encodeURIComponent(connectionId)}/options`, isJiraOptions, signal),
+    /** Reads the Lark chats the bot belongs to as intake destinations (live only). */
+    syncLarkChats: (id: string, connectionId: string): Promise<DirectorySyncResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/directory/sync`, headers: csrf(),
+      }, isDirectorySyncResult),
+    /** Jira users assignable in the configured project (live only; 2..100 chars). */
+    searchJiraUsers: (id: string, query: string, signal?: AbortSignal): Promise<JiraUserList> =>
+      get(`${ws(id)}/intake/jira-users?query=${encodeURIComponent(query)}`, isJiraUserList, signal),
     /**
      * CP3b platform user directory (platform_admin only; 403 otherwise). `active` is
      * `true`/`false`/`all`; the cursor is only valid for the same search and filter.

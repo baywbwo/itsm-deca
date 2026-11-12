@@ -25,6 +25,8 @@ cargo run -p itsm-api -- serve
 ```
 Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATABASE_URL`, `ITSM_BIND` (default 127.0.0.1:8080), `ITSM_COOKIE_SECURE` (default true). MFA (mode password): `ITSM_MFA` (on|off, default off = login sandi biasa tanpa MFA/step-up); bila `on`, wajib di production: `ITSM_KEYRING`, `ITSM_KEYRING_ACTIVE`, `ITSM_MFA_RECOVERY_PEPPER` (lihat `deploy/uat/env.example`, hanya nama).
 
+Integrasi Jira/Lark: `ITSM_INTEGRATIONS` (live|simulation; kosong = simulation di UAT, live di production; production menolak simulation; nilai lain = gagal start), `ITSM_INTEGRATIONS_LAB` (on|off, default off; on mengizinkan `http://` dan alamat privat/loopback untuk stub uji, ditolak di production), `ITSM_INTEGRATIONS_TIMEOUT_MS` (500–8000, default 5000). Mode live butuh `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (keyring yang sama dengan MFA, dimuat walau MFA off): tanpa itu kredensial tidak bisa disimpan (503 `keyring_missing`) dan koneksi tidak bisa diaktifkan. Kredensial (API token Jira, app secret Lark) hanya-tulis: dienkripsi AES-256-GCM, tidak pernah dikirim balik, tidak masuk log/audit. WhatsApp, Email, dan Website belum tersedia.
+
 ## Gerbang QA
 `PG_BIN=/path/pg/bin scripts/ci.sh` menjalankan fmt, clippy `-D warnings`, dan test terhadap cluster PostgreSQL sekali pakai. Workflow GitHub di `.github/workflows/ci.yml` (belum pernah dijalankan; repo belum punya remote).
 

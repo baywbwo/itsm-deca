@@ -100,6 +100,45 @@ pub struct Config {
     /// `ITSM_MFA_RECOVERY_PEPPER` (recovery-code HMAC). Required in production; absent in UAT
     /// = MFA endpoints answer 503 and users who must use MFA cannot finish signing in.
     pub mfa: Option<std::sync::Arc<crate::mfa::MfaKeys>>,
+    /// CP5b provider integrations (see [`IntegrationsConfig`]).
+    pub integrations: IntegrationsConfig,
+    /// Secret keyring for stored provider credentials: `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE`,
+    /// loaded whenever set (independent of MFA). Absent = credentials cannot be saved and live
+    /// connections cannot be activated (clear 503 `keyring_missing`); set but malformed = no start.
+    pub keyring: Option<std::sync::Arc<crate::crypto::Keyring>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrationsMode {
+    /// Real Jira Cloud / Lark requests (default in production).
+    Live,
+    /// No network request at all; outcomes are configured per connection (tests, CI, UAT only).
+    Simulation,
+}
+
+impl IntegrationsMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IntegrationsMode::Live => "live",
+            IntegrationsMode::Simulation => "simulation",
+        }
+    }
+}
+
+/// Default budget for one provider operation (DNS + every request of a connection test).
+pub const DEFAULT_INTEGRATIONS_TIMEOUT_MS: u64 = 5000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntegrationsConfig {
+    /// `ITSM_INTEGRATIONS=live|simulation`. Unset = `simulation` in UAT, `live` in production;
+    /// production refuses `simulation`; any other value refuses to start.
+    pub mode: IntegrationsMode,
+    /// `ITSM_INTEGRATIONS_LAB=on|off` (default off, refused in production): allows `http://` and
+    /// loopback/private provider addresses, for local stubs only. Off = https to public IPs only.
+    pub lab: bool,
+    /// `ITSM_INTEGRATIONS_TIMEOUT_MS` (500–8000, default 5000): budget of one provider operation,
+    /// kept below the 10 s request timeout so a connection test always answers.
+    pub timeout_ms: u64,
 }
 
 /// Token-bucket limits per minute. Each bucket holds up to one minute of requests and refills
@@ -300,17 +339,7 @@ impl Config {
             (None, None, None) if environment == Environment::Uat => None,
             (keyring, active, pepper) => {
                 let keyring = crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
-                    .map_err(|e| match e {
-                        crate::crypto::KeyringError::Missing => {
-                            ConfigError::Missing("ITSM_KEYRING")
-                        }
-                        crate::crypto::KeyringError::ActiveMissing => {
-                            ConfigError::Missing("ITSM_KEYRING_ACTIVE")
-                        }
-                        _ => ConfigError::Invalid {
-                            name: "ITSM_KEYRING",
-                        },
-                    })?;
+                    .map_err(keyring_error)?;
                 let pepper = pepper.ok_or(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))?;
                 Some(std::sync::Arc::new(
                     crate::mfa::MfaKeys::new(keyring, &pepper).ok_or(ConfigError::Invalid {
@@ -318,6 +347,46 @@ impl Config {
                     })?,
                 ))
             }
+        };
+
+        let integrations = IntegrationsConfig {
+            mode: match (optional("ITSM_INTEGRATIONS").as_deref(), environment) {
+                (None, Environment::Uat) | (Some("simulation"), Environment::Uat) => {
+                    IntegrationsMode::Simulation
+                }
+                (None, Environment::Production) | (Some("live"), _) => IntegrationsMode::Live,
+                _ => {
+                    return Err(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS",
+                    });
+                }
+            },
+            lab: match (optional("ITSM_INTEGRATIONS_LAB").as_deref(), environment) {
+                (None | Some("off"), _) => false,
+                (Some("on"), Environment::Uat) => true,
+                _ => {
+                    return Err(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS_LAB",
+                    });
+                }
+            },
+            timeout_ms: match optional("ITSM_INTEGRATIONS_TIMEOUT_MS") {
+                None => DEFAULT_INTEGRATIONS_TIMEOUT_MS,
+                Some(v) => v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (500..=8000).contains(n))
+                    .ok_or(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS_TIMEOUT_MS",
+                    })?,
+            },
+        };
+        let keyring = match (optional("ITSM_KEYRING"), optional("ITSM_KEYRING_ACTIVE")) {
+            (None, None) => None,
+            (keyring, active) => Some(std::sync::Arc::new(
+                crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
+                    .map_err(keyring_error)?,
+            )),
         };
 
         Ok(Config {
@@ -335,7 +404,19 @@ impl Config {
             rate_limit,
             mfa_enabled,
             mfa,
+            integrations,
+            keyring,
         })
+    }
+}
+
+fn keyring_error(e: crate::crypto::KeyringError) -> ConfigError {
+    match e {
+        crate::crypto::KeyringError::Missing => ConfigError::Missing("ITSM_KEYRING"),
+        crate::crypto::KeyringError::ActiveMissing => ConfigError::Missing("ITSM_KEYRING_ACTIVE"),
+        _ => ConfigError::Invalid {
+            name: "ITSM_KEYRING",
+        },
     }
 }
 
@@ -492,7 +573,6 @@ mod tests {
         assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
         let mut v = prod.clone();
         v.push(("ITSM_MFA", "off"));
-        v.push(("ITSM_KEYRING", "k1:bad"));
         let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
         let mut v = prod.clone();
@@ -631,5 +711,66 @@ mod tests {
                 "{name}={bad}"
             );
         }
+    }
+
+    #[test]
+    fn integrations_mode_defaults_per_environment_and_fails_closed() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Simulation
+            && !c.integrations.lab
+            && c.integrations.timeout_ms == DEFAULT_INTEGRATIONS_TIMEOUT_MS
+            && c.keyring.is_none())
+        );
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Live));
+        let mut v = base();
+        v.push(("ITSM_INTEGRATIONS", "live"));
+        v.push(("ITSM_INTEGRATIONS_LAB", "on"));
+        v.push(("ITSM_INTEGRATIONS_TIMEOUT_MS", "800"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Live
+            && c.integrations.lab && c.integrations.timeout_ms == 800)
+        );
+
+        for (env, name, bad) in [
+            (&prod, "ITSM_INTEGRATIONS", "simulation"),
+            (&prod, "ITSM_INTEGRATIONS_LAB", "on"),
+            (&base(), "ITSM_INTEGRATIONS", "off"),
+            (&base(), "ITSM_INTEGRATIONS", "LIVE"),
+            (&base(), "ITSM_INTEGRATIONS_LAB", "yes"),
+            (&base(), "ITSM_INTEGRATIONS_TIMEOUT_MS", "499"),
+            (&base(), "ITSM_INTEGRATIONS_TIMEOUT_MS", "8001"),
+            (&base(), "ITSM_KEYRING", "k1:bad"),
+        ] {
+            let mut v = env.clone();
+            v.push((name, bad));
+            if name == "ITSM_KEYRING" {
+                v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+            }
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={bad}"
+            );
+        }
+
+        // The credential keyring loads without MFA and never prints its key material.
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING", KEY));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_KEYRING_ACTIVE"))
+        );
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_some() && c.mfa.is_none()));
+        assert!(!format!("{cfg:?}").contains("AAAAAAAA"));
     }
 }

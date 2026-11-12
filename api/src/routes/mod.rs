@@ -226,6 +226,27 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "post",
         "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
     ),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config",
+    ),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+    ),
+    (
+        "delete",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/intake/jira-users"),
 ];
 
 pub fn api_router() -> Router<AppState> {
@@ -464,6 +485,26 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
             post(integrations::disable),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config",
+            put(integrations::configure),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+            put(integrations::put_credential).merge(delete(integrations::delete_credential)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options",
+            get(integrations::options),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync",
+            post(integrations::sync_directory),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/intake/jira-users",
+            get(intake::jira_users),
         )
 }
 

@@ -31,6 +31,9 @@ import type {
   CatalogEntryResult,
   IntegrationConnection,
   IntegrationList,
+  JiraOptions,
+  DirectorySyncResult,
+  JiraUserList,
   AiSettingsView,
   AiProviderView,
   McpServerView,
@@ -262,11 +265,13 @@ export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
 export const isEmpty = (v: unknown): v is null => v === null;
 
 const SYNC_STATES = ['pending', 'success', 'failed', 'unknown'];
+const isMode = (v: unknown) => v === 'simulation' || v === 'live';
 export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
   isObj(v) && isStr(v.id) && (v.provider === 'jira' || v.provider === 'lark') && isStr(v.operation) &&
   SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
   isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
-  isStr(v.updatedAt) && v.mode === 'simulation' && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isStr(v.updatedAt) && isMode(v.mode) && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isStrOrNull(v.issueUrl ?? null) &&
   isNum(v.autoAttempts) && typeof v.inFlight === 'boolean';
 
 export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
@@ -278,12 +283,13 @@ export const isTicketIntegrations = (v: unknown): v is TicketIntegrations =>
 export const isOutboxRecoveryResult = (v: unknown): v is OutboxRecoveryResult =>
   isObj(v) && isIntegrationSync(v.item) && isStr(v.auditEventId);
 
-const isEntry = (e: unknown) => isObj(e) && isStr(e.id) && isStr(e.displayName) && e.source === 'dummy';
+const isEntry = (e: unknown) => isObj(e) && isStr(e.id) && isStr(e.displayName) && isStr(e.source);
 const isProvider = (p: unknown) =>
-  p === null || (isObj(p) && isStr(p.connectionId) && isStr(p.displayName) && p.mode === 'simulation' &&
-    isStr(p.state) && SYNC_STATES.includes(p.simulatedOutcome as string) && isNum(p.version) && isArr(p.options, isEntry));
+  p === null || (isObj(p) && isStr(p.connectionId) && isStr(p.displayName) && isMode(p.mode) &&
+    isStr(p.state) && isStr(p.simulatedOutcome) && isNum(p.version) && typeof p.usable === 'boolean' &&
+    isArr(p.options, isEntry));
 export const isIntakeDirectory = (v: unknown): v is IntakeDirectory =>
-  isObj(v) && isStr(v.workspaceId) && isProvider(v.jira) && isProvider(v.lark) && isArr(v.merchants, isEntry);
+  isObj(v) && isStr(v.workspaceId) && isMode(v.integrationsMode) && isProvider(v.jira) && isProvider(v.lark) && isArr(v.merchants, isEntry);
 
 const isPersonOrNull = (p: unknown) => p === undefined || p === null || (isObj(p) && isStr(p.id) && isStr(p.label));
 export const isAssignmentHistory = (v: unknown): v is AssignmentHistory =>
@@ -372,11 +378,16 @@ export const isCatalogEntryResult = (v: unknown): v is CatalogEntryResult =>
 export const isMemberResult = (v: unknown): v is MemberResult => isObj(v) && isMember(v.item) && isStr(v.auditEventId);
 const isProviderCode = (v: unknown) => v === 'jira' || v === 'lark';
 const CONNECTION_STATES = ['draft', 'tested', 'active', 'disabled'];
+const isStrMap = (v: unknown) => isObj(v) && Object.values(v).every(isStr);
+const isSettings = (v: unknown) => isObj(v) &&
+  ['baseUrl', 'email', 'projectKey', 'issueTypeId', 'appId'].every((k) => isStrOrNull(v[k] ?? null)) &&
+  isStrMap(v.priorityMap) && isStrMap(v.statusMap);
 const isConnection = (v: unknown): v is IntegrationConnection =>
-  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && v.mode === 'simulation' &&
+  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && isMode(v.mode) &&
   isStr(v.state) && CONNECTION_STATES.includes(v.state) && isStrOrNull(v.testedAt) && isStrOrNull(v.lastTestNote) &&
-  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) &&
-  v.credential === 'not_available' && v.mapping === 'not_available' &&
+  (v.lastTestOk === null || typeof v.lastTestOk === 'boolean') &&
+  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) && isSettings(v.settings) &&
+  isObj(v.credential) && (v.credential.state === 'missing' || v.credential.state === 'stored') && isStrOrNull(v.credential.updatedAt) &&
   isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -397,7 +408,14 @@ export const isAiSettingsView = (v: unknown): v is AiSettingsView =>
 
 export const isIntegrationList = (v: unknown): v is IntegrationList =>
   isObj(v) && isStr(v.workspaceId) && isArr(v.items, isConnection) && isArr(v.creatable, isProviderCode) &&
-  typeof v.canManageCredentials === 'boolean';
+  typeof v.canManageCredentials === 'boolean' && isMode(v.integrationsMode) && typeof v.keyringConfigured === 'boolean' &&
+  isArr(v.priorities, (p) => isObj(p) && isStr(p.code) && isStr(p.label)) && isArr(v.ticketStatuses, isStr);
+const isIdName = (v: unknown) => isObj(v) && isStr(v.id) && isStr(v.name);
+export const isJiraOptions = (v: unknown): v is JiraOptions =>
+  isObj(v) && isArr(v.issueTypes, isIdName) && isArr(v.priorities, isIdName) && isArr(v.statuses, isIdName);
+export const isDirectorySyncResult = (v: unknown): v is DirectorySyncResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId) && isNum(v.synced) && isNum(v.deactivated);
+export const isJiraUserList = (v: unknown): v is JiraUserList => isObj(v) && isArr(v.items, isEntry);
 export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
   isObj(v) && isConnection(v.item) && isStr(v.auditEventId);
 

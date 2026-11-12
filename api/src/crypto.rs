@@ -52,6 +52,10 @@ pub enum Purpose {
     McpAuth,
     ImapPassword,
     SmtpPassword,
+    /// CP5b: Jira Cloud API token (Basic auth with the configured account email).
+    JiraApiToken,
+    /// CP5b: Lark custom-app secret (exchanged for a tenant_access_token).
+    LarkAppSecret,
 }
 
 impl Purpose {
@@ -62,6 +66,8 @@ impl Purpose {
             Self::McpAuth => "mcp_auth",
             Self::ImapPassword => "imap_password",
             Self::SmtpPassword => "smtp_password",
+            Self::JiraApiToken => "jira_api_token",
+            Self::LarkAppSecret => "lark_app_secret",
         }
     }
 }
@@ -269,7 +275,12 @@ pub async fn reseal_stale(pool: &PgPool, keyring: &Keyring) -> Result<u64, Secre
             "llm_api_key" => Purpose::LlmApiKey,
             "mcp_auth" => Purpose::McpAuth,
             "imap_password" => Purpose::ImapPassword,
-            _ => Purpose::SmtpPassword,
+            "smtp_password" => Purpose::SmtpPassword,
+            "jira_api_token" => Purpose::JiraApiToken,
+            "lark_app_secret" => Purpose::LarkAppSecret,
+            // The DB CHECK lists every purpose; an unknown one stays untouched rather than being
+            // re-sealed under the wrong associated data.
+            _ => continue,
         };
         let a = aad(id, ws, purpose);
         let plain = keyring.open(&key_id, &nonce, &ct, &a)?;
