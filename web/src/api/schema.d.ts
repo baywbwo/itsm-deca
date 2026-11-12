@@ -1240,6 +1240,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/oidc/{company_code}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start company SSO sign-in (OIDC Authorization Code + PKCE)
+         * @description Browser navigation, not fetch. Only with ITSM_AUTH=sso|both (404 otherwise). Opens a single-use 10-minute attempt and redirects to the company IdP with state, nonce and an S256 code challenge; sets a short-lived SameSite=Lax binding cookie. Unknown or disabled company IdP, missing keyring or unreachable discovery redirect to /?sso=<code>.
+         */
+        get: operations["oidcStart"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * OIDC redirect URI
+         * @description Consumes the attempt (single use, same browser), exchanges the code with client_secret_basic and the PKCE verifier, verifies the ID token (RS256/ES256, iss, aud/azp, exp/nbf/iat, nonce) and issues the session cookie. Users are linked by (IdP, subject); a new subject is provisioned only with a verified e-mail in an allowed domain that no account uses. Every outcome is audited.
+         */
+        get: operations["oidcCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session/step-up": {
         parameters: {
             query?: never;
@@ -6239,6 +6279,56 @@ export interface operations {
                 };
             };
             422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    oidcStart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the IdP authorization endpoint, or to /?sso=<code> on failure. */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    oidcCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                state?: string;
+                error?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect. Success: Location /, Set-Cookie session. Failure: Location /?sso=<code> (expired, idp_error, not_configured, unavailable, idp_unavailable, denied, not_linked, email_in_use, inactive). */
+            302: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             503: components["responses"]["DependencyUnavailable"];
         };

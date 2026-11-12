@@ -10,6 +10,7 @@ pub mod intake;
 pub mod integrations;
 pub mod members;
 pub mod mfa;
+pub mod oidc;
 pub mod password;
 pub mod reports;
 pub mod saved_views;
@@ -54,6 +55,8 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ),
     ("post", "/api/v1/login"),
     ("post", "/api/v1/login/mfa"),
+    ("get", "/api/v1/auth/oidc/{company_code}/start"),
+    ("get", "/api/v1/auth/oidc/callback"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
@@ -255,6 +258,11 @@ pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/login", post(password::login))
         .route("/api/v1/login/mfa", post(mfa::login_mfa))
+        .route(
+            "/api/v1/auth/oidc/{company_code}/start",
+            get(oidc::start),
+        )
+        .route("/api/v1/auth/oidc/callback", get(oidc::callback))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route(
             "/api/v1/workspaces/{workspace_id}/ai-settings",

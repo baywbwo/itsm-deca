@@ -576,3 +576,138 @@ pub fn verify_id_token(
         .to_owned();
     Ok(IdToken { subject, claims })
 }
+
+/// Exchanges an authorization code at the token endpoint (`client_secret_basic`, PKCE verifier)
+/// and returns the raw ID token. The secret travels only in the sensitive Authorization header.
+#[allow(clippy::too_many_arguments)]
+pub async fn exchange_code(
+    discovery: &Discovery,
+    policy: &HostPolicy,
+    client_id: &str,
+    client_secret: &[u8],
+    code: &str,
+    verifier: &str,
+    redirect_uri: &str,
+    timeout: Duration,
+) -> Result<String, OidcError> {
+    // RFC 6749 §2.3.1: id and secret are form-encoded before Basic encoding.
+    let secret = std::str::from_utf8(client_secret).map_err(|_| OidcError::Protocol)?;
+    let pair = zeroize::Zeroizing::new(format!(
+        "{}:{}",
+        crate::providers::enc(client_id),
+        crate::providers::enc(secret)
+    ));
+    let basic = zeroize::Zeroizing::new(format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(pair.as_bytes())
+    ));
+    let auth = crate::providers::sensitive(basic.to_string())?;
+    let ep = &discovery.token_endpoint;
+    let call = async {
+        let target = Target::prepare_origin(ep.origin.clone(), policy.lab, timeout).await?;
+        target
+            .post_form(
+                &ep.path_and_query,
+                &auth,
+                &[
+                    ("grant_type", "authorization_code"),
+                    ("code", code),
+                    ("redirect_uri", redirect_uri),
+                    ("code_verifier", verifier),
+                ],
+            )
+            .await
+    };
+    let body = match tokio::time::timeout(timeout, call).await {
+        Ok(r) => r.map_err(OidcError::from)?,
+        Err(_) => return Err(OidcError::Timeout),
+    };
+    body.get("id_token")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or(OidcError::Protocol)
+}
+
+/// Discovery documents and key sets kept for [`CACHE_TTL`] per issuer configuration, so a sign-in
+/// costs one token request. An unknown `kid` refreshes the key set at most once per
+/// [`JWKS_REFRESH_GAP`] per IdP (a flood of forged kids cannot turn into a flood of fetches).
+pub mod cache {
+    use std::collections::HashMap;
+    use std::sync::{Arc, LazyLock, Mutex};
+    use std::time::{Duration, Instant};
+
+    use super::{Discovery, HostPolicy, Jwks, OidcError, fetch_discovery, fetch_jwks};
+
+    pub const CACHE_TTL: Duration = Duration::from_secs(3600);
+    pub const JWKS_REFRESH_GAP: Duration = Duration::from_secs(60);
+
+    struct Entry {
+        at: Instant,
+        discovery: Arc<Discovery>,
+        jwks: Option<(Instant, Arc<Jwks>)>,
+    }
+
+    static ENTRIES: LazyLock<Mutex<HashMap<String, Entry>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+
+    fn key(issuer: &str, policy: &HostPolicy) -> String {
+        format!("{issuer}|{}|{}", policy.extra_hosts.join(","), policy.lab)
+    }
+
+    fn entries() -> std::sync::MutexGuard<'static, HashMap<String, Entry>> {
+        ENTRIES.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Forgets everything known about `issuer` (after its settings change).
+    pub fn forget(issuer: &str) {
+        let prefix = format!("{issuer}|");
+        entries().retain(|k, _| !k.starts_with(&prefix));
+    }
+
+    pub async fn discovery(
+        issuer: &str,
+        policy: &HostPolicy,
+        timeout: Duration,
+    ) -> Result<Arc<Discovery>, OidcError> {
+        let k = key(issuer, policy);
+        if let Some(e) = entries().get(&k).filter(|e| e.at.elapsed() < CACHE_TTL) {
+            return Ok(e.discovery.clone());
+        }
+        let d = Arc::new(fetch_discovery(issuer, policy, timeout).await?);
+        entries().insert(
+            k,
+            Entry {
+                at: Instant::now(),
+                discovery: d.clone(),
+                jwks: None,
+            },
+        );
+        Ok(d)
+    }
+
+    /// The cached key set; `refresh` asks for a new one (unknown `kid`), honoured at most once per
+    /// [`JWKS_REFRESH_GAP`]. `Ok(None)` = refresh refused because the last one is too recent.
+    pub async fn jwks(
+        issuer: &str,
+        policy: &HostPolicy,
+        discovery: &Discovery,
+        refresh: bool,
+        timeout: Duration,
+    ) -> Result<Option<Arc<Jwks>>, OidcError> {
+        let k = key(issuer, policy);
+        let cached = entries()
+            .get(&k)
+            .and_then(|e| e.jwks.as_ref())
+            .map(|(at, j)| (*at, j.clone()));
+        match cached {
+            Some((at, j)) if !refresh && at.elapsed() < CACHE_TTL => return Ok(Some(j)),
+            Some((at, _)) if refresh && at.elapsed() < JWKS_REFRESH_GAP => return Ok(None),
+            _ => {}
+        }
+        let j = Arc::new(fetch_jwks(discovery, policy, timeout).await?);
+        if let Some(e) = entries().get_mut(&k) {
+            e.jwks = Some((Instant::now(), j.clone()));
+        }
+        Ok(Some(j))
+    }
+}

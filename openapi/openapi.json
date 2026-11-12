@@ -11575,6 +11575,101 @@
         }
       }
     },
+    "/api/v1/auth/oidc/{company_code}/start": {
+      "get": {
+        "operationId": "oidcStart",
+        "summary": "Start company SSO sign-in (OIDC Authorization Code + PKCE)",
+        "description": "Browser navigation, not fetch. Only with ITSM_AUTH=sso|both (404 otherwise). Opens a single-use 10-minute attempt and redirects to the company IdP with state, nonce and an S256 code challenge; sets a short-lived SameSite=Lax binding cookie. Unknown or disabled company IdP, missing keyring or unreachable discovery redirect to /?sso=<code>.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_code",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{2,10}$"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the IdP authorization endpoint, or to /?sso=<code> on failure.",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/callback": {
+      "get": {
+        "operationId": "oidcCallback",
+        "summary": "OIDC redirect URI",
+        "description": "Consumes the attempt (single use, same browser), exchanges the code with client_secret_basic and the PKCE verifier, verifies the ID token (RS256/ES256, iss, aud/azp, exp/nbf/iat, nonce) and issues the session cookie. Users are linked by (IdP, subject); a new subject is provisioned only with a verified e-mail in an allowed domain that no account uses. Every outcome is audited.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect. Success: Location /, Set-Cookie session. Failure: Location /?sso=<code> (expired, idp_error, not_configured, unavailable, idp_unavailable, denied, not_linked, email_in_use, inactive).",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
     "/api/v1/session/step-up": {
       "post": {
         "operationId": "stepUpSession",
