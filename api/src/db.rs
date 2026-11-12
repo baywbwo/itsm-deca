@@ -1,12 +1,11 @@
 //! Pool construction, migrations and the test-database marker guard.
 
 use std::str::FromStr;
-use std::time::Duration;
 
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
-use crate::config::{AccessMode, Config, DatabaseUrl};
+use crate::config::{AccessMode, Config, DatabaseUrl, DbPoolConfig};
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -18,15 +17,23 @@ pub enum GuardError {
     Db(#[from] sqlx::Error),
 }
 
-pub async fn connect(url: &DatabaseUrl) -> Result<PgPool, sqlx::Error> {
+/// Pool for one process. `application_name` tells API and worker connections apart in
+/// `pg_stat_activity` (`itsm-api` / `itsm-worker`).
+pub async fn connect(
+    url: &DatabaseUrl,
+    pool: &DbPoolConfig,
+    application_name: &str,
+) -> Result<PgPool, sqlx::Error> {
     let opts = PgConnectOptions::from_str(url.expose())?
-        .application_name("itsm-api")
+        .application_name(application_name)
         .options([("statement_timeout", "5000"), ("lock_timeout", "3000")]);
+    pool_options(pool).connect_with(opts).await
+}
+
+pub fn pool_options(pool: &DbPoolConfig) -> PgPoolOptions {
     PgPoolOptions::new()
-        .max_connections(10)
-        .acquire_timeout(Duration::from_secs(3))
-        .connect_with(opts)
-        .await
+        .max_connections(pool.max_connections)
+        .acquire_timeout(pool.acquire_timeout)
 }
 
 /// True only when this database was explicitly marked as a dummy test database.

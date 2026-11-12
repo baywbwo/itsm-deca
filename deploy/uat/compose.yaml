@@ -63,7 +63,7 @@ services:
       dockerfile: deploy/uat/Dockerfile
       target: api
     image: itsm-uat-api:${ITSM_UAT_IMAGE_TAG:?ITSM_UAT_IMAGE_TAG wajib (git SHA kandidat)}
-    environment:
+    environment: &api-env
       ITSM_ENV: uat
       ITSM_ACCESS_MODE: uat_superadmin
       ITSM_COOKIE_SECURE: "true"
@@ -73,7 +73,12 @@ services:
       # Empty by default = attachment uploads refused (fail-closed). Never a startup dependency.
       ITSM_CLAMD_ADDR: "${ITSM_CLAMD_ADDR:-}"
       ITSM_TRUSTED_PROXIES: ${ITSM_UAT_INGRESS_IP:-172.30.57.10}
-      ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-on}
+      # CP7b: the outbox worker runs in the separate `worker` service. Set on only to run without it.
+      ITSM_OUTBOX_WORKER: ${ITSM_OUTBOX_WORKER:-off}
+      # Pool per process (CP7b): replicas × size, api and workers together, must stay below the
+      # Postgres max_connections (default 100) minus a reserve. deploy/RUNBOOK-scaling.md.
+      ITSM_DB_MAX_CONNECTIONS: "${ITSM_DB_MAX_CONNECTIONS:-10}"
+      ITSM_DB_ACQUIRE_TIMEOUT_MS: "${ITSM_DB_ACQUIRE_TIMEOUT_MS:-3000}"
       # Prometheus metrics (CP7a) on a separate listener: backend network only, no published port,
       # never forwarded by the ingress (Caddy proxies /api and /health). Scrape api:9464/metrics.
       ITSM_METRICS_BIND: "${ITSM_METRICS_BIND:-0.0.0.0:9464}"
@@ -97,6 +102,37 @@ services:
       postgres:
         condition: service_healthy
       # Not a health dependency: without egress the API still serves (calls fail as unreachable).
+      egress-proxy:
+        condition: service_started
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  worker:
+    # CP7b: outbox worker (Jira/Lark delivery, lease sweep, webhook prune) without the HTTP API.
+    # Same image and configuration as api; claims use FOR UPDATE SKIP LOCKED with a lease, so
+    # `docker compose up --scale worker=N` is safe. Migrations stay with the api service.
+    image: itsm-uat-api:${ITSM_UAT_IMAGE_TAG:?ITSM_UAT_IMAGE_TAG wajib (git SHA kandidat)}
+    command: ["worker"]
+    environment:
+      <<: *api-env
+      ITSM_DB_MAX_CONNECTIONS: "${ITSM_WORKER_DB_MAX_CONNECTIONS:-4}"
+      # Metrics carry the worker heartbeat for the healthcheck and ItsmOutboxWorkerStalled.
+      ITSM_METRICS_BIND: 0.0.0.0:9464
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/worker-healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 4
+    secrets: [pg_password, itsm_keyring, egress_proxy_auth]
+    networks: [backend]
+    depends_on:
+      # api migrates on start; the worker refuses to run against an unmigrated database.
+      api:
+        condition: service_healthy
       egress-proxy:
         condition: service_started
     read_only: true

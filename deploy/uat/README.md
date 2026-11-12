@@ -74,10 +74,12 @@ git checkout <SHA>; docker compose -f deploy/uat/compose.yaml build
 docker compose -f deploy/uat/compose.yaml up -d postgres
 docker compose -f deploy/uat/compose.yaml run --rm -e ITSM_SEED_CONFIRM_DB=itsm_uat_dummy api seed-uat   # migrate + tandai dummy + tiket dummy
 docker compose -f deploy/uat/compose.yaml up -d
-docker compose -f deploy/uat/compose.yaml ps        # postgres, egress-proxy, api, ingress healthy (clamav tidak ikut: profile attachments)
+docker compose -f deploy/uat/compose.yaml ps        # postgres, egress-proxy, api, worker, ingress healthy (clamav tidak ikut: profile attachments)
 ```
 - Urutan start: `api` menjalankan `migrate` lalu `serve`. Sebelum seed, `serve` menolak start karena DB belum bertanda. Itu disengaja, karena tidak ada auto-seed.
 - `ingress` menunggu `api` healthy (`/health/ready`).
+- `worker` (CP7b) menunggu `api` healthy, lalu menjalankan worker outbox Jira/Lark tanpa API dan tanpa migrasi.
+  Tambah replika dengan `--scale worker=N`. Ukuran pool dan topologi: `deploy/RUNBOOK-scaling.md`.
 - `seed-uat` hanya untuk DB dummy. Entrypoint dan binary sama-sama mewajibkan konfirmasi nama DB.
 
 ## 4. Verifikasi setelah start (dari IP di allowlist)
@@ -89,6 +91,7 @@ docker compose -f deploy/uat/compose.yaml ps        # postgres, egress-proxy, ap
 | dari IP di luar allowlist | 403 (tanpa prompt login) |
 | `docker compose ps` | tidak ada service `clamav` (profile `attachments` mati) |
 | `docker compose exec api bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'` | gagal (api tanpa rute keluar, E1) |
+| `docker compose ps worker` | healthy (heartbeat tick ≤ 120 detik, `worker-healthcheck.sh`) |
 | `docker compose logs egress-proxy` setelah **Uji koneksi** | baris JSON per CONNECT, tanpa user/path/query |
 | unggah lampiran lewat API (tidak ada di UI) | 503 `scanner_unavailable` (gagal-tutup) |
 

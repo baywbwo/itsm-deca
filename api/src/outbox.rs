@@ -37,7 +37,7 @@ pub const LEASE: Duration = Duration::from_secs(30);
 pub const MAX_AUTO_ATTEMPTS: i32 = 5;
 /// Fresh intents are left to the inline dispatch for this long before the worker takes them.
 pub const INLINE_GRACE: Duration = Duration::from_secs(3);
-/// Intents claimed per worker tick.
+/// Intents claimed per worker tick, one after the other.
 pub const BATCH: i64 = 20;
 
 const BACKOFF_BASE_SECS: u64 = 2;
@@ -374,16 +374,22 @@ pub async fn run_once(state: &AppState) -> Result<Tick, AppError> {
     if let Err(e) = prune_webhook_events(state).await {
         tracing::warn!(error = %e.log_text(), "webhook event prune failed");
     }
-    let claims = {
-        let mut conn = state.pool.acquire().await?;
-        claim_due(&mut conn, BATCH).await?
-    };
     let mut tick = Tick {
         expired,
-        claimed: claims.len(),
+        claimed: 0,
         settled: 0,
     };
-    for claim in claims {
+    // One claim at a time (CP7b): each lease starts right before its own attempt. Claiming the
+    // whole batch up front would let a long batch (up to BATCH × the provider timeout) outlive
+    // the lease of its last claims, and another instance's sweeper would mark them unknown
+    // although they were never sent.
+    for _ in 0..BATCH {
+        let claim = {
+            let mut conn = state.pool.acquire().await?;
+            claim_due(&mut conn, 1).await?.pop()
+        };
+        let Some(claim) = claim else { break };
+        tick.claimed += 1;
         match settle(state, claim, None, &None).await {
             Ok(Settled::LeaseLost) => {}
             Ok(_) => tick.settled += 1,

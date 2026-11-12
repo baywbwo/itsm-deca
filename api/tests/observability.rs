@@ -553,5 +553,22 @@ async fn cp7a_alert_rules_use_only_exported_metrics(pool: PgPool) {
         for key in ["expr:", "for:", "severity:", "summary:", "runbook:"] {
             assert!(b.contains(key), "alert {name} lacks {key}");
         }
+        // CP7b: the runbook link resolves to a "### Heading" in a file that exists.
+        let link = b
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("runbook:"))
+            .unwrap_or_default()
+            .trim();
+        let (file, anchor) = link.split_once('#').unwrap_or((link, ""));
+        let doc = ok(
+            std::fs::read_to_string(format!("{}/../{file}", env!("CARGO_MANIFEST_DIR"))),
+            file,
+        );
+        assert!(
+            doc.lines().any(|l| l
+                .strip_prefix("### ")
+                .is_some_and(|h| h.to_lowercase().replace(' ', "") == anchor)),
+            "alert {name}: no heading for {link}"
+        );
     }
 }

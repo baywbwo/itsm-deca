@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use zeroize::Zeroizing;
 
@@ -170,6 +171,27 @@ pub struct Config {
     /// CP7a: `ITSM_METRICS_BIND` (e.g. `0.0.0.0:9464`) serves `/metrics` on its own listener,
     /// for the internal network only (never routed by the ingress). Absent = no metrics endpoint.
     pub metrics_bind: Option<SocketAddr>,
+    /// CP7b: database pool of this process (`ITSM_DB_MAX_CONNECTIONS`, `ITSM_DB_ACQUIRE_TIMEOUT_MS`).
+    pub db_pool: DbPoolConfig,
+}
+
+/// Size the pool per process: replicas × max_connections (API and workers together) must stay
+/// below the server's `max_connections` minus a reserve for admin and migrations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DbPoolConfig {
+    /// 1–200, default 10.
+    pub max_connections: u32,
+    /// How long a request waits for a free connection before failing (100–30000 ms, default 3000).
+    pub acquire_timeout: Duration,
+}
+
+impl Default for DbPoolConfig {
+    fn default() -> Self {
+        DbPoolConfig {
+            max_connections: 10,
+            acquire_timeout: Duration::from_millis(3000),
+        }
+    }
 }
 
 /// CP6b: `ITSM_EGRESS_PROXY=http://host:port` (+ `ITSM_EGRESS_PROXY_AUTH_FILE` holding
@@ -401,6 +423,30 @@ impl Config {
                 })?,
         };
 
+        let bounded = |name: &'static str, range: std::ops::RangeInclusive<u64>, default: u64| {
+            match optional(name) {
+                None => Ok(default),
+                Some(v) => v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| range.contains(n))
+                    .ok_or(ConfigError::Invalid { name }),
+            }
+        };
+        let defaults = DbPoolConfig::default();
+        let db_pool = DbPoolConfig {
+            max_connections: bounded(
+                "ITSM_DB_MAX_CONNECTIONS",
+                1..=200,
+                u64::from(defaults.max_connections),
+            )? as u32,
+            acquire_timeout: Duration::from_millis(bounded(
+                "ITSM_DB_ACQUIRE_TIMEOUT_MS",
+                100..=30_000,
+                defaults.acquire_timeout.as_millis() as u64,
+            )?),
+        };
+
         let report_max_rows = match optional("ITSM_REPORT_MAX_ROWS") {
             None => 50_000,
             Some(v) => v
@@ -538,6 +584,7 @@ impl Config {
             auth,
             egress_proxy,
             metrics_bind,
+            db_pool,
         })
     }
 }
@@ -1068,6 +1115,35 @@ mod tests {
         let printed = format!("{cfg:?}");
         assert!(!printed.contains("secret"));
         assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn cp7b_pool_size_and_acquire_timeout_come_from_env_within_bounds() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.db_pool == DbPoolConfig::default()));
+        let mut v = base();
+        v.push(("ITSM_DB_MAX_CONNECTIONS", "40"));
+        v.push(("ITSM_DB_ACQUIRE_TIMEOUT_MS", "750"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.db_pool == DbPoolConfig {
+            max_connections: 40,
+            acquire_timeout: Duration::from_millis(750),
+        }));
+        for (name, bad) in [
+            ("ITSM_DB_MAX_CONNECTIONS", "0"),
+            ("ITSM_DB_MAX_CONNECTIONS", "201"),
+            ("ITSM_DB_MAX_CONNECTIONS", "-1"),
+            ("ITSM_DB_MAX_CONNECTIONS", "ten"),
+            ("ITSM_DB_ACQUIRE_TIMEOUT_MS", "99"),
+            ("ITSM_DB_ACQUIRE_TIMEOUT_MS", "30001"),
+        ] {
+            let mut v = base();
+            v.push((name, bad));
+            assert!(
+                matches!(Config::from_map(&vars(&v)), Err(ConfigError::Invalid { name: n }) if n == name),
+                "{name}={bad}"
+            );
+        }
     }
 
     #[test]

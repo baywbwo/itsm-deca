@@ -1,5 +1,6 @@
 # Prometheus alert rules for the ITSM API (CP7a). Scrape target: the API's separate metrics
-# listener (ITSM_METRICS_BIND, e.g. api:9464/metrics), job "itsm-api". The Prometheus and
+# listener (ITSM_METRICS_BIND, e.g. api:9464/metrics), job "itsm-api"; the outbox worker service
+# (CP7b, worker:9464/metrics, one target per replica) is job "itsm-worker". The Prometheus and
 # Alertmanager services themselves arrive with CP8; until then this file is the contract.
 # Outbox gauges are read from the database and identical on every replica: aggregate with max.
 # Runbook: deploy/RUNBOOK-observability.md (one section per alert).
@@ -15,13 +16,31 @@ groups:
           summary: "ITSM API metrics endpoint {{ $labels.instance }} unreachable for 2m"
           runbook: deploy/RUNBOOK-observability.md#itsmapidown
 
+      - alert: ItsmWorkerDown
+        expr: up{job="itsm-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Outbox worker metrics endpoint {{ $labels.instance }} unreachable for 2m"
+          runbook: deploy/RUNBOOK-scaling.md#itsmworkerdown
+
+      - alert: ItsmOutboxNoWorker
+        expr: (sum(itsm_outbox_worker_enabled{job=~"itsm-api|itsm-worker"}) or vector(0)) < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No process runs the outbox worker: Jira/Lark intents are not delivered"
+          runbook: deploy/RUNBOOK-scaling.md#itsmoutboxnoworker
+
       - alert: ItsmApiRestarting
-        expr: changes(itsm_process_start_time_seconds{job="itsm-api"}[30m]) > 2
+        expr: changes(itsm_process_start_time_seconds{job=~"itsm-api|itsm-worker"}[30m]) > 2
         for: 0m
         labels:
           severity: warning
         annotations:
-          summary: "ITSM API {{ $labels.instance }} restarted more than twice in 30m"
+          summary: "ITSM {{ $labels.job }} {{ $labels.instance }} restarted more than twice in 30m"
           runbook: deploy/RUNBOOK-observability.md#itsmapirestarting
 
       - alert: ItsmHttp5xxRate
@@ -97,8 +116,8 @@ groups:
 
       - alert: ItsmOutboxWorkerStalled
         expr: |
-          itsm_outbox_worker_enabled{job="itsm-api"} == 1
-          and on (instance) (time() - itsm_outbox_worker_last_tick_timestamp_seconds{job="itsm-api"}) > 120
+          itsm_outbox_worker_enabled{job=~"itsm-api|itsm-worker"} == 1
+          and on (job, instance) (time() - itsm_outbox_worker_last_tick_timestamp_seconds{job=~"itsm-api|itsm-worker"}) > 120
         for: 2m
         labels:
           severity: critical
@@ -108,8 +127,8 @@ groups:
 
       - alert: ItsmDbPoolSaturated
         expr: |
-          itsm_db_pool_connections{job="itsm-api",state="in_use"}
-            / ignoring (state) itsm_db_pool_max_connections{job="itsm-api"} >= 0.9
+          itsm_db_pool_connections{job=~"itsm-api|itsm-worker",state="in_use"}
+            / ignoring (state) itsm_db_pool_max_connections{job=~"itsm-api|itsm-worker"} >= 0.9
         for: 10m
         labels:
           severity: warning

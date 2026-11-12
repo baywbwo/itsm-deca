@@ -22,6 +22,8 @@
     Dipakai untuk healthcheck compose (`api-healthcheck.sh`) dan load balancer.
 - **Shutdown**: SIGTERM/SIGINT menulis log `shutdown requested`, server berhenti menerima koneksi, request yang sedang
   berjalan diselesaikan, lalu worker outbox dan listener metrik berhenti. `docker compose stop` (grace 10 detik) cukup.
+- **Worker terpisah (CP7b)**: service `worker` menjalankan worker outbox tanpa API dan mengekspor metrik yang sama di
+  `worker:9464`. Topologi, ukuran pool, dan alert ItsmWorkerDown/ItsmOutboxNoWorker ada di `deploy/RUNBOOK-scaling.md`.
 
 ## Metrik
 | Nama | Jenis | Label | Arti |
@@ -46,7 +48,7 @@ Catatan:
 - Label tidak pernah memuat id, nama pengguna, atau isi request.
 
 ## Aturan alert (`deploy/observability/alerts.yml`)
-Scrape job harus bernama `itsm-api` dengan target `api:9464`. Layanan Prometheus dan Alertmanager masuk CP8. Sampai saat itu,
+Scrape job harus bernama `itsm-api` dengan target `api:9464`, dan `itsm-worker` dengan satu target `:9464` per replika worker. Layanan Prometheus dan Alertmanager masuk CP8. Sampai saat itu,
 file ini menjadi kontrak, dan `api/tests/observability.rs` memastikan setiap metrik yang dipakai aturan memang diekspor.
 
 ### ItsmApiDown
@@ -79,7 +81,8 @@ Langkah:
 
 ### ItsmOutboxBacklogOld
 Intent `pending` tertua sudah lebih dari 10 menit.
-1. Pastikan worker berjalan (lihat ItsmOutboxWorkerStalled) dan `ITSM_OUTBOX_WORKER=on` di satu proses.
+1. Pastikan worker berjalan (lihat ItsmOutboxWorkerStalled dan ItsmOutboxNoWorker): service `worker` ≥ 1 replika, atau
+   `ITSM_OUTBOX_WORKER=on` di `api`.
 2. Periksa log worker (`outbox`) dan egress proxy (`docker compose logs egress-proxy`) untuk 403/407, DNS, atau timeout penyedia.
 3. Periksa status Jira/Lark. Kegagalan transient dicoba ulang otomatis dalam batas percobaan, dan tidak ada intent yang hilang.
 
@@ -100,7 +103,8 @@ tidak dicoba ulang otomatis agar tidak terjadi duplikasi.
 Worker aktif tetapi tidak menyelesaikan tick selama lebih dari 2 menit.
 1. Lihat `itsm_outbox_worker_tick_failures_total`. Bila nilainya naik, database tidak tersedia (lihat `/health/ready`).
 2. Bila tidak naik, worker mungkin macet di panggilan penyedia. Setiap panggilan dibatasi `ITSM_INTEGRATIONS_TIMEOUT_MS`.
-   Restart `api` aman karena intent tetap di database.
+   Restart proses di label `instance` (`worker`, atau `api` bila worker berjalan di sana) aman karena intent tetap di
+   database.
 
 ### ItsmDbPoolSaturated
 Lebih dari 90% koneksi pool terpakai selama 10 menit.

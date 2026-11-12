@@ -1,5 +1,5 @@
-//! `itsm-api [serve|migrate|init-password|seed-uat|reseal [--dry-run]]`. Exits non-zero on any
-//! guard failure.
+//! `itsm-api [serve|worker|migrate|init-password|seed-uat|reseal [--dry-run]]`. Exits non-zero
+//! on any guard failure. `worker` runs the outbox worker without the HTTP API (CP7b).
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -36,7 +36,12 @@ async fn run(command: &str, rest: &[String]) -> Result<(), String> {
         _ => return Err("argumen tidak dikenal".to_owned()),
     };
     let config = Config::from_env().map_err(|e| e.to_string())?;
-    let pool = db::connect(&config.database_url)
+    let application_name = if command == "worker" {
+        "itsm-worker"
+    } else {
+        "itsm-api"
+    };
+    let pool = db::connect(&config.database_url, &config.db_pool, application_name)
         .await
         .map_err(|e| format!("database connect failed: {e}"))?;
 
@@ -76,23 +81,49 @@ async fn run(command: &str, rest: &[String]) -> Result<(), String> {
             println!("{line}");
             Ok(())
         }
-        "serve" => serve(config, pool).await,
+        "serve" => serve(config, pool, Role::Api).await,
+        "worker" => serve(config, pool, Role::Worker).await,
         _ => Err("perintah tidak dikenal".to_owned()),
     }
 }
 
-async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    /// HTTP API (+ the outbox worker unless `ITSM_OUTBOX_WORKER=off`).
+    Api,
+    /// Outbox worker only: no API listener. Any number may run; claims use SKIP LOCKED leases.
+    Worker,
+}
+
+async fn serve(mut config: Config, pool: sqlx::PgPool, role: Role) -> Result<(), String> {
     db::verify_runtime_guard(&config, &pool)
         .await
         .map_err(|e| e.to_string())?;
-    let listener = tokio::net::TcpListener::bind(config.bind)
-        .await
-        .map_err(|e| format!("bind failed: {e}"))?;
-    tracing::info!(
-        bind = %config.bind,
-        access_mode = config.access_mode.as_str(),
-        "itsm-api listening"
-    );
+    let listener = match role {
+        Role::Api => {
+            let l = tokio::net::TcpListener::bind(config.bind)
+                .await
+                .map_err(|e| format!("bind failed: {e}"))?;
+            tracing::info!(
+                bind = %config.bind,
+                access_mode = config.access_mode.as_str(),
+                db_max_connections = config.db_pool.max_connections,
+                outbox_worker = config.outbox_worker,
+                "itsm-api listening"
+            );
+            Some(l)
+        }
+        Role::Worker => {
+            // The worker process exists to run the worker; the flag is for API processes.
+            config.outbox_worker = true;
+            tracing::info!(
+                access_mode = config.access_mode.as_str(),
+                db_max_connections = config.db_pool.max_connections,
+                "itsm-worker starting (no API listener)"
+            );
+            None
+        }
+    };
     // CP6b: where outbound calls go (proxy address only, never its credentials).
     match &config.egress_proxy {
         Some(proxy) => tracing::info!(
@@ -150,14 +181,20 @@ async fn serve(config: Config, pool: sqlx::PgPool) -> Result<(), String> {
             }
         })
     });
-    // Peer address feeds the rate limiter for requests without a session.
-    let served = axum::serve(
-        listener,
-        app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(wait_stop(stopped))
-    .await
-    .map_err(|e| format!("server error: {e}"));
+    let served = match listener {
+        // Peer address feeds the rate limiter for requests without a session.
+        Some(listener) => axum::serve(
+            listener,
+            app(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(wait_stop(stopped))
+        .await
+        .map_err(|e| format!("server error: {e}")),
+        None => {
+            wait_stop(stopped).await;
+            Ok(())
+        }
+    };
     // Let an in-progress tick finish; an unsettled claim is swept to unknown on next start.
     let _ = stop.send(true);
     if let Some(worker) = worker {

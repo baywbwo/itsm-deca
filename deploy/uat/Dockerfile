@@ -29,6 +29,7 @@ FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde
 COPY --from=api-build /itsm-api /usr/local/bin/itsm-api
 COPY deploy/uat/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
 COPY deploy/uat/api-healthcheck.sh /usr/local/bin/api-healthcheck.sh
+COPY deploy/uat/worker-healthcheck.sh /usr/local/bin/worker-healthcheck.sh
 RUN install -d -o 10001 -g 10001 -m 0750 /var/lib/itsm/attachments
 USER 10001:10001
 ENV ITSM_BIND=0.0.0.0:8080 ITSM_ATTACHMENT_DIR=/var/lib/itsm/attachments
