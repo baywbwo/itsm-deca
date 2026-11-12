@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NEW_TICKET_FLAG,
   PAGES,
   allowedPages,
   dashboardQuery,
   drilldownHash,
   filterToQuery,
   hasDashboardFilter,
+  navGroups,
   parseDashboardQuery,
   parseHash,
   toHash,
@@ -90,5 +92,44 @@ describe('routes', () => {
   it('carries channel and category in drilldowns', () => {
     const q = new URLSearchParams(filterToQuery({ channel: 'none', category: 'c1', priority: ['p1', 'p2'] }));
     expect([q.get('channel'), q.get('category'), q.get('priority')]).toEqual(['none', 'c1', 'p1,p2']);
+  });
+});
+
+describe('CP-UI1 sidebar groups (owner prototype)', () => {
+  const ws = 'w-1';
+  const route = (page: 'dashboard' | 'tickets' | 'reports' | 'users', query = '') => ({ workspaceId: ws, page, query });
+  const agent = allowedPages(['ticket.read', 'ticket.create', 'report.view'], false, false);
+  const admin = allowedPages(['ticket.read', 'ticket.create', 'report.view', 'admin.settings', 'integration.manage'], false, true);
+  const shape = (g: ReturnType<typeof navGroups>) => g.map((x) => [x.label, x.items.map((i) => i.label)]);
+
+  it('Operasional / Analitik / Administrasi; Pengguna only for a platform admin', () => {
+    expect(shape(navGroups(agent, route('dashboard'), true))).toEqual([
+      ['Operasional', ['Dashboard', 'Tiket', 'Board', 'Tiket baru']],
+      ['Analitik', ['Laporan']],
+    ]);
+    expect(shape(navGroups(admin, route('dashboard'), true))).toEqual([
+      ['Operasional', ['Dashboard', 'Tiket', 'Board', 'Tiket baru']],
+      ['Analitik', ['Laporan']],
+      ['Administrasi', ['Pengaturan', 'Integrasi', 'Pengguna']],
+    ]);
+  });
+
+  it('Board and Tiket baru are the Tiket page (no new route); Tiket baru needs ticket.create', () => {
+    const ops = navGroups(agent, route('dashboard'), true)[0]!.items;
+    expect(ops.find((i) => i.key === 'board')!.href).toBe(toHash({ workspaceId: ws, page: 'tickets', query: 'view=board' }));
+    expect(ops.find((i) => i.key === 'new')!.href).toBe(toHash({ workspaceId: ws, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` }));
+    expect(navGroups(agent, route('dashboard'), false)[0]!.items.map((i) => i.key)).not.toContain('new');
+  });
+
+  it('exactly one current item: Board in board view, Tiket in list view', () => {
+    const current = (r: ReturnType<typeof route>) => navGroups(admin, r, true).flatMap((g) => g.items).filter((i) => i.current).map((i) => i.key);
+    expect(current(route('tickets', 'view=board&status=open'))).toEqual(['board']);
+    expect(current(route('tickets', 'status=open'))).toEqual(['tickets']);
+    expect(current(route('users'))).toEqual(['users']);
+  });
+
+  it('default deny: no ticket permission leaves no Operasional group; no workspace gives no nav', () => {
+    expect(navGroups(allowedPages(['report.view'], false), route('reports'), true).map((g) => g.label)).toEqual(['Analitik']);
+    expect(navGroups(agent, { workspaceId: null, page: 'dashboard', query: '' }, true)).toEqual([]);
   });
 });

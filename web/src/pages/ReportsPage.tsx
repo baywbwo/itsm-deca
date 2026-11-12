@@ -20,7 +20,7 @@ import { Button } from '../components/Button';
 import { DataTable, type Column } from '../components/DataTable';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
-import { statusTone } from './DashboardPage';
+import { statusTone } from '../components/Badge';
 
 const FORMAT_LABELS: Record<ReportFormat, string> = { csv: 'CSV', xlsx: 'Excel' };
 

@@ -335,3 +335,46 @@ export function reportExportBody(p: ReportParams, format: 'csv' | 'xlsx' = 'csv'
     ...Object.fromEntries(DASHBOARD_FILTERS.flatMap((k) => (p.filters[k] ? [[k, p.filters[k]]] : []))),
   };
 }
+
+/** CP-UI1 sidebar entry (owner prototype groups Operasional / Analitik / Administrasi). */
+export interface NavItem {
+  key: PageId | 'board' | 'new';
+  label: string;
+  href: string;
+  current: boolean;
+}
+export interface NavGroup { label: string; items: NavItem[] }
+
+/** Query flag of the "Tiket baru" link: Tiket opens the intake form once, then drops it. */
+export const NEW_TICKET_FLAG = 'new';
+
+/**
+ * Sidebar groups from the pages the server allows here (default deny, same as before). Board is
+ * the Tiket page in board view and "Tiket baru" its intake form, so neither adds a route or a
+ * permission: both need Tiket, and "Tiket baru" also `ticket.create`. Empty groups are left out.
+ */
+export function navGroups(pages: readonly PageDef[], route: Route, canCreate: boolean): NavGroup[] {
+  const ws = route.workspaceId;
+  if (!ws) return [];
+  const has = (id: PageId) => pages.some((p) => p.id === id);
+  const board = route.page === 'tickets' && parseTicketQuery(route.query).view === 'board';
+  const item = (id: PageId): NavItem => ({
+    key: id, label: pageDef(id).label, href: toHash({ workspaceId: ws, page: id }),
+    current: route.page === id && !(id === 'tickets' && board),
+  });
+  const ops: NavItem[] = [];
+  if (has('dashboard')) ops.push(item('dashboard'));
+  if (has('tickets')) {
+    ops.push(item('tickets'));
+    ops.push({ key: 'board', label: 'Board', href: toHash({ workspaceId: ws, page: 'tickets', query: 'view=board' }), current: board });
+    if (canCreate) {
+      ops.push({ key: 'new', label: 'Tiket baru', href: toHash({ workspaceId: ws, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` }), current: false });
+    }
+  }
+  const groups: NavGroup[] = [
+    { label: 'Operasional', items: ops },
+    { label: 'Analitik', items: has('reports') ? [item('reports')] : [] },
+    { label: 'Administrasi', items: pages.filter((p) => p.admin).map((p) => item(p.id)) },
+  ];
+  return groups.filter((g) => g.items.length > 0);
+}

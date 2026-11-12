@@ -5,7 +5,6 @@ import type {
   DashboardAttentionTicket,
   DashboardPeriodKey,
   TicketFilter,
-  TicketStatus,
   Workspace,
 } from '../api/types';
 import { ageLabel, instantLabel, num, PERIOD_LABELS, rangeLabel, tzLabel } from '../app/format';
@@ -21,7 +20,7 @@ import {
   type DashboardFilterKey,
   type DashboardParams,
 } from '../app/routes';
-import { Badge, type BadgeTone } from '../components/Badge';
+import { Badge, statusTone } from '../components/Badge';
 import { BarList, TrendChart } from '../components/Charts';
 import { Button } from '../components/Button';
 import { DataTable, type Column } from '../components/DataTable';
@@ -177,16 +176,6 @@ function DashboardError({ error, onRetry, onReset }: {
     : 'Angka dashboard tidak ditampilkan karena permintaan gagal. Tidak ada data lama yang dipakai.';
   return <ErrorState title="Dashboard belum dapat dimuat" body={body}
     requestId={error instanceof ApiError ? error.requestId : null} onRetry={onRetry} />;
-}
-
-export function statusTone(s: Pick<TicketStatus, 'code'>): BadgeTone {
-  switch (s.code) {
-    case 'new': return 'blue';
-    case 'pending_customer':
-    case 'pending_engineering': return 'waiting';
-    case 'resolved': return 'ok';
-    default: return 'neutral';
-  }
 }
 
 /** Shortcuts to screens the user can already open here (D16); no new route or filter. */

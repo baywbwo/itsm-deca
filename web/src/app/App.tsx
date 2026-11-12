@@ -1,19 +1,20 @@
-import { Fragment, Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
-import { SelectField } from '../components/Field';
-import { Icon } from '../components/Icon';
+import { Icon, type IconName } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
+import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
-import { AccountMenu, ChangePasswordScreen, LoginScreen, ModePicker, type LoginNotice } from '../pages/AccountScreens';
+import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import logoWhiteUrl from '../assets/logo-qash-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
-import { allowedPages, leavesScope, pageDef, parseHash, toHash, type PageDef, type PageId } from './routes';
-import { activeBrand, pageTitle, type ActiveBrand } from './brand';
+import { allowedPages, leavesScope, navGroups, pageDef, parseHash, toHash, type NavItem, NEW_TICKET_FLAG, type PageDef, type PageId } from './routes';
+import { activeBrand, pageTitle } from './brand';
 import { freshest } from './workspaces';
 
 // G14: one chunk per page, fetched on first visit (same origin, hashed file names). The shell,
@@ -68,27 +69,20 @@ export function App({ api }: { api: Api }) {
     username={username} onLoggedOutAll={loggedOutAll} />;
 }
 
-/** Logo of the active company's preset, or a neutral text mark when none is configured. */
-function BrandMark({ brand, className }: { brand: ActiveBrand; className?: string }) {
+/** CP-UI1: the product mark is the same for every company (owner prototype); the company shows in the breadcrumb. */
+function SideBrand() {
   return (
-    <span className={className} data-testid="brand-mark" data-brand-key={brand.key ?? 'neutral'}>
-      {brand.preset
-        ? <img className="brand-logo" data-brand-logo={brand.preset.key} src={brand.preset.logo} alt={brand.preset.logoAlt} />
-        : <span className="brand-mark" aria-label="ITSM">ITSM</span>}
-    </span>
-  );
-}
-
-function BrandBlock({ brand }: { brand: ActiveBrand }) {
-  return (
-    <div className="brand">
-      <BrandMark brand={brand} />
-      {(brand.key === 'ajr' || brand.key === 'bmt') && <span className="brand-stripe" aria-hidden="true" />}
-      <span className="brand-product">SERVICE DESK</span>
-      {brand.name && <span className="tiny muted brand-name">{brand.name}</span>}
+    <div className="side-brand">
+      <img className="side-logo" src={logoWhiteUrl} alt="Qash" />
+      <span className="side-sub"><b>SERVICE DESK</b><small>ITSM</small></span>
     </div>
   );
 }
+
+const NAV_ICON: Record<NavItem['key'], IconName> = {
+  dashboard: 'dashboard', tickets: 'tickets', board: 'board', new: 'plus', reports: 'reports',
+  settings: 'settings', integrations: 'integrations', users: 'users',
+};
 
 function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, username, onLoggedOutAll }: {
   api: Api;
@@ -148,12 +142,22 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
   // Branding follows the workspace in the URL (no URL yet: the first one, which it is about to open).
   // It is derived in the same render as the route, so a switch never shows the previous company.
   const brand = activeBrand(route.workspaceId ? listed : first ?? null);
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    if (brand.key) root.dataset.brand = brand.key;
-    else delete root.dataset.brand;
-    document.title = pageTitle(brand);
-  }, [brand.key, brand.name]);
+  useLayoutEffect(() => { document.title = pageTitle(brand); }, [brand.key, brand.name]);
+  const sandbox = meta.environment === 'uat';
+  const groups = data ? navGroups(pages, route, data.permissions.permissions.includes('ticket.create')) : [];
+  const canSearch = !!route.workspaceId && pages.some((p) => p.id === 'tickets');
+  const logout = () => {
+    if (drafts.anyDirty() && !window.confirm('Keluar akan membuang draf yang belum disimpan. Lanjutkan?')) return;
+    void api.logout().then(() => { drafts.clear(); onReenter(); });
+  };
+  // Header search = the Tiket list `q` filter. On Tiket it keeps the other filters, sort and view.
+  const search = (q: string) => {
+    const params = new URLSearchParams(route.page === 'tickets' ? route.query : '');
+    params.delete(NEW_TICKET_FLAG);
+    params.set('q', q);
+    setDrawer(false);
+    navigate(toHash({ workspaceId: route.workspaceId!, page: 'tickets', query: params.toString() }));
+  };
 
   // In-memory intake drafts must not vanish silently: warn before a reload drops them.
   useEffect(() => {
@@ -197,36 +201,36 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
     resolvePendingNav(true);
   }
 
-  const switcher = (
-    <SelectField label="Workspace" className="workspace" value={listed?.id ?? ''}
-      hint={data ? roleLabel(data.permissions) : undefined}
+  const workspaceSelect = (className: string, id: string) => (
+    <select id={id} className={className} value={listed?.id ?? ''}
       onChange={(e) => switchWorkspace(e.target.value, e.currentTarget)}>
       {!listed && <option value="">Pilih workspace</option>}
       {workspaces.map((w) => <option key={w.id} value={w.id}>{w.code} · {w.name}</option>)}
-    </SelectField>
+    </select>
   );
 
   const nav = (onPick?: () => void) => (
     <nav className="nav" aria-label="Navigasi utama">
-      <div className="nav-caption">Ruang kerja</div>
       {data && route.workspaceId
-        ? pages.map((p, i) => (
-          <Fragment key={p.id}>
-          {p.admin && !pages[i - 1]?.admin && <div className="nav-caption nav-caption-secondary">Administrasi</div>}
-          <a key={p.id} href={toHash({ workspaceId: route.workspaceId!, page: p.id })}
-            aria-current={p.id === route.page ? 'page' : undefined} onClick={(e) => {
-              if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-              e.preventDefault();
-              if (navigate(e.currentTarget.getAttribute('href') ?? '')) onPick?.();
-            }}>
-            <Icon name={p.id} /><span>{p.label}</span><span className="nav-indicator" aria-hidden="true">›</span>
-          </a>
-          </Fragment>
+        ? groups.map((g) => (
+          <div key={g.label} className="nav-group" role="group" aria-labelledby={`nav-${g.label}${onPick ? '-d' : ''}`}>
+            <div className="nav-caption" id={`nav-${g.label}${onPick ? '-d' : ''}`}>{g.label}</div>
+            {g.items.map((it) => (
+              <a key={it.key} className="nav-item" href={it.href} aria-current={it.current ? 'page' : undefined} onClick={(e) => {
+                if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                if (navigate(e.currentTarget.getAttribute('href') ?? '')) onPick?.();
+              }}>
+                <Icon name={NAV_ICON[it.key]} /><span>{it.label}</span>
+              </a>
+            ))}
+          </div>
         ))
         : <div className="nav-skeleton" role="status"><span className="sr-only">Memuat navigasi…</span>
           <div className="skeleton" aria-hidden="true" /><div className="skeleton" aria-hidden="true" /></div>}
     </nav>
   );
+  const role = data ? roleLabel(data.permissions) : accountRole(session);
 
   return (
     <>
@@ -235,54 +239,57 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, user
       </a>
       <div className="shell">
         <aside className="sidebar" aria-label="Sidebar">
-          <BrandBlock brand={brand} />
-          <ModePicker sandbox={meta.environment === 'uat'} />
-          <Button variant="ghost" onClick={() => { if (drafts.anyDirty() && !window.confirm('Keluar akan membuang draf yang belum disimpan. Lanjutkan?')) return; void api.logout().then(() => { drafts.clear(); onReenter(); }); }}>Keluar</Button>
-          <div className="workspace-label">Service workspace</div>
-          {switcher}
+          <SideBrand />
           {nav()}
-          <Profile session={session} />
+          <div className="side-foot"><Profile session={session} role={role} /></div>
         </aside>
         <main className="main" id="main" tabIndex={-1}>
-          <div className="top">
+          <header className="top">
             <div className="top-left">
-              <Button className="mobile-only" iconOnly aria-label="Buka navigasi"
-                aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></Button>
-              <BrandMark brand={brand} className="top-brand" />
-              <span className="breadcrumb">{listed ? <>{listed.name}<span className="breadcrumb-divider">/</span><b>{current.label}</b></> : <b>{current.label}</b>}</span>
+              <button type="button" className="iconbtn mobile-only" aria-label="Buka navigasi"
+                aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" /></button>
+              <div className="crumb">
+                <label className="sr-only" htmlFor="crumb-ws">Workspace</label>
+                {workspaceSelect('crumb-ws', 'crumb-ws')}
+                <span className="crumb-sep" aria-hidden="true">/</span>
+                <b>{current.label}</b>
+              </div>
+              <span className="top-title" aria-hidden="true">{current.label}</span>
             </div>
             <div className="top-right">
-              {/* Not on Tiket itself: that page has its own search box for the same filter. */}
-              {route.workspaceId && route.page !== 'tickets' && pages.some((p) => p.id === 'tickets') && (
-                <TicketSearch onSearch={(q) => navigate(toHash({
-                  workspaceId: route.workspaceId!, page: 'tickets', query: new URLSearchParams({ q }).toString(),
-                }))} />
-              )}
-              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'}
-                username={username} onLoggedOutAll={onLoggedOutAll} onNotice={setToast} />
+              {canSearch && <TicketSearch onSearch={search} shortcut />}
+              <span className={sandbox ? 'chip-env' : 'chip-env chip-env-prod'} role="note"
+                title={sandbox ? 'Database latihan terpisah dari operasional. Gunakan data contoh, bukan informasi pelanggan asli.' : undefined}>
+                {sandbox ? (meta.accessMode === 'password' ? 'Sandbox — data latihan' : meta.uat?.banner ?? 'Sandbox') : 'Operasional'}
+              </span>
+              <Popover className="icon-menu" label="Notifikasi" title="Notifikasi"
+                trigger={<><Icon name="bell" /><span className="sr-only">Notifikasi</span></>}>
+                {() => (
+                  <div className="notif-empty" tabIndex={-1}>
+                    <strong>Belum ada notifikasi</strong>
+                    <p className="tiny muted">Pemberitahuan tiket akan tampil di sini setelah tersedia.</p>
+                  </div>
+                )}
+              </Popover>
+              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'} sandbox={sandbox}
+                username={username} onLoggedOutAll={onLoggedOutAll} onLogout={logout} onNotice={setToast} />
             </div>
-          </div>
+          </header>
           <div className="content">
-          {meta.uat && (
-            <div className="uat-banner" role="note" aria-label="Mode uji">
-              <span className="uat-dot" aria-hidden="true" /><strong>{meta.accessMode === 'password' ? 'Sandbox — data latihan' : meta.uat.banner}</strong><span>Data dummy · lingkungan UAT</span>
-              <details className="uat-details"><summary>Detail lingkungan</summary><p>Database latihan terpisah dari operasional. Gunakan data contoh, bukan informasi pelanggan asli.</p></details>
-            </div>
-          )}
           <Content key={route.workspaceId ?? ''} api={api} userId={session.user.id} scope={scope} page={current} pages={pages}
             query={route.query} uat={session.uatSuperadmin} firstWorkspace={first ?? null} listed={listed}
             onWorkspacesChanged={refreshWorkspaces}
             onRetry={() => setAttempt((n) => n + 1)} onReenter={onReenter} onNotice={setToast} />
-          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Service operations · {meta.environment === 'uat' ? 'Sandbox' : 'Operasional'}</div>
+          <div className="footer">{brand.name ? `${brand.name} · ` : ''}Qash Service Desk · {sandbox ? 'Sandbox' : 'Operasional'}</div>
           </div>
         </main>
       </div>
       <Dialog open={drawer} onClose={() => setDrawer(false)} title="Workspace & navigasi" variant="drawer">
-        <BrandBlock brand={brand} />
-        <ModePicker sandbox={meta.environment === 'uat'} />
-        {switcher}
+        <SideBrand />
+        <label className="drawer-field" htmlFor="drawer-ws">Workspace{workspaceSelect('', 'drawer-ws')}</label>
+        {canSearch && <TicketSearch onSearch={search} />}
         {nav(() => setDrawer(false))}
-        <Profile session={session} />
+        <div className="side-foot"><Profile session={session} role={role} /></div>
       </Dialog>
       <Dialog open={!!pendingSwitch} onClose={() => setPendingSwitch(null)} title="Draf tiket belum terkirim"
         initialFocus=".switch-cancel" returnFocus={switchOrigin}
@@ -327,30 +334,46 @@ function navTargetLabel(hash: string, workspaces: Workspace[]): string {
   return w ? `${w.code} / ${pageDef(to.page).label}` : pageDef(to.page).label;
 }
 
-/** Header shortcut to the Tiket list search (the existing `q` filter); no new query or API. */
-function TicketSearch({ onSearch }: { onSearch: (q: string) => void }) {
-  return (
-    <form className="top-search" role="search" aria-label="Pencarian cepat tiket" onSubmit={(e) => {
+/** Header search over the Tiket list (the existing `q` filter); no new query or API. "/" focuses it. */
+function TicketSearch({ onSearch, shortcut = false }: { onSearch: (q: string) => void; shortcut?: boolean }) {
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!shortcut) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      if (document.querySelector('dialog[open]') || !input.current?.offsetParent) return;
       e.preventDefault();
-      const input = e.currentTarget.elements.namedItem('q') as HTMLInputElement;
-      const q = input.value.trim();
-      if (!q) return;
+      input.current.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [shortcut]);
+  return (
+    <form className="top-search" role="search" aria-label="Pencarian tiket" onSubmit={(e) => {
+      e.preventDefault();
+      const el = input.current;
+      const q = el?.value.trim();
+      if (!el || !q) return;
       onSearch(q);
-      input.value = '';
+      el.value = '';
     }}>
       <Icon name="search" size={16} />
-      <input name="q" type="search" aria-label="Pencarian cepat tiket" placeholder="Cari nomor atau judul tiket…" maxLength={100} />
+      <input ref={input} name="q" type="search" aria-label="Cari tiket" placeholder="Cari nomor atau judul tiket…" maxLength={100}
+        aria-keyshortcuts={shortcut ? '/' : undefined} />
+      {shortcut && <kbd aria-hidden="true">/</kbd>}
     </form>
   );
 }
 
-function Profile({ session }: { session: Session }) {
+function Profile({ session, role }: { session: Session; role: string }) {
   return (
     <div className="profile">
       <span className="avatar" aria-hidden="true">{initials(session.user.displayName)}</span>
       <div>
         <div className="profile-name">{session.user.displayName}</div>
-        <p className="tiny muted">{session.uatSuperadmin ? 'Superadmin UAT · data dummy' : 'Pengguna'}</p>
+        <p className="profile-role">{role}</p>
       </div>
     </div>
   );

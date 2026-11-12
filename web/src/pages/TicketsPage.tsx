@@ -31,14 +31,14 @@ import {
   type TicketSort,
   type TicketView,
   withDetail,
+  NEW_TICKET_FLAG,
 } from '../app/routes';
-import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { PageHeader } from '../components/PageHeader';
 import { Popover } from '../components/Popover';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
-import { statusTone } from './DashboardPage';
+import { Badge, statusTone } from '../components/Badge';
 import { AssignDialog } from './AssignDialog';
 import { IntakeDialog } from './IntakeDialog';
 import { SavedViews } from './SavedViews';
@@ -112,6 +112,15 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   const tz = workspace.timezone;
   const data = state.status === 'success' ? state.data : null;
   const canCreate = permissions.permissions.includes('ticket.create');
+  // CP-UI1: the sidebar "Tiket baru" link opens the intake form once; the flag then leaves the URL
+  // (replace) so Back or a reload does not open it again. Without ticket.create it is only dropped.
+  const wantsNew = new URLSearchParams(query).get(NEW_TICKET_FLAG) === '1';
+  useEffect(() => {
+    if (!wantsNew) return;
+    if (canCreate) setCreateOpen(true);
+    navigate(toHash({ workspaceId: workspace.id, page: 'tickets', query: ticketQuery(params) }), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one shot per flag
+  }, [wantsNew]);
   const canAssign = permissions.permissions.includes('ticket.assign_any') || permissions.permissions.includes('ticket.assign_self');
 
   // Server labels seen so far (status select keeps working while the next answer loads).

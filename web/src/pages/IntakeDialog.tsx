@@ -30,7 +30,7 @@ import { Badge, type BadgeTone } from '../components/Badge';
 import { Button } from '../components/Button';
 import { WordingAssistant } from '../components/WordingAssistant';
 import { Dialog } from '../components/Dialog';
-import { statusTone } from './DashboardPage';
+import { statusTone } from '../components/Badge';
 
 type Directory = { catalogs: Catalogs; directory: IntakeDirectory; members: Member[] };
 type Load = { status: 'loading' } | { status: 'error'; error: unknown } | { status: 'ready'; data: Directory };

@@ -5,6 +5,7 @@ import type { Meta, Session } from '../api/types';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { TextField } from '../components/Field';
+import { Icon } from '../components/Icon';
 import { Popover } from '../components/Popover';
 import { initials } from '../app/labels';
 import {
@@ -238,13 +239,21 @@ export function ChangePasswordDialog({ api, open, username, onClose, onDone }: {
  * Avatar menu in the top bar: who is signed in and, in password mode, the voluntary password
  * change (CP3b) and US-1.6 logout everywhere.
  */
-export function AccountMenu({ api, session, passwordMode, username, onLoggedOutAll, onNotice }: {
+/**
+ * CP-UI1 account menu behind the topbar avatar: who is signed in, own-password actions (password
+ * mode), the environment switch (moved here from the sidebar) and Keluar.
+ */
+export function AccountMenu({ api, session, passwordMode, sandbox, username, onLoggedOutAll, onLogout, onNotice }: {
   api: Api;
   session: Session;
   passwordMode: boolean;
+  /** UAT deployment: the environment switch points at the operational one. */
+  sandbox: boolean;
   /** Username typed at login in this tab (client-side "not the username" check), else null. */
   username: string | null;
   onLoggedOutAll: () => void;
+  /** Ends this session (the shell asks first when an intake draft would be lost). */
+  onLogout: () => void;
   onNotice: (text: string) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -255,14 +264,21 @@ export function AccountMenu({ api, session, passwordMode, username, onLoggedOutA
         trigger={<><span className="sr-only">Menu akun</span><span className="avatar top-avatar" aria-hidden="true">{initials(session.user.displayName)}</span></>}>
         {(close) => (
           <div className="account-menu-body">
-            <span className="sr-only">Akun: </span><strong>{session.user.displayName}</strong>
-            <p className="tiny muted">{session.uatSuperadmin ? 'Superadmin UAT · data dummy' : session.platformAdmin ? 'Admin platform' : 'Pengguna'}</p>
+            <div className="account-id">
+              <span className="avatar top-avatar" aria-hidden="true">{initials(session.user.displayName)}</span>
+              <div>
+                <span className="sr-only">Akun: </span><strong>{session.user.displayName}</strong>
+                <p className="tiny muted">{accountRole(session)}</p>
+              </div>
+            </div>
             {passwordMode && (
               <>
                 <Button onClick={() => { close(); setChanging(true); }}>Ganti kata sandi</Button>
                 <Button onClick={() => { close(); setConfirming(true); }}>Keluar dari semua perangkat</Button>
               </>
             )}
+            <ModePicker sandbox={sandbox} />
+            <Button className="account-logout" onClick={() => { close(); onLogout(); }}><Icon name="logout" size={16} />Keluar</Button>
           </div>
         )}
       </Popover>
@@ -271,6 +287,11 @@ export function AccountMenu({ api, session, passwordMode, username, onLoggedOutA
       <LogoutAllDialog api={api} open={confirming} onClose={() => setConfirming(false)} onDone={onLoggedOutAll} />
     </>
   );
+}
+
+/** Role line under the name (account menu and sidebar user card). */
+export function accountRole(session: Session): string {
+  return session.uatSuperadmin ? 'Superadmin UAT · data dummy' : session.platformAdmin ? 'Admin platform' : 'Pengguna';
 }
 
 export function LogoutAllDialog({ api, open, onClose, onDone }: {

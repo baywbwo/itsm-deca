@@ -30,7 +30,7 @@ import { Button } from '../components/Button';
 import { WordingAssistant } from '../components/WordingAssistant';
 import { Dialog } from '../components/Dialog';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState } from '../components/States';
-import { statusTone } from './DashboardPage';
+import { statusTone } from '../components/Badge';
 
 // D13: attachments are out of scope (owner decision); the Lampiran tab is not offered. The backend
 // endpoints, data and fail-closed scanner controls stay as they are.
