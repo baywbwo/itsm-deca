@@ -108,3 +108,11 @@ export type ReportFormat = ReportRun['format'];
 export type ReportRunList = S['ReportRunList'];
 export type ReportExportRequest = S['ReportExportRequest'];
 export type ReportExportResult = S['ReportExportResult'];
+
+/* D18 — setelan koneksi LLM & MCP (tanpa rahasia di klien). */
+export type AiProviderView = S['AiProviderView'];
+export type AiSettingsView = S['AiSettingsView'];
+export type AiProviderInput = S['AiProviderInput'];
+export type McpServerView = S['McpServerView'];
+export type McpServerInput = S['McpServerInput'];
+export type McpServerPatch = S['McpServerPatch'];

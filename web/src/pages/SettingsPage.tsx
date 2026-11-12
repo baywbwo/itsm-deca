@@ -10,13 +10,14 @@ import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
 import { Dialog } from '../components/Dialog';
 import { SelectField, TextField } from '../components/Field';
+import { AiSettingsTab } from './AiSettingsTab';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import {
   ConfirmDialog, GRANT_LABEL, ROLE_LABEL, Tabs, TZ_LABEL, useLoad, WriteAlert, writeError, type WriteError,
 } from './adminKit';
 
-type TabId = 'workspace' | 'members' | 'companies';
+type TabId = 'workspace' | 'members' | 'companies' | 'ai';
 
 /**
  * O07/O09 Pengaturan. Every tab reads its own server answer; edit controls appear only when the
@@ -35,6 +36,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
     ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
     ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
+    ...(permissions.includes('integration.manage') ? [{ id: 'ai' as const, label: 'AI & MCP' }] : []),
   ];
   const [tab, setTab] = useState<TabId>(tabs[0]?.id ?? 'workspace');
   const panelId = useId();
@@ -48,6 +50,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
         {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
+        {tab === 'ai' && <AiSettingsTab api={api} workspace={workspace} onNotice={onNotice} />}
       </div>
     </>
   );
