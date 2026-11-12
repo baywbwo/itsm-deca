@@ -1,10 +1,10 @@
--- auth_events is append-only: down is refused once 0020 data exists instead of rewriting audit.
+-- auth_events is append-only: down is refused once 0021 data exists instead of rewriting audit.
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM auth_events WHERE actor_id IS NOT NULL OR event = 'session_expire') THEN
-        RAISE EXCEPTION '0020 down refused: auth_events hold actor_id or session_expire rows';
+        RAISE EXCEPTION '0021 down refused: auth_events hold actor_id or session_expire rows';
     END IF;
     IF EXISTS (SELECT 1 FROM sessions WHERE revoked_reason = 'expired') THEN
-        RAISE EXCEPTION '0020 down refused: sessions revoked as expired exist';
+        RAISE EXCEPTION '0021 down refused: sessions revoked as expired exist';
     END IF;
 END $$;
 ALTER TABLE sessions DROP CONSTRAINT sessions_revoked_reason_check;

@@ -1,8 +1,8 @@
--- auth_events is append-only: down is refused once rows depend on 0022 instead of losing them.
+-- auth_events is append-only: down is refused once rows depend on 0023 instead of losing them.
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM auth_events
                WHERE event IN ('user_unlock','mfa_disable') OR reason IS NOT NULL) THEN
-        RAISE EXCEPTION '0022 down refused: auth_events hold user_unlock, mfa_disable or reason rows';
+        RAISE EXCEPTION '0023 down refused: auth_events hold user_unlock, mfa_disable or reason rows';
     END IF;
 END $$;
 ALTER TABLE auth_events DROP COLUMN reason;

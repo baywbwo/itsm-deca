@@ -1,4 +1,4 @@
-//! R1 I-1 CP2a: identity lifecycle schema (0019).
+//! R1 I-1 CP2a: identity lifecycle schema (0020).
 use std::fmt::Display;
 
 use itsm_api::{db, seed};
@@ -106,9 +106,9 @@ async fn us_1_4_one_active_reset_token_per_user_stored_as_digest(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migration_0019_rolls_back_and_reapplies(pool: PgPool) {
+async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
     let uid = user(&pool).await;
-    ok(db::MIGRATOR.undo(&pool, 18).await, "undo to 0018");
+    ok(db::MIGRATOR.undo(&pool, 19).await, "undo to 0019");
     let left: i64 = ok(
         sqlx::query_scalar(
             "SELECT (SELECT count(*) FROM information_schema.tables \
@@ -135,7 +135,7 @@ async fn migration_0019_rolls_back_and_reapplies(pool: PgPool) {
         "platform_admin grant",
     );
     // Down is refused once platform_admin grants exist (data-loss guard).
-    assert!(db::MIGRATOR.undo(&pool, 18).await.is_err());
+    assert!(db::MIGRATOR.undo(&pool, 19).await.is_err());
     let still: i64 = ok(
         sqlx::query_scalar(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'auth_events'",
@@ -148,7 +148,7 @@ async fn migration_0019_rolls_back_and_reapplies(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
+async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
     let uid = user(&pool).await;
     let shape = "SELECT (SELECT count(*) FROM information_schema.columns \
                   WHERE table_name = 'auth_events' AND column_name = 'actor_id') \
@@ -158,10 +158,10 @@ async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
                          OR pg_get_constraintdef(oid) LIKE '%expired%'))";
     let up: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "up");
     assert_eq!(up, 3);
-    ok(db::MIGRATOR.undo(&pool, 19).await, "undo to 0019");
+    ok(db::MIGRATOR.undo(&pool, 20).await, "undo to 0020");
     let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
     assert_eq!(down, 0);
-    // 0019 audit stays intact and still rejects the 0020-only event.
+    // 0020 audit stays intact and still rejects the 0021-only event.
     let st = sql_state(
         sqlx::query(
             "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'session_expire', 'success')",
@@ -169,7 +169,7 @@ async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
         .bind(uid)
         .execute(&pool)
         .await,
-        "session_expire on 0019",
+        "session_expire on 0020",
     );
     assert_eq!(st, "23514");
     ok(db::MIGRATOR.run(&pool).await, "re-apply");
@@ -185,8 +185,8 @@ async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
         .await,
         "actor row",
     );
-    // Append-only audit cannot be rewritten, so down is refused once 0020 data exists.
-    assert!(db::MIGRATOR.undo(&pool, 19).await.is_err());
+    // Append-only audit cannot be rewritten, so down is refused once 0021 data exists.
+    assert!(db::MIGRATOR.undo(&pool, 20).await.is_err());
     let kept: i64 = ok(
         sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE actor_id = $1")
             .bind(uid)
@@ -198,7 +198,7 @@ async fn migration_0020_rolls_back_and_reapplies(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
+async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
     let uid = user(&pool).await;
     let shape = "SELECT (SELECT count(*) FROM pg_tables WHERE tablename IN \
                   ('user_mfa_totp','mfa_recovery_codes','mfa_login_challenges')) \
@@ -207,7 +207,7 @@ async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
                     AND pg_get_constraintdef(oid) LIKE '%recovery_codes_issue%')";
     let up: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "up");
     assert_eq!(up, 5);
-    ok(db::MIGRATOR.undo(&pool, 20).await, "undo to 0020");
+    ok(db::MIGRATOR.undo(&pool, 21).await, "undo to 0021");
     let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
     assert_eq!(down, 0);
     let st = sql_state(
@@ -218,7 +218,7 @@ async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
         .bind(uid)
         .execute(&pool)
         .await,
-        "recovery_codes_issue on 0020",
+        "recovery_codes_issue on 0021",
     );
     assert_eq!(st, "23514");
     ok(db::MIGRATOR.run(&pool).await, "re-apply");
@@ -235,7 +235,7 @@ async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
         "recovery code row",
     );
     // A user's second factor is never dropped silently: down is refused once MFA data exists.
-    assert!(db::MIGRATOR.undo(&pool, 20).await.is_err());
+    assert!(db::MIGRATOR.undo(&pool, 21).await.is_err());
     let kept: i64 = ok(
         sqlx::query_scalar("SELECT count(*) FROM mfa_recovery_codes WHERE user_id = $1")
             .bind(uid)
@@ -247,7 +247,7 @@ async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
+async fn migration_0023_rolls_back_and_reapplies(pool: PgPool) {
     let uid = user(&pool).await;
     let shape = "SELECT (SELECT count(*) FROM information_schema.columns \
                   WHERE table_name = 'auth_events' AND column_name = 'reason') \
@@ -267,7 +267,7 @@ async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
         "untrimmed reason",
     );
     assert_eq!(st, "23514");
-    ok(db::MIGRATOR.undo(&pool, 21).await, "undo to 0021");
+    ok(db::MIGRATOR.undo(&pool, 22).await, "undo to 0022");
     let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
     assert_eq!(down, 0);
     let st = sql_state(
@@ -277,7 +277,7 @@ async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
         .bind(uid)
         .execute(&pool)
         .await,
-        "user_unlock on 0021",
+        "user_unlock on 0022",
     );
     assert_eq!(st, "23514");
     ok(db::MIGRATOR.run(&pool).await, "re-apply");
@@ -294,7 +294,7 @@ async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
         "reason row",
     );
     // An mfa-reset reason is audit evidence: down is refused rather than dropping it.
-    assert!(db::MIGRATOR.undo(&pool, 21).await.is_err());
+    assert!(db::MIGRATOR.undo(&pool, 22).await.is_err());
     let kept: i64 = ok(
         sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE reason IS NOT NULL")
             .fetch_one(&pool)

@@ -1,4 +1,4 @@
-//! R1 I-1 CP1: DB hardening (0017) and the encrypted secret store (0018).
+//! R1 I-1 CP1: DB hardening (0018) and the encrypted secret store (0019).
 use std::fmt::Display;
 
 use itsm_api::crypto::{self, Keyring, Purpose, SecretError};
@@ -158,9 +158,9 @@ async fn secret_scope_check_and_rotation_reseal(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
-async fn migrations_0017_0018_roll_back_and_reapply(pool: PgPool) {
+async fn migrations_0018_0019_roll_back_and_reapply(pool: PgPool) {
     let _ = workspace(&pool).await;
-    ok(db::MIGRATOR.undo(&pool, 16).await, "undo to 0016");
+    ok(db::MIGRATOR.undo(&pool, 17).await, "undo to 0017");
     let left: i64 = ok(
         sqlx::query_scalar(
             "SELECT (SELECT count(*) FROM information_schema.tables WHERE table_name = 'encrypted_secrets') \

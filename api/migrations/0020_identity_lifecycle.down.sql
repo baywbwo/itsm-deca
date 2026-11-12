@@ -1,7 +1,7 @@
 -- DESTRUCTIVE once used: drops auth audit and reset tokens. Refuses if platform_admin grants exist.
 DO $$ BEGIN
     IF EXISTS (SELECT 1 FROM platform_grants WHERE grant_code = 'platform_admin') THEN
-        RAISE EXCEPTION '0019 down refused: platform_admin grants exist';
+        RAISE EXCEPTION '0020 down refused: platform_admin grants exist';
     END IF;
 END $$;
 ALTER TABLE platform_grants DROP CONSTRAINT platform_grants_grant_code_check;
