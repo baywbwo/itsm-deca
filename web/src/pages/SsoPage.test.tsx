@@ -25,6 +25,18 @@ describe('CP5c login with SSO', () => {
     expect(renderToStaticMarkup(<LoginScreen api={api} meta={old} notice={null} onSuccess={noop} />)).not.toContain('Kode perusahaan');
   });
 
+  it('ITSM_AUTH=sso: SSO comes first and the password form is folded for platform admins', () => {
+    const html = renderToStaticMarkup(<LoginScreen api={api} meta={{ ...meta(true), passwordAdminOnly: true }} notice={null} onSuccess={noop} />);
+    expect(html).toContain('Masuk dengan akun kantor perusahaan Anda.');
+    expect(html.indexOf('Masuk dengan SSO')).toBeLessThan(html.indexOf('type="password"'));
+    expect(html).toMatch(/<details class="auth-break-glass"><summary>Masuk dengan kata sandi \(khusus admin platform\)<\/summary><form/);
+    expect(html).not.toContain('auth-divider');
+    // Without SSO on the server the flag cannot hide the only way in.
+    const plain = renderToStaticMarkup(<LoginScreen api={api} meta={{ ...meta(false), passwordAdminOnly: true }} notice={null} onSuccess={noop} />);
+    expect(plain).not.toContain('auth-break-glass');
+    expect(plain).toContain('type="password"');
+  });
+
   it('a failed SSO round trip shows its reason as a polite status', () => {
     const html = renderToStaticMarkup(<LoginScreen api={api} meta={meta(true)}
       notice={{ title: 'Masuk dengan SSO gagal', text: 'Akun kantor Anda belum terhubung ke ITSM.' }} onSuccess={noop} />);

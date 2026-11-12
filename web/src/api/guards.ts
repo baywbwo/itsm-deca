@@ -99,6 +99,7 @@ export function isMeta(v: unknown): v is Meta {
   if (!isStrOrNull(v.banner)) return false;
   // CP5c: absent from an older server = no SSO offered.
   if (v.sso !== undefined && !isBool(v.sso)) return false;
+  if (v.passwordAdminOnly !== undefined && !isBool(v.passwordAdminOnly)) return false;
   const uat = v.uat;
   if (uat === undefined || uat === null) return true;
   return (

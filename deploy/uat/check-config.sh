@@ -50,5 +50,18 @@ elif [ -n "${ITSM_KEYRING_ACTIVE:-}" ]; then
 fi
 unset kr
 
+# Company SSO (CP5c): needs ITSM_ACCESS_MODE=password, which this UAT stack never runs (it is
+# uat_superadmin), so sso/both is refused here instead of being silently ignored.
+case "${ITSM_AUTH:-}" in
+  ''|password) ;;
+  sso|both) fail "ITSM_AUTH=$ITSM_AUTH butuh ITSM_ACCESS_MODE=password; compose UAT memakai uat_superadmin (lihat deploy/RUNBOOK-sso.md)" ;;
+  *) fail "ITSM_AUTH harus password, sso atau both" ;;
+esac
+case "${ITSM_OIDC_LAB:-}" in ''|on|off) ;; *) fail "ITSM_OIDC_LAB harus on atau off" ;; esac
+if [ -n "${ITSM_PUBLIC_URL:-}" ]; then
+  printf '%s' "$ITSM_PUBLIC_URL" | grep -Eq '^https://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?/?$' \
+    || fail "ITSM_PUBLIC_URL harus origin https (mis. https://itsm.example.co.id), tanpa path"
+fi
+
 ITSM_UAT_BASIC_AUTH_HASH_FILE=$here/secrets/ingress_basic_auth_hash "$here/ingress-guard.sh" --check
 echo "check-config: OK"

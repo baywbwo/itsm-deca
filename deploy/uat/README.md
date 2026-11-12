@@ -133,5 +133,8 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d
   - Keyring dibaca dari file secret (`ITSM_KEYRING_FILE`), bukan env, sehingga tidak terlihat lewat `docker inspect`.
     Rotasi kunci: `deploy/RUNBOOK-keyring.md` (`docker compose run --rm api reseal --dry-run`, lalu `reseal`).
   - Kredensial hanya-tulis (UI: "Tersimpan · diganti <tgl>", ganti/hapus); nilainya tidak pernah keluar dari API, log, atau audit.
+- **SSO perusahaan (CP5c)** butuh `ITSM_ACCESS_MODE=password`. Paket UAT ini memakai `uat_superadmin`, sehingga `check-config.sh`
+  menolak `ITSM_AUTH=sso|both`. Pendaftaran IdP (Entra ID, Google, Keycloak), mode `sso` (sandi hanya untuk admin platform break-glass),
+  dan rollback dijelaskan di `deploy/RUNBOOK-sso.md`.
 - **Rate limit per proses** (satu replika). Jangan scale-out `api` tanpa shared store.
 - **Basic auth** adalah gerbang ingress, bukan identitas pengguna. Semua tester tetap masuk sebagai Superadmin UAT, dan itu tidak membuktikan RBAC.

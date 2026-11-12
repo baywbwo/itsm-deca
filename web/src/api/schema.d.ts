@@ -1211,7 +1211,7 @@ export interface paths {
         put?: never;
         /**
          * Local password login for one deployment
-         * @description Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user.
+         * @description Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user. CP5c: with ITSM_AUTH=sso only break-glass platform admins may sign in with a password; any other account gets the same 401 as a wrong password (auth event login denied sso_only).
          */
         post: operations["passwordLogin"];
         delete?: never;
@@ -1847,6 +1847,8 @@ export interface components {
             accessMode: "uat_superadmin" | "sso" | "password";
             /** @description Company sign-in through OIDC is offered (ITSM_AUTH sso or both, password access mode). The login screen then shows "Masuk dengan SSO". */
             sso: boolean;
+            /** @description CP5c ITSM_AUTH=sso: the password form is break-glass only (platform admins); everyone else signs in through the company IdP. Any other account gets the same 401 as a wrong password (auth event login denied sso_only), and its existing password sessions stop working. */
+            passwordAdminOnly: boolean;
             /** @example Mode uji — Superadmin */
             banner: string | null;
             /** @description Present only in UAT Superadmin mode; null/absent otherwise. */

@@ -239,12 +239,16 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
            AND (s.credential_version IS NULL OR s.credential_version = \
                 (SELECT c.credential_version FROM local_credentials c WHERE c.user_id = s.user_id)) \
            AND (s.auth_method = 'password' OR ($4 AND EXISTS (SELECT 1 FROM identity_providers p \
-                WHERE p.id = s.idp_id AND p.enabled)))",
+                WHERE p.id = s.idp_id AND p.enabled))) \
+           AND (s.auth_method <> 'password' OR NOT $5 OR EXISTS (SELECT 1 FROM platform_grants g \
+                WHERE g.user_id = s.user_id AND g.grant_code = 'platform_admin'))",
     )
     .bind(digest(token))
     .bind(state.config.access_mode.as_str())
     .bind(STEP_UP_MINUTES)
     .bind(state.config.auth.methods.oidc())
+    // CP5c ITSM_AUTH=sso: password sessions stay valid for break-glass platform admins only.
+    .bind(state.config.auth.methods == crate::config::AuthMethods::Sso)
     .fetch_optional(&state.pool)
     .await?;
     match &row {

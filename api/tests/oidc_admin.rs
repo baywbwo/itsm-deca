@@ -914,3 +914,62 @@ async fn admin_links_and_unlinks_accounts_by_subject(pool: PgPool) {
     .await;
     assert_eq!(n, 2);
 }
+
+/// Slice 5: with ITSM_AUTH=sso the password form is break-glass only (platform admins). Others get
+/// the same 401 as a wrong password and their existing password sessions stop working.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn sso_mode_keeps_passwords_for_break_glass_admins_only(pool: PgPool) {
+    let fx = fixture(pool.clone()).await;
+    let (lead, lead_auth) = login(&fx.st, &pool, "dummy:lead-alfa", false).await;
+    let sso = state(&pool, "sso", true);
+
+    let m = call(&fx.st, "GET", "/api/v1/meta", None, None, None).await;
+    assert_eq!(m.body["passwordAdminOnly"], json!(false));
+    let m = call(&sso, "GET", "/api/v1/meta", None, None, None).await;
+    assert_eq!(m.body["sso"], json!(true));
+    assert_eq!(m.body["passwordAdminOnly"], json!(true));
+
+    // Password sessions: the platform admin keeps working, the agent does not (while sso).
+    let me = |st: &AppState, a: &Auth| {
+        let (st, a) = (st.clone(), a.clone());
+        async move { api(&st, &a, "GET", "/api/v1/session", None).await.status }
+    };
+    assert_eq!(me(&sso, &fx.auth).await, StatusCode::OK);
+    assert_eq!(me(&sso, &lead_auth).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(me(&fx.st, &lead_auth).await, StatusCode::OK);
+
+    let sign_in = |user: &str, password: &str| {
+        let (st, body) = (sso.clone(), json!({"username": user, "password": password}));
+        async move { call(&st, "POST", "/api/v1/login", Some(body), None, None).await }
+    };
+    let wrong = sign_in("dummy-lead-alfa@example.test", "not-the-password").await;
+    let right = sign_in("dummy-lead-alfa@example.test", PASSWORD).await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(right.status, StatusCode::UNAUTHORIZED, "{}", right.text);
+    assert_eq!(right.body["error"]["code"], wrong.body["error"]["code"]);
+    assert_eq!(
+        right.body["error"]["message"],
+        wrong.body["error"]["message"]
+    );
+    assert!(right.cookie("__Host-itsm_session").is_none());
+    let denied = count(
+        &pool,
+        "SELECT count(*) FROM auth_events WHERE user_id = $1 AND event = 'login' \
+         AND outcome = 'denied' AND failure_code = 'sso_only'",
+        lead,
+    )
+    .await;
+    assert_eq!(denied, 1);
+    // The refused correct password does not clear the wrong-password count.
+    let failed = count(
+        &pool,
+        "SELECT failed_attempts::bigint FROM local_credentials WHERE user_id = $1",
+        lead,
+    )
+    .await;
+    assert_eq!(failed, 1);
+
+    let admin = sign_in("dummy-cs-bravo@example.test", PASSWORD).await;
+    assert_eq!(admin.status, StatusCode::CREATED, "{}", admin.text);
+    assert!(admin.cookie("__Host-itsm_session").is_some());
+}
