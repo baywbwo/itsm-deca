@@ -1192,26 +1192,36 @@ async fn cp5d_operational_bootstrap_admin_is_home_in_pt_delta_omega_beta(pool: P
         .fetch_one(&pool)
         .await
         .expect("db");
+    // Production reads key secrets only from files (CP5B-04).
+    let dir = std::env::temp_dir();
+    let key_file = dir.join(format!("itsm-cp5d-key-{}", Uuid::new_v4()));
+    let pepper_file = dir.join(format!("itsm-cp5d-pepper-{}", Uuid::new_v4()));
+    std::fs::write(&key_file, "t1:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=").expect("key file");
+    std::fs::write(
+        &pepper_file,
+        "dGVzdC1wZXBwZXItdGVzdC1wZXBwZXItdGVzdC1wZXBwZXI=",
+    )
+    .expect("pepper file");
     let vars: HashMap<String, String> = [
         ("ITSM_ENV", "production"),
         ("ITSM_ACCESS_MODE", "password"),
         ("ITSM_COOKIE_SECURE", "true"),
         ("DATABASE_URL", "postgres://unused"),
         ("ITSM_MFA", "on"),
-        (
-            "ITSM_KEYRING",
-            "t1:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
-        ),
+        ("ITSM_KEYRING_FILE", key_file.to_str().expect("path")),
         ("ITSM_KEYRING_ACTIVE", "t1"),
         (
-            "ITSM_MFA_RECOVERY_PEPPER",
-            "dGVzdC1wZXBwZXItdGVzdC1wZXBwZXItdGVzdC1wZXBwZXI=",
+            "ITSM_MFA_RECOVERY_PEPPER_FILE",
+            pepper_file.to_str().expect("path"),
         ),
     ]
     .into_iter()
     .map(|(k, v)| (k.into(), v.into()))
     .collect();
-    let cfg = Arc::new(Config::from_map(&vars).expect("production config"));
+    let cfg = Config::from_map(&vars);
+    let _ = std::fs::remove_file(&key_file);
+    let _ = std::fs::remove_file(&pepper_file);
+    let cfg = Arc::new(cfg.expect("production config"));
     itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.dob", &name, ADMIN_PASSWORD)
         .await
         .expect("operational bootstrap");
