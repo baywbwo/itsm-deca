@@ -1,6 +1,6 @@
 import bmtLogo from '../assets/logo-bmt.svg';
 import ajrLogo from '../assets/logo-ajr.png';
-import decaLogo from '../assets/logo-qash.svg';
+import decaLogo from '../assets/qash-logo-color.png';
 import type { BrandKey, Workspace } from '../api/types';
 
 /**
@@ -26,9 +26,11 @@ export interface BrandPreset {
 
 export const BRAND_PRESETS: Record<Exclude<BrandKey, null>, BrandPreset> = {
   deca: {
-    key: 'deca', label: 'DOB / DECA (QASH, hijau–navy)', logo: decaLogo, logoAlt: 'Qash',
-    accent: '#244f37', accentHover: '#183c27', soft: '#edf7e8',
-    navCurrent: '#edf8e7', navInk: '#254f31', kpi: '#163961',
+    key: 'deca', label: 'DOB / DECA (QASH 2025: hijau–sapphire)', logo: decaLogo, logoAlt: 'Qash',
+    // Palet resmi QASH 2025: Dark Sapphire untuk aksi & KPI, Mint Green untuk permukaan lembut,
+    // Qash Green hanya sebagai aksen (bukan teks/tombol) karena kontras putih di atasnya < 4.5:1.
+    accent: '#003571', accentHover: '#002a5a', soft: '#d5fdc8',
+    navCurrent: '#e7eef8', navInk: '#003571', kpi: '#003571',
   },
   bmt: {
     key: 'bmt', label: 'BMT (coklat–gold)', logo: bmtLogo, logoAlt: 'BMT',

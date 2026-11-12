@@ -85,7 +85,7 @@ function BrandBlock({ brand }: { brand: ActiveBrand }) {
   return (
     <div className="brand">
       <BrandMark brand={brand} />
-      {(brand.key === 'ajr' || brand.key === 'bmt') && <span className="brand-stripe" aria-hidden="true" />}
+      {(brand.key === 'ajr' || brand.key === 'bmt' || brand.key === 'deca') && <span className="brand-stripe" aria-hidden="true" />}
       <span className="brand-product">SERVICE DESK</span>
       {brand.name && <span className="tiny muted brand-name">{brand.name}</span>}
     </div>
