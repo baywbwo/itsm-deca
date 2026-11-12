@@ -57,13 +57,15 @@ const AUTO_ATTEMPT_LIMIT = 5;
  * same key and payload, so the server replays instead of creating a second ticket. Only a
  * server-confirmed create shows the receipt.
  */
-export function IntakeDialog({ api, workspace, userId, permissions, onClose, onCreated }: {
+export function IntakeDialog({ api, workspace, userId, permissions, onClose, onCreated, asPage = false }: {
   api: Api;
   workspace: Workspace;
   userId: string;
   permissions: WorkspacePermissions;
   onClose: () => void;
   onCreated: (r: TicketCreateResult) => void;
+  /** CP-UI3: render as the "Tiket baru" page card (06) instead of a modal; same validation and submit. */
+  asPage?: boolean;
 }) {
   const tz = workspace.timezone;
   const id = useId();
@@ -200,26 +202,38 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   );
   const catalog = (l: CatalogItem[] | undefined) => active(l).map((c) => ({ id: c.id, label: c.label }));
 
-  return (
-    <Dialog open onClose={busy ? () => undefined : onClose} title="Buat tiket baru" initialFocus={`#${CSS.escape(fid('subject'))}`}
-      footer={(
-        <>
-          {(restored.current || isDirty(draft)) && !busy && (
-            <Button variant="ghost" onClick={discard}>Buang draf</Button>
-          )}
-          <Button onClick={onClose} disabled={busy}>{isDirty(draft) ? 'Tutup (draf disimpan)' : 'Batal'}</Button>
-          {draft.inFlight ? (
-            <Button variant="primary" disabled={busy} aria-busy={busy}
-              onClick={() => void send(draft.inFlight!, draft.key, draft)}>
-              {busy ? 'Mengirim ulang…' : 'Kirim ulang (aman, tanpa duplikat)'}
-            </Button>
-          ) : (
-            <Button variant="primary" type="submit" form={`${id}-form`} disabled={busy || !data} aria-busy={busy}>
-              {busy ? 'Menyimpan…' : 'Buat tiket'}
-            </Button>
-          )}
-        </>
-      )}>
+  const text = (key: 'subject' | 'merchantName' | 'reporterEmail' | 'reporterPhone' | 'reporterName', label: string, placeholder: string, opts: {
+    type?: 'text' | 'email' | 'tel'; required?: boolean; full?: boolean; max?: number; autoComplete?: string;
+  } = {}) => (
+    <div className={opts.full ? 'field full' : 'field'}>
+      <label htmlFor={fid(key)}>{label}{opts.required ? ' *' : ''}</label>
+      <input id={fid(key)} type={opts.type ?? 'text'} className="field-control" value={f[key]} maxLength={opts.max ?? 254}
+        placeholder={placeholder} autoComplete={opts.autoComplete ?? 'off'} aria-required={opts.required || undefined}
+        aria-invalid={errorOf(key) ? true : undefined}
+        aria-describedby={errorOf(key) ? `${fid(key)}-error` : undefined}
+        onChange={(e) => set(key, e.target.value)} />
+      {errorOf(key) && <span id={`${fid(key)}-error`} className="field-error">{errorOf(key)}</span>}
+    </div>
+  );
+  const operationError = errors.some((e) => OPERATION_FIELDS.includes(e.field));
+  const providerError = errors.some((e) => PROVIDER_FIELDS.includes(e.field));
+
+  const discardButton = (restored.current || isDirty(draft)) && !busy
+    ? <Button variant="ghost" onClick={discard}>Buang draf</Button> : null;
+  const cancelButton = <Button onClick={onClose} disabled={busy}>{isDirty(draft) ? 'Tutup (draf disimpan)' : 'Batal'}</Button>;
+  const primaryButton = draft.inFlight ? (
+    <Button variant="primary" disabled={busy} aria-busy={busy}
+      onClick={() => void send(draft.inFlight!, draft.key, draft)}>
+      {busy ? 'Mengirim ulang…' : 'Kirim ulang (aman, tanpa duplikat)'}
+    </Button>
+  ) : (
+    <Button variant="primary" type="submit" form={`${id}-form`} disabled={busy || !data} aria-busy={busy}>
+      {busy ? 'Menyimpan…' : asPage ? 'Simpan tiket' : 'Buat tiket'}
+    </Button>
+  );
+
+  const body = (
+    <>
       <p className="muted tiny">Perusahaan pelapor: <strong>{workspace.code} · {workspace.name}</strong> · mengikuti
         workspace aktif (tidak dapat diubah di sini)</p>
       {restored.current && (
@@ -271,128 +285,137 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
         <form id={`${id}-form`} className="formgrid" noValidate onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <fieldset className="plain-fieldset full formgrid" disabled={locked}>
             <legend className="sr-only">Data pengaduan</legend>
-            <h3 className="intake-section-title full">Identitas pelapor</h3>
-            <p className="tiny muted full">Lengkapi data merchant dan kontak yang dapat dihubungi. Identitas ini belum diverifikasi melalui CIF.</p>
-            {([
-              ['merchantName', 'Nama merchant / usaha', 'Contoh: Toko Melati', 'text'],
-              ['reporterEmail', 'Email akun terdaftar', 'nama@perusahaan.com', 'email'],
-              ['reporterPhone', 'Nomor WhatsApp', '08xxxxxxxxxx', 'tel'],
-              ['reporterName', 'Nama PIC / pelapor', 'Nama yang dapat dihubungi', 'text'],
-            ] as const).map(([key, label, placeholder, type]) => (
-              <div className="field" key={key}>
-                <label htmlFor={fid(key)}>{label}</label>
-                <input id={fid(key)} type={type} className="field-control" value={f[key]}
-                  maxLength={key === 'reporterPhone' ? 40 : 254} placeholder={placeholder}
-                  autoComplete={key === 'reporterEmail' ? 'email' : key === 'reporterPhone' ? 'tel' : 'off'}
-                  aria-invalid={errorOf(key) ? true : undefined}
-                  aria-describedby={errorOf(key) ? `${fid(key)}-error` : undefined}
-                  onChange={e => set(key, e.target.value)} />
-                {errorOf(key) && <span id={`${fid(key)}-error`} className="field-error">{errorOf(key)}</span>}
-              </div>
-            ))}
-            <h3 className="intake-section-title full">Detail pengaduan</h3>
-            {select('categoryId', 'Kategori', catalog(data.catalogs.categories))}
-            {select('intakeChannelId', 'Kanal penerimaan', catalog(data.catalogs.intakeChannels), { required: true, empty: 'Pilih kanal' })}
-            <div className="field full">
-              <label htmlFor={fid('subject')}>Judul pengaduan *</label>
-              <input id={fid('subject')} className="field-control" value={f.subject} maxLength={300} aria-required
-                placeholder="Ringkasan pengaduan yang jelas" aria-invalid={errorOf('subject') ? true : undefined}
-                aria-describedby={errorOf('subject') ? `${fid('subject')}-error` : undefined}
-                onChange={(e) => set('subject', e.target.value)} />
-              {errorOf('subject') && <span id={`${fid('subject')}-error`} className="field-error">{errorOf('subject')}</span>}
-            </div>
+            {text('subject', 'Subjek', 'Ringkasan masalah, maks. 300 karakter', { required: true, full: true, max: 300 })}
+            {text('merchantName', 'Nama merchant / usaha', 'Contoh: Toko Melati')}
+            {text('reporterEmail', 'Email akun terdaftar', 'nama@perusahaan.com', { type: 'email', autoComplete: 'email' })}
+            {text('reporterName', 'Nama PIC / pelapor', 'Nama orang yang menghubungi')}
+            {text('reporterPhone', 'WhatsApp (opsional)', '08xxxxxxxxxx', { type: 'tel', autoComplete: 'tel', max: 40 })}
+            {select('categoryId', 'Kategori', catalog(data.catalogs.categories), { empty: 'Pilih kategori' })}
+            {select('intakeChannelId', 'Kanal diterima', catalog(data.catalogs.intakeChannels), { required: true, empty: 'Pilih kanal' })}
+            {select('priorityId', 'Prioritas', catalog(data.catalogs.priorities))}
+            {select('productId', 'Produk / layanan', catalog(data.catalogs.products), { empty: 'Belum ditentukan' })}
             <div className="field full">
               <label htmlFor={fid('chronology')}>Kronologi *</label>
               <textarea id={fid('chronology')} className="field-control" value={f.chronology} maxLength={20000} aria-required
+                placeholder="Uraikan kejadian: waktu, gejala, langkah yang sudah dicoba…"
                 aria-invalid={errorOf('chronology') ? true : undefined}
                 aria-describedby={`${fid('chronology')}-hint${errorOf('chronology') ? ` ${fid('chronology')}-error` : ''}`}
                 onChange={(e) => set('chronology', e.target.value)} />
-              <span id={`${fid('chronology')}-hint`} className="field-hint">Dapat memuat data pribadi: tidak disalin ke audit, log, Jira atau Lark.</span>
+              <span id={`${fid('chronology')}-hint`} className="field-hint">Maks. 20.000 karakter. Dapat memuat data pribadi: tidak disalin ke audit, log, Jira atau Lark.</span>
               {errorOf('chronology') && <span id={`${fid('chronology')}-error`} className="field-error">{errorOf('chronology')}</span>}
             </div>
             <div className="full"><WordingAssistant key={workspace.id} api={api} workspaceId={workspace.id} text={f.chronology}
               mode="chronology" disabled={locked} onApply={text => set('chronology', text)} /></div>
-            <details className="intake-operations full" open={errors.some(e => ['receivedLocal', 'intakeChannelId', 'priorityId', 'productId', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'].includes(e.field)) || undefined}>
-              <summary>Data penerimaan & penanganan <span>Waktu, kanal, prioritas, dan petugas</span></summary>
-              <div className="formgrid spaced">            <div className="field">
-              <label htmlFor={fid('receivedLocal')}>Waktu diterima *</label>
-              <input id={fid('receivedLocal')} type="datetime-local" className="field-control" value={f.receivedLocal}
-                max={wallTime(Date.now() + 5 * 60000, tz)} aria-required
-                aria-invalid={errorOf('receivedLocal') ? true : undefined}
-                aria-describedby={`${fid('receivedLocal')}-hint${errorOf('receivedLocal') ? ` ${fid('receivedLocal')}-error` : ''}`}
-                onChange={(e) => set('receivedLocal', e.target.value)} />
-              <span id={`${fid('receivedLocal')}-hint`} className="field-hint">Waktu {tzLabel(tz)} ({tz}).</span>
-              {errorOf('receivedLocal') && <span id={`${fid('receivedLocal')}-error`} className="field-error">{errorOf('receivedLocal')}</span>}
-            </div>
-            {select('priorityId', 'Prioritas', catalog(data.catalogs.priorities))}
-            {select('productId', 'Produk/instrumen', catalog(data.catalogs.products))}
-            {select('receivingUnitId', 'Unit penerima', catalog(data.catalogs.receivingUnits))}
-            {select('regionId', 'Wilayah', catalog(data.catalogs.regions))}
-            {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
-              empty: 'Belum ditugaskan',
-              disabled: ownerChoices.length === 0,
-              hint: canAny ? 'Anggota aktif workspace ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
-            })}
-            {select('merchantId', 'Tautkan merchant dari direktori', (data.directory.merchants).map((m) => ({ id: m.id, label: `${m.displayName}${m.reference ? ` · ${m.reference}` : ''} · DUMMY` })), {
-              full: true, hint: 'Data merchant dummy berlabel, bukan hasil CIF. Nomor identitas tidak diminta.',
-            })}
+            <details className="intake-operations full" open={operationError || undefined}>
+              <summary>Data penerimaan & penanganan <span>Waktu diterima, PIC, unit, wilayah, dan direktori merchant</span></summary>
+              <div className="formgrid spaced">
+                <div className="field">
+                  <label htmlFor={fid('receivedLocal')}>Waktu diterima *</label>
+                  <input id={fid('receivedLocal')} type="datetime-local" className="field-control" value={f.receivedLocal}
+                    max={wallTime(Date.now() + 5 * 60000, tz)} aria-required
+                    aria-invalid={errorOf('receivedLocal') ? true : undefined}
+                    aria-describedby={`${fid('receivedLocal')}-hint${errorOf('receivedLocal') ? ` ${fid('receivedLocal')}-error` : ''}`}
+                    onChange={(e) => set('receivedLocal', e.target.value)} />
+                  <span id={`${fid('receivedLocal')}-hint`} className="field-hint">Waktu {tzLabel(tz)} ({tz}).</span>
+                  {errorOf('receivedLocal') && <span id={`${fid('receivedLocal')}-error`} className="field-error">{errorOf('receivedLocal')}</span>}
+                </div>
+                {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
+                  empty: 'Belum ditugaskan',
+                  disabled: ownerChoices.length === 0,
+                  hint: canAny ? 'Anggota aktif workspace ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
+                })}
+                {select('receivingUnitId', 'Unit penerima', catalog(data.catalogs.receivingUnits))}
+                {select('regionId', 'Wilayah', catalog(data.catalogs.regions))}
+                {select('merchantId', 'Tautkan merchant dari direktori', (data.directory.merchants).map((m) => ({ id: m.id, label: `${m.displayName}${m.reference ? ` · ${m.reference}` : ''} · DUMMY` })), {
+                  full: true, hint: 'Data merchant dummy berlabel, bukan hasil CIF. Nomor identitas tidak diminta.',
+                })}
               </div>
             </details>
           </fieldset>
-          <fieldset className="assign-box full formgrid" disabled={locked}>
-            <legend>Assignment & notifikasi <Badge tone="waiting">SIMULASI</Badge></legend>
-            <p className="tiny muted full">PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait. Pilihan provider
-              di sini adalah simulasi konfigurasi workspace {workspace.code}: tidak ada issue atau pesan yang benar-benar dikirim.
-              Tiket tetap tersimpan bila Jira/Lark gagal.</p>
-            <div className="field">
-              <label htmlFor={fid('jiraMode')}>Pekerjaan Jira</label>
-              <select id={fid('jiraMode')} className="field-control" value={f.jiraMode} disabled={!jiraUsable}
-                aria-describedby={`${fid('jiraMode')}-hint`} aria-invalid={errorOf('jiraMode') ? true : undefined}
-                onChange={(e) => set('jiraMode', e.target.value as IntakeForm['jiraMode'])}>
-                <option value="none">Tidak ditautkan</option>
-                {jiraUsable && <option value="create">Buat issue — simulasi</option>}
-                {jiraUsable && <option value="link">Tautkan issue — simulasi</option>}
-              </select>
-              <span id={`${fid('jiraMode')}-hint`} className="field-hint">{providerHint(jira)}</span>
-              {errorOf('jiraMode') && <span className="field-error">{errorOf('jiraMode')}</span>}
-            </div>
-            {f.jiraMode !== 'none' && (
-              <>
-                {f.jiraMode === 'link' && (
+          <details className="intake-operations full" open={f.jiraMode !== 'none' || providerError || undefined}>
+            <summary>Assignment & notifikasi <span>Pekerjaan Jira dan channel Lark (opsional)</span></summary>
+            <fieldset className="plain-fieldset formgrid spaced" disabled={locked}>
+              <legend className="sr-only">Assignment & notifikasi</legend>
+              <p className="tiny muted full"><Badge tone="waiting">SIMULASI</Badge> PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait. Pilihan provider
+                di sini adalah simulasi konfigurasi workspace {workspace.code}: tidak ada issue atau pesan yang benar-benar dikirim.
+                Tiket tetap tersimpan bila Jira/Lark gagal.</p>
+              <div className="field">
+                <label htmlFor={fid('jiraMode')}>Pekerjaan Jira</label>
+                <select id={fid('jiraMode')} className="field-control" value={f.jiraMode} disabled={!jiraUsable}
+                  aria-describedby={`${fid('jiraMode')}-hint`} aria-invalid={errorOf('jiraMode') ? true : undefined}
+                  onChange={(e) => set('jiraMode', e.target.value as IntakeForm['jiraMode'])}>
+                  <option value="none">Tidak ditautkan</option>
+                  {jiraUsable && <option value="create">Buat issue — simulasi</option>}
+                  {jiraUsable && <option value="link">Tautkan issue — simulasi</option>}
+                </select>
+                <span id={`${fid('jiraMode')}-hint`} className="field-hint">{providerHint(jira)}</span>
+                {errorOf('jiraMode') && <span className="field-error">{errorOf('jiraMode')}</span>}
+              </div>
+              {f.jiraMode !== 'none' && (
+                <>
+                  {f.jiraMode === 'link' && (
+                    <div className="field">
+                      <label htmlFor={fid('jiraIssueKey')}>Kunci issue *</label>
+                      <input id={fid('jiraIssueKey')} className="field-control" value={f.jiraIssueKey} maxLength={64}
+                        placeholder={`mis. SIM-${workspace.code}-101`} aria-required
+                        aria-invalid={errorOf('jiraIssueKey') ? true : undefined}
+                        aria-describedby={`${fid('jiraIssueKey')}-hint${errorOf('jiraIssueKey') ? ` ${fid('jiraIssueKey')}-error` : ''}`}
+                        onChange={(e) => set('jiraIssueKey', e.target.value)} />
+                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue dummy yang dikenal simulasi workspace ini.</span>
+                      {errorOf('jiraIssueKey') && <span id={`${fid('jiraIssueKey')}-error`} className="field-error">{errorOf('jiraIssueKey')}</span>}
+                    </div>
+                  )}
                   <div className="field">
-                    <label htmlFor={fid('jiraIssueKey')}>Kunci issue *</label>
-                    <input id={fid('jiraIssueKey')} className="field-control" value={f.jiraIssueKey} maxLength={64}
-                      placeholder={`mis. SIM-${workspace.code}-101`} aria-required
-                      aria-invalid={errorOf('jiraIssueKey') ? true : undefined}
-                      aria-describedby={`${fid('jiraIssueKey')}-hint${errorOf('jiraIssueKey') ? ` ${fid('jiraIssueKey')}-error` : ''}`}
-                      onChange={(e) => set('jiraIssueKey', e.target.value)} />
-                    <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue dummy yang dikenal simulasi workspace ini.</span>
-                    {errorOf('jiraIssueKey') && <span id={`${fid('jiraIssueKey')}-error`} className="field-error">{errorOf('jiraIssueKey')}</span>}
+                    <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? 'Judul issue *' : 'Judul pekerjaan terkait'}</label>
+                    <input id={fid('jiraTitle')} className="field-control" value={f.jiraTitle} maxLength={300}
+                      aria-required={f.jiraMode === 'create' || undefined} aria-invalid={errorOf('jiraTitle') ? true : undefined}
+                      aria-describedby={errorOf('jiraTitle') ? `${fid('jiraTitle')}-error` : undefined}
+                      placeholder="Tanpa identitas pelanggan" onChange={(e) => set('jiraTitle', e.target.value)} />
+                    {errorOf('jiraTitle') && <span id={`${fid('jiraTitle')}-error`} className="field-error">{errorOf('jiraTitle')}</span>}
                   </div>
-                )}
-                <div className="field">
-                  <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? 'Judul issue *' : 'Judul pekerjaan terkait'}</label>
-                  <input id={fid('jiraTitle')} className="field-control" value={f.jiraTitle} maxLength={300}
-                    aria-required={f.jiraMode === 'create' || undefined} aria-invalid={errorOf('jiraTitle') ? true : undefined}
-                    aria-describedby={errorOf('jiraTitle') ? `${fid('jiraTitle')}-error` : undefined}
-                    placeholder="Tanpa identitas pelanggan" onChange={(e) => set('jiraTitle', e.target.value)} />
-                  {errorOf('jiraTitle') && <span id={`${fid('jiraTitle')}-error`} className="field-error">{errorOf('jiraTitle')}</span>}
-                </div>
-                {select('jiraAssigneeId', 'Assignee Jira', (jira?.options ?? []).map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })), {
-                  empty: 'Belum ditugaskan',
-                })}
-              </>
-            )}
-            {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })) : [], {
-              empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark),
-            })}
-          </fieldset>
+                  {select('jiraAssigneeId', 'Assignee Jira', (jira?.options ?? []).map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })), {
+                    empty: 'Belum ditugaskan',
+                  })}
+                </>
+              )}
+              {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: `${o.displayName} — simulasi` })) : [], {
+                empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark),
+              })}
+            </fieldset>
+          </details>
           <button type="submit" hidden tabIndex={-1} aria-hidden="true" />
         </form>
       )}
+    </>
+  );
+
+  if (asPage) {
+    return (
+      <section className="pcard intake-page" aria-labelledby={`${id}-title`}>
+        <div className="hd"><h2 id={`${id}-title`}>Data tiket</h2><span className="sub">* wajib diisi</span></div>
+        <div className="bd">
+          {body}
+          <div className="intake-foot">
+            {primaryButton}
+            {cancelButton}
+            {discardButton}
+            <span className="foot-note">Nomor tiket dibuat otomatis per workspace</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <Dialog open onClose={busy ? () => undefined : onClose} title="Buat tiket baru" initialFocus={`#${CSS.escape(fid('subject'))}`}
+      footer={<>{discardButton}{cancelButton}{primaryButton}</>}>
+      {body}
     </Dialog>
   );
 }
+
+const OPERATION_FIELDS: readonly string[] = ['receivedLocal', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'];
+const PROVIDER_FIELDS: readonly string[] = ['jiraMode', 'jiraIssueKey', 'jiraTitle', 'jiraAssigneeId', 'larkDestinationId'];
 
 function fresh(tz: string): IntakeDraft {
   const form = emptyForm(wallTime(Date.now(), tz));

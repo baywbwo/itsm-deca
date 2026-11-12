@@ -352,9 +352,10 @@ export function reportExportBody(p: ReportParams, format: 'csv' | 'xlsx' = 'csv'
   };
 }
 
-/** CP-UI2b breadcrumb: "Detail tiket" on the full-page detail, "Board" on the board view. */
+/** CP-UI2b breadcrumb: "Detail tiket" on the full-page detail, "Board" on the board view; CP-UI3 "Tiket baru". */
 export function crumbLabel(route: Route): string {
   if (route.page === 'tickets') {
+    if (isNewTicket(route)) return 'Tiket baru';
     if (parseDetailQuery(route.query).full) return 'Detail tiket';
     if (parseTicketQuery(route.query).view === 'board') return 'Board';
   }
@@ -370,8 +371,10 @@ export interface NavItem {
 }
 export interface NavGroup { label: string; items: NavItem[] }
 
-/** Query flag of the "Tiket baru" link: Tiket opens the intake form once, then drops it. */
+/** Query flag of the "Tiket baru" page (CP-UI3): the Tiket page renders the intake form as a page. */
 export const NEW_TICKET_FLAG = 'new';
+export const isNewTicket = (route: Route): boolean =>
+  route.page === 'tickets' && new URLSearchParams(route.query).get(NEW_TICKET_FLAG) === '1';
 
 /**
  * Sidebar groups from the pages the server allows here (default deny, same as before). Board is
@@ -382,10 +385,11 @@ export function navGroups(pages: readonly PageDef[], route: Route, canCreate: bo
   const ws = route.workspaceId;
   if (!ws) return [];
   const has = (id: PageId) => pages.some((p) => p.id === id);
-  const board = route.page === 'tickets' && parseTicketQuery(route.query).view === 'board';
+  const fresh = canCreate && isNewTicket(route);
+  const board = !fresh && route.page === 'tickets' && parseTicketQuery(route.query).view === 'board';
   const item = (id: PageId): NavItem => ({
     key: id, label: pageDef(id).label, href: toHash({ workspaceId: ws, page: id }),
-    current: route.page === id && !(id === 'tickets' && board),
+    current: route.page === id && !(id === 'tickets' && (board || fresh)),
   });
   const ops: NavItem[] = [];
   if (has('dashboard')) ops.push(item('dashboard'));
@@ -393,7 +397,7 @@ export function navGroups(pages: readonly PageDef[], route: Route, canCreate: bo
     ops.push(item('tickets'));
     ops.push({ key: 'board', label: 'Board', href: toHash({ workspaceId: ws, page: 'tickets', query: 'view=board' }), current: board });
     if (canCreate) {
-      ops.push({ key: 'new', label: 'Tiket baru', href: toHash({ workspaceId: ws, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` }), current: false });
+      ops.push({ key: 'new', label: 'Tiket baru', href: toHash({ workspaceId: ws, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` }), current: fresh });
     }
   }
   const groups: NavGroup[] = [

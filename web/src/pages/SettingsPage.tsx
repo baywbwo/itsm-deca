@@ -5,11 +5,13 @@ import type {
   Workspace, WorkspaceSettings,
 } from '../api/types';
 import { BRAND_PRESETS } from '../app/brand';
+import { initials } from '../app/labels';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
 import { Dialog } from '../components/Dialog';
 import { SelectField, TextField } from '../components/Field';
+import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import {
@@ -33,7 +35,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
 }) {
   const tabs: { id: TabId; label: string }[] = [
     ...(permissions.includes('catalog.read') ? [{ id: 'workspace' as const, label: 'Workspace' }] : []),
-    ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota' }] : []),
+    ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota & Grant' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
   ];
   const [tab, setTab] = useState<TabId>(tabs[0]?.id ?? 'workspace');
@@ -41,14 +43,16 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
   if (tabs.length === 0) return <ForbiddenState />;
   return (
     <>
-      <PageHeader eyebrow={workspace.code} title="Pengaturan"
-        description={`Kelola profil perusahaan dan anggota ${workspace.code}.`} />
+      <PageHeader title="Pengaturan"
+        description={`Anggota & grant dan profil workspace ${workspace.code}${uat ? ' · perusahaan' : ''}`} />
+      <section className="pcard settings-card" aria-label="Bagian pengaturan">
       <Tabs tabs={tabs} value={tab} onChange={setTab} label="Bagian pengaturan" panelId={panelId} />
       <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-tab-${tab}`}>
         {tab === 'workspace' && <WorkspaceTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
       </div>
+      </section>
     </>
   );
 }
@@ -76,8 +80,8 @@ function WorkspaceTab({ api, workspace, onNotice, onChanged }: {
   api: Api; workspace: Workspace; onNotice: (t: string) => void; onChanged: () => void;
 }) {
   const res = useLoad((s) => api.getSettings(workspace.id, s), workspace.id);
-  if (res.error) return <LoadFailure error={res.error} what="Profil workspace" onRetry={res.reload} />;
-  if (!res.data) return <LoadingState label="Memuat profil workspace…" />;
+  if (res.error) return <div className="bd"><LoadFailure error={res.error} what="Profil workspace" onRetry={res.reload} /></div>;
+  if (!res.data) return <div className="bd"><LoadingState label="Memuat profil workspace…" /></div>;
   return <WorkspaceForm key={res.data.settings.version} api={api} body={res.data} onReload={res.reload}
     onSaved={(b) => { res.set(b); onChanged(); onNotice('Profil workspace tersimpan dan tercatat di audit.'); }} />;
 }
@@ -122,11 +126,15 @@ function WorkspaceForm({ api, body, onReload, onSaved }: {
     ['Anggota aktif', String(s.memberCount)],
   ];
   return (
-    <section className="card" aria-labelledby="ws-profile">
-      <h2 id="ws-profile">Profil workspace</h2>
+    <section className="set-sec" aria-labelledby="ws-profile">
+      <div className="set-hd">
+        <h2 id="ws-profile">Profil workspace</h2>
+        <span className="sub">Identitas workspace dan kepala berkas ekspor · perubahan tercatat di audit</span>
+      </div>
+      <div className="bd">
       {!body.canEdit && <ReadOnlyBanner what="Profil workspace" />}
       {error && <WriteAlert error={error} onReload={onReload} />}
-      <dl className="props spaced-bottom">
+      <dl className="kv set-kv">
         {props.map(([k, v]) => <div key={k} className="props-row"><dt>{k}</dt><dd>{v}</dd></div>)}
       </dl>
       {body.canEdit ? (
@@ -143,7 +151,7 @@ function WorkspaceForm({ api, body, onReload, onSaved }: {
             hint="Opsional. Isi hanya kode yang sudah diverifikasi kantor; tidak ada format yang ditebak."
             error={error?.field === 'reporterCode' ? 'Periksa kode pelapor.' : undefined}
             onChange={(e) => setForm({ ...form, reporterCode: e.target.value })} />
-          <div className="full row">
+          <div className="full row set-foot">
             <Button type="submit" variant="primary" disabled={busy || !dirty} aria-busy={busy}>
               {busy ? 'Menyimpan…' : 'Simpan profil'}
             </Button>
@@ -151,13 +159,14 @@ function WorkspaceForm({ api, body, onReload, onSaved }: {
           </div>
         </form>
       ) : (
-        <dl className="props">
+        <dl className="kv set-kv">
           <div className="props-row"><dt>Nama workspace</dt><dd>{s.workspaceName}</dd></div>
           <div className="props-row"><dt>Nama perusahaan</dt><dd>{s.companyName}</dd></div>
           <div className="props-row"><dt>Zona waktu</dt><dd>{TZ_LABEL[s.timezone] ?? s.timezone}</dd></div>
           <div className="props-row"><dt>Kode pelapor</dt><dd>{s.reporterCode ?? 'Belum diisi'}</dd></div>
         </dl>
       )}
+      </div>
     </section>
   );
 }
@@ -168,23 +177,25 @@ function MembersTab({ api, workspace, onNotice }: { api: Api; workspace: Workspa
   const res = useLoad((s) => api.getMemberList(workspace.id, s), workspace.id);
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  if (res.error) return <LoadFailure error={res.error} what="Daftar anggota" onRetry={res.reload} />;
+  if (res.error) return <div className="bd"><LoadFailure error={res.error} what="Daftar anggota" onRetry={res.reload} /></div>;
   const list = res.data;
-  if (!list) return <LoadingState label="Memuat anggota…" />;
+  if (!list) return <div className="bd"><LoadingState label="Memuat anggota…" /></div>;
   const replace = (m: Member) => res.set({ ...list, items: list.items.map((x) => (x.membershipId === m.membershipId ? m : x)) });
   const target = list.items.find((m) => m.membershipId === editing) ?? null;
   return (
-    <section aria-labelledby="members-title">
-      <div className="row between spaced-bottom">
+    <section className="set-sec" aria-labelledby="members-title">
+      <div className="set-hd">
         <h2 id="members-title">Anggota {workspace.code}</h2>
-        {list.canManage && <Button variant="primary" onClick={() => setAdding(true)}>＋ Tambah anggota</Button>}
+        <span className="sub">{list.items.length} anggota</span>
+        {list.canManage && <div className="r"><Button className="btn-small" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Tambah anggota</Button></div>}
       </div>
-      {!list.canManage && <ReadOnlyBanner what="Keanggotaan" />}
+      {!list.canManage && <div className="bd"><ReadOnlyBanner what="Keanggotaan" /></div>}
+      <div className="ptable">
       <DataTable caption={`Anggota workspace ${workspace.code}`} rows={list.items} rowKey={(m) => m.membershipId}
         empty={{ title: 'Belum ada anggota', body: 'Workspace ini belum memiliki anggota.' }}
         columns={[
-          { key: 'name', header: 'Nama', cell: (m) => <>{m.displayName}{m.membershipId === list.myMembershipId ? ' (saya)' : ''}</> },
-          { key: 'role', header: 'Peran', cell: (m) => ROLE_LABEL[m.role] },
+          { key: 'name', header: 'Nama', cell: (m) => <span className="cell-person"><span className="avatar" aria-hidden="true">{initials(m.displayName)}</span><b>{m.displayName}</b>{m.membershipId === list.myMembershipId ? ' (saya)' : ''}</span> },
+          { key: 'role', header: 'Peran', cell: (m) => <Badge tone={m.role === 'lead_cs' ? 'blue' : 'neutral'}>{ROLE_LABEL[m.role]}</Badge> },
           { key: 'status', header: 'Status', cell: (m) => <Badge tone={m.active ? 'ok' : 'neutral'}>{m.active ? 'Aktif' : 'Nonaktif'}</Badge> },
           ...(list.canManage ? [{
             key: 'grants', header: 'Hak tambahan',
@@ -193,10 +204,12 @@ function MembersTab({ api, workspace, onNotice }: { api: Api; workspace: Workspa
           {
             key: 'act', header: 'Aksi',
             cell: (m) => (list.canManage && m.membershipId !== list.myMembershipId
-              ? <Button onClick={() => setEditing(m.membershipId)} aria-label={`Kelola ${m.displayName}`}>Kelola</Button>
+              ? <Button className="btn-small" onClick={() => setEditing(m.membershipId)} aria-label={`Kelola ${m.displayName}`}>Kelola</Button>
               : <span className="tiny muted">{m.membershipId === list.myMembershipId ? 'Tidak dapat mengubah diri sendiri' : '—'}</span>),
           },
         ]} />
+      </div>
+      <p className="hintline set-note">Hak tambahan (grant) diberikan per anggota dan tidak diwarisi dari peran; setiap perubahan tercatat di audit.</p>
       {adding && (
         <AddMemberDialog api={api} workspace={workspace} onClose={() => setAdding(false)}
           onDone={(m) => { res.set({ ...list, items: [...list.items, m] }); setAdding(false); onNotice(`${m.displayName} ditambahkan sebagai ${ROLE_LABEL[m.role]}. Tercatat di audit.`); }} />
@@ -355,43 +368,48 @@ function CompaniesTab({ api, workspace, onNotice, onChanged }: {
   const [toggle, setToggle] = useState<WorkspaceSettings | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
   const [error, setError] = useState<WriteError | null>(null);
-  if (res.error) return <LoadFailure error={res.error} what="Daftar perusahaan" onRetry={res.reload} />;
+  if (res.error) return <div className="bd"><LoadFailure error={res.error} what="Daftar perusahaan" onRetry={res.reload} /></div>;
   const list = res.data;
-  if (!list) return <LoadingState label="Memuat perusahaan…" />;
+  if (!list) return <div className="bd"><LoadingState label="Memuat perusahaan…" /></div>;
   const replace = (c: WorkspaceSettings) => {
     res.set({ items: list.items.map((x) => (x.companyId === c.companyId ? c : x)) });
     onChanged();
   };
   const editing = list.items.find((c) => c.companyId === editId) ?? null;
   return (
-    <section aria-labelledby="co-title">
-      <div className="row between spaced-bottom">
+    <section className="set-sec" aria-labelledby="co-title">
+      <div className="set-hd">
         <h2 id="co-title">Perusahaan & workspace</h2>
-        <Button variant="primary" onClick={() => setAdding(true)}>＋ Tambah perusahaan</Button>
+        <span className="sub">Hanya Superadmin · satu perusahaan = satu workspace, tanpa parent/child · workspace baru dibuat tanpa anggota</span>
+        <div className="r"><Button className="btn-small" onClick={() => setAdding(true)}><Icon name="plus" size={14} /> Tambah perusahaan</Button></div>
       </div>
-      <p className="banner spaced-bottom" role="note">
-        Hanya Superadmin. Satu perusahaan = satu workspace, tanpa parent/child. Workspace baru dibuat tanpa anggota.
-      </p>
-      {error && <WriteAlert error={error} onReload={() => { setError(null); res.reload(); }} />}
+      {error && <div className="bd"><WriteAlert error={error} onReload={() => { setError(null); res.reload(); }} /></div>}
+      <div className="ptable">
       <DataTable caption="Perusahaan dan workspace" rows={list.items} rowKey={(c) => c.companyId}
         empty={{ title: 'Belum ada perusahaan', body: 'Tambahkan perusahaan pertama.' }}
         columns={[
-          { key: 'name', header: 'Perusahaan', cell: (c) => c.companyName },
+          { key: 'name', header: 'Perusahaan', cell: (c) => <b>{c.companyName}</b> },
           { key: 'code', header: 'Workspace', cell: (c) => <><code>{c.workspaceCode}</code> {c.workspaceName}{c.workspaceId === workspace.id ? ' (aktif dibuka)' : ''}</> },
-          { key: 'brand', header: 'Branding', cell: (c) => (c.brandKey ? BRAND_PRESETS[c.brandKey].label : 'Netral (belum diatur)') },
+          {
+            key: 'brand', header: 'Logo & nama',
+            cell: (c) => (c.brandKey
+              ? <span className="brand-cell"><img src={BRAND_PRESETS[c.brandKey].logo} alt="" />{c.brandName ?? BRAND_PRESETS[c.brandKey].label}</span>
+              : <span className="muted">Netral (belum diatur)</span>),
+          },
           { key: 'members', header: 'Anggota', cell: (c) => c.memberCount },
           { key: 'status', header: 'Status', cell: (c) => <Badge tone={c.active ? 'ok' : 'neutral'}>{c.active ? 'Aktif' : 'Nonaktif'}</Badge> },
           {
             key: 'act', header: 'Aksi',
             cell: (c) => (
               <div className="row">
-                <Button onClick={() => { setError(null); setEditId(c.companyId); }} aria-label={`Edit ${c.companyName}`}>Edit</Button>
-                <Button onClick={() => { setError(null); setToggle(c); }} aria-label={`${c.active ? 'Nonaktifkan' : 'Aktifkan'} ${c.companyName}`}>
+                <Button className="btn-small" onClick={() => { setError(null); setEditId(c.companyId); }} aria-label={`Edit ${c.companyName}`}>Edit</Button>
+                <Button className="btn-small" onClick={() => { setError(null); setToggle(c); }} aria-label={`${c.active ? 'Nonaktifkan' : 'Aktifkan'} ${c.companyName}`}>
                   {c.active ? 'Nonaktifkan' : 'Aktifkan'}</Button>
               </div>
             ),
           },
         ]} />
+      </div>
       {adding && (
         <CompanyDialog api={api} onClose={() => setAdding(false)}
           onDone={(c) => { res.set({ items: [...list.items, c] }); setAdding(false); onChanged(); onNotice(`${c.companyName} (${c.workspaceCode}) dibuat tanpa anggota. Tercatat di audit.`); }} />
@@ -536,13 +554,23 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
           hint="Opsional; isi setelah kode terverifikasi."
           error={error?.field === 'reporterCode' ? 'Periksa kode pelapor.' : undefined}
           onChange={(e) => setForm({ ...form, reporterCode: e.target.value })} />
-        <SelectField label="Branding" value={form.brandKey} disabled={busy}
-          hint="Logo dan warna aplikasi saat workspace ini dibuka. Hanya preset bawaan aplikasi."
-          error={error?.field === 'brandKey' ? 'Pilih salah satu preset.' : undefined}
-          onChange={(e) => setForm({ ...form, brandKey: e.target.value })}>
-          <option value="">Netral (tanpa logo)</option>
-          {Object.values(BRAND_PRESETS).map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-        </SelectField>
+        <fieldset className="full field brand-presets" aria-describedby={`${formId}-brand-hint`}>
+          <legend>Preset logo</legend>
+          <div className="brand-chips">
+            {[{ key: '', label: 'Netral (tanpa logo)', logo: null as string | null }, ...Object.values(BRAND_PRESETS)].map((p) => (
+              <label key={p.key || 'none'} className={`brand-chip${form.brandKey === p.key ? ' on' : ''}`}>
+                <input type="radio" name={`${formId}-brand`} value={p.key} checked={form.brandKey === p.key} disabled={busy}
+                  onChange={() => setForm({ ...form, brandKey: p.key })} />
+                {p.logo && <img src={p.logo} alt="" />}
+                <span>{p.label}</span>
+              </label>
+            ))}
+          </div>
+          <span id={`${formId}-brand-hint`} className="field-hint">
+            Hanya logo dan nama tampilan; warna aplikasi sama untuk semua perusahaan. Logo dipilih dari preset bawaan, bukan unggahan berkas.
+          </span>
+          {error?.field === 'brandKey' && <span className="field-error">Pilih salah satu preset.</span>}
+        </fieldset>
         <TextField label="Nama tampilan" maxLength={60} value={form.brandName} disabled={busy}
           hint="Opsional; tampil di bawah logo dan judul tab. Kosong = nama perusahaan."
           error={error?.field === 'brandName' ? 'Maks. 60 karakter.' : undefined}
@@ -553,7 +581,7 @@ function CompanyEditDialog({ api, company, onClose, onDone, onRefreshed }: {
             : <span className="brand-mark">ITSM</span>}
           <span>
             <span className="brand-name">{form.brandName.trim() || form.companyName.trim() || company.companyName}</span>
-            <span className="tiny muted"> · {preset ? preset.label : 'Netral'}</span>
+            <span className="tiny muted"> · {preset ? `logo ${preset.label}` : 'tanpa logo'}</span>
           </span>
         </div>
         <p className="full tiny muted">Hanya profil yang berubah. Data, nomor tiket yang sudah terbit, laporan dan histori tidak dipindah atau dinomori ulang; perubahan tercatat di audit.</p>

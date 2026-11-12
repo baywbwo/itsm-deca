@@ -200,3 +200,144 @@ details.audit-fold:not([open]) > summary { border-bottom: 0; }
 details.audit-fold > summary .r svg { transition: transform .15s; transform: rotate(-90deg); }
 details.audit-fold[open] > summary .r svg { transform: none; }
 dl.kv dd.kv-text { font-weight: 400; font-size: 12px; }
+
+/* CP-UI3 shared: hint text (prototype .hintline, muted for AA contrast). */
+.hintline { font-size: 11px; color: var(--muted); margin: 0; }
+
+/* CP-UI3 Board (05): columns wrap instead of scrolling sideways; each column scrolls inside. */
+.board-filter-panel { margin-bottom: 12px; }
+.board-filter-panel > .ticket-toolbar { border-top: 1px solid var(--line); padding: 12px 16px; margin: 0; }
+.board-hint { margin: 0 0 10px; }
+.board-page .board { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; overflow: visible; padding-bottom: 8px; align-items: start; }
+.board-page .column { flex: none; max-width: none; min-width: 0; min-height: 200px; background: #edf2f7; border: 1px solid var(--line); border-radius: 12px; padding: 10px; }
+.board-page .column.drop { background: #e3eef9; border-color: #7fa6ce; box-shadow: inset 0 0 0 1px #7fa6ce; }
+.board-page .column h3 { justify-content: flex-start; gap: 7px; margin: 2px 4px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); }
+.board-page .column h3 .n { margin-left: auto; background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; font-size: 10.5px; color: var(--muted); letter-spacing: 0; }
+.col-label { display: inline-flex; align-items: center; gap: 6px; }
+.col-label::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #8a9aac; }
+.col-label.tone-blue::before, .col-label.tone-open::before { background: #2f6fd0; }
+.col-label.tone-waiting::before { background: #c98a1b; }
+.col-label.tone-violet::before { background: #7c4dcc; }
+.col-label.tone-ok::before { background: #1f8a4c; }
+.col-label.tone-error::before { background: #d64545; }
+.col-list { max-height: 620px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.board-page .col-empty { text-align: center; padding: 22px 8px; color: var(--muted); font-size: 12px; margin: 0; }
+.tcard { border-radius: 10px; padding: 11px; gap: 7px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(15, 27, 45, .05); }
+.tcard:hover { border-color: #c9d6e4; box-shadow: 0 2px 10px -6px rgba(15, 27, 45, .35); }
+.tcard .ticket-open { gap: 6px; width: 100%; }
+.tcard .tc-no { display: flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 800; color: var(--sapphire); }
+.tcard .tc-no .pri { font-size: 10.5px; font-weight: 700; }
+.tcard .ticket-title { font-size: 12.5px; line-height: 1.35; }
+.tcard .ticket-meta { font-size: 10.5px; }
+.tcard .no-pic { color: #8a5b00; font-weight: 800; }
+.tcard .btn-small { justify-self: start; }
+.board-page > .notice { margin-bottom: 12px; }
+
+/* CP-UI3 Tiket baru (06): page card, form footer row. */
+.intake-page { max-width: 900px; }
+.intake-page .intake-section-title { display: none; }
+.intake-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+.intake-foot .foot-note { margin: 0 0 0 auto; }
+@media (max-width: 560px) {
+  .intake-foot > .btn { flex: 1 1 auto; }
+  .intake-foot .foot-note { margin-left: 0; width: 100%; }
+  .board-filter-panel > .ticket-toolbar { padding: 12px; }
+}
+.tcard .chips .badge { white-space: normal; max-width: 100%; }
+.tcard .btn-small { padding: 3px 9px; min-height: 26px; font-size: 11px; }
+
+/* CP-UI3 Laporan (07): parameter card, KPI, per-status table, breakdown bars, last exports, amber note. */
+.rep-params, .rep-block, .rep-runs, .rep-kpis, .rep-breakdowns { margin: 0 0 14px; }
+.rep-grid { gap: 12px 16px; }
+fieldset.field { border: 0; padding: 0; margin: 0; min-width: 0; }
+fieldset.field > legend { padding: 0; margin: 0 0 6px; font-size: 12px; font-weight: 700; }
+.rep-dates { display: flex; gap: 8px; align-items: center; }
+.rep-dates label { flex: 1 1 0; min-width: 0; }
+.rep-more > summary { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--sapphire); width: max-content; }
+.rep-more > .formgrid { margin-top: 12px; gap: 12px 16px; }
+.rep-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+.rep-limit { margin-left: auto; }
+.rep-export-state { margin-top: 8px; }
+.rep-export-state:empty { display: none; }
+.kpi2 .val.na { font-size: 16px; line-height: 1.9; color: var(--muted); letter-spacing: 0; }
+.rep-breakdowns { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ptable .tablebox { border: 0; border-radius: 0; }
+.ptable caption:not(.sr-only) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ptable tfoot th, .ptable tfoot td { padding: 10px 14px; border-top: 1px solid var(--line); text-align: left; font-size: 12.5px; color: var(--ink); }
+.ptable tfoot th:first-child { padding-left: 16px; }
+.callout-amber { border-color: #f6dcb0; background: #fffdf6; box-shadow: none; }
+.callout-amber h2 { font-size: 12.5px; font-weight: 800; margin: 0 0 5px; color: var(--ink); }
+.rep-source { margin: 0 0 14px; }
+@media (max-width: 1080px) { .rep-breakdowns { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 560px) {
+  .rep-limit { margin-left: 0; flex-basis: 100%; }
+  .rep-actions .btn { flex: 1 1 auto; }
+}
+.rep-rows > summary { cursor: pointer; list-style: none; }
+.rep-rows > summary::-webkit-details-marker { display: none; }
+.rep-rows:not([open]) > summary { border-bottom: 0; }
+.rep-rows .rep-toggle svg { transition: transform .15s; }
+.rep-rows[open] .rep-toggle svg { transform: rotate(180deg); }
+
+/* CP-UI3 Pengaturan (08) and Pengguna: tabs inside one card, flush tables, logo preset chips. */
+.settings-card > .tabs { gap: 4px; padding: 0 16px; margin: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.settings-card > .tabs button { padding: 12px 12px 11px; font-size: 12.5px; font-weight: 800; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.settings-card > .tabs button.active { color: var(--sapphire); border-bottom-color: var(--sapphire); }
+.set-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); }
+.set-hd h2 { font-size: 13.5px; font-weight: 800; margin: 0; color: var(--ink); }
+.set-hd .sub { font-size: 11.5px; color: var(--muted); }
+.set-hd .r { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.set-sec > .bd { padding: 14px 16px; }
+.set-kv { margin: 0 0 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line-soft); grid-template-columns: 140px minmax(0, 1fr); }
+.set-foot { padding-top: 4px; }
+.set-note { padding: 11px 16px; border-top: 1px solid var(--line-soft); }
+.cell-person { display: inline-flex; align-items: center; gap: 8px; }
+.cell-person .avatar { width: 26px; height: 26px; font-size: 10.5px; }
+.brand-cell { display: inline-flex; align-items: center; gap: 8px; }
+.brand-cell img { height: 18px; width: auto; max-width: 64px; object-fit: contain; }
+fieldset.brand-presets { display: grid; gap: 8px; }
+.brand-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.brand-chip { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; font-size: 12.5px; font-weight: 700; color: var(--ink-2); cursor: pointer; }
+.brand-chip input { margin: 0; accent-color: var(--sapphire); }
+.brand-chip img { height: 18px; width: auto; max-width: 60px; object-fit: contain; }
+.brand-chip.on { border-color: var(--sapphire); background: var(--sapphire-100); color: var(--sapphire); }
+.brand-chip:focus-within { outline: 2px solid var(--focus); outline-offset: 1px; }
+@media (max-width: 560px) { .set-kv { grid-template-columns: 110px minmax(0, 1fr); } }
+
+/* CP-UI3 Integrasi (ref 09): one pcard per connection, honest "Belum tersambung" */
+.int-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin: 0 0 14px; align-items: start; }
+.int-logo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: var(--soft); color: var(--accent); font-weight: 800; font-size: 13px; flex: none; }
+.int-role { margin: 0 0 12px; font-size: 12.5px; color: var(--ink-2); }
+.int-kv { grid-template-columns: 120px minmax(0, 1fr); }
+.int-more { margin-top: 12px; font-size: 12.5px; }
+.int-more summary { cursor: pointer; font-weight: 700; color: var(--accent); }
+.int-more .cif-flow { margin: 10px 0 6px; }
+.int-channel-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0; margin: 0; padding: 0; }
+.int-channel-list li { padding: 13px 16px; border-right: 1px solid var(--line-soft); }
+.int-channel-list li:last-child { border-right: 0; }
+.int-ch-hd { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.int-channel-list p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.int-channels { margin: 0 0 14px; }
+@media (max-width: 560px) {
+  .int-grid { grid-template-columns: minmax(0, 1fr); }
+  .int-kv { grid-template-columns: 104px minmax(0, 1fr); }
+  .int-channel-list li { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+  .int-channel-list li:last-child { border-bottom: 0; }
+}
+
+/* CP-UI3 Pengguna: prototype table card, inline search + status filter */
+.users-card > .hd .usr-tools { flex: 0 1 520px; flex-wrap: nowrap; justify-content: flex-end; }
+.usr-tools .toolbar-search { flex: 1 1 260px; min-width: 0; }
+.users-card .cell-person { min-width: 200px; }
+.usr-tools .toolbar-search .field-control { width: 100%; min-width: 220px; }
+.usr-tools .toolbar-select .field-control { max-width: 170px; }
+.users-card .cell-person > span:last-child { display: grid; gap: 1px; }
+.usr-login { font-weight: 400; }
+.usr-actions { gap: 6px; flex-wrap: nowrap; }
+.usr-more { gap: 10px; border-top: 1px solid var(--line-soft); }
+@media (max-width: 560px) {
+  .users-card > .hd .usr-tools { margin-left: 0; flex: 1 1 100%; flex-wrap: wrap; justify-content: stretch; }
+  .usr-tools .toolbar-search { flex: 1 1 100%; }
+  .usr-tools .toolbar-search .field-control { min-width: 0; }
+  .usr-tools .toolbar-select, .usr-tools .toolbar-select .field-control { width: 100%; max-width: none; }
+}

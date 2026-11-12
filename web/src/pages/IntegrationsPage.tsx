@@ -18,14 +18,15 @@ const PROVIDER_ROLE: Record<ProviderCode, string> = {
 };
 const STATE: Record<IntegrationConnection['state'], { label: string; tone: BadgeTone }> = {
   draft: { label: 'Draft', tone: 'neutral' },
-  tested: { label: 'Teruji (simulasi)', tone: 'blue' },
-  active: { label: 'Aktif (simulasi)', tone: 'ok' },
+  tested: { label: 'Teruji', tone: 'blue' },
+  active: { label: 'Aktif', tone: 'ok' },
   disabled: { label: 'Nonaktif', tone: 'waiting' },
 };
 const ACTION: Record<string, string> = {
   'integration.create': 'Koneksi dibuat',
   'integration.update': 'Nama koneksi diubah',
-  'integration.test': 'Uji simulasi',
+  'integration.test': 'Uji konfigurasi',
+  'integration.simulation': 'Percobaan kirim (tanpa penyedia)',
   'integration.activate': 'Diaktifkan',
   'integration.disable': 'Dinonaktifkan',
 };
@@ -40,16 +41,17 @@ const UNAVAILABLE: readonly { name: string; body: string }[] = [
 ];
 
 /**
- * O08 Integrasi: one card per provider. Jira and Lark run in SIMULATION only: save → test →
- * activate, disable at any time; no provider is contacted and no credential or mapping exists.
+ * O08 Integrasi: one card per connection. Every connection is `mode: simulation` in this build: save → test →
+ * activate, disable at any time; no provider is contacted and no credential or mapping exists, so each card
+ * says "Belum tersambung". Page copy avoids "simulasi"/"dummy"; names and notes typed into the data are shown as stored.
  */
 export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; workspace: Workspace; onNotice: (t: string) => void }) {
   const res = useLoad((s) => api.listIntegrations(workspace.id, s), workspace.id);
   const [open, setOpen] = useState<string | null>(null);
   const [creating, setCreating] = useState<ProviderCode | null>(null);
   const header = (
-    <PageHeader eyebrow={workspace.code} title="Integrasi"
-      description={`Kelola koneksi, kanal layanan, dan sumber data nasabah untuk ${workspace.name}.`} />
+    <PageHeader title="Integrasi"
+      description={`Jira & Lark · satu koneksi per penyedia per workspace ${workspace.code}`} />
   );
   if (res.error) {
     if (res.error instanceof ApiError && res.error.status === 403) return <>{header}<ForbiddenState /></>;
@@ -65,59 +67,93 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
   if (!list) return <>{header}<LoadingState label="Memuat integrasi…" /></>;
   const replace = (c: IntegrationConnection) => res.set({ ...list, items: list.items.map((x) => (x.id === c.id ? c : x)) });
   const target = list.items.find((c) => c.id === open) ?? null;
+  const tz = workspace.timezone;
   return (
     <>
       {header}
-      <p className="banner spaced-bottom" role="note">
-        Mode simulasi · kredensial dan mapping penyedia belum tersedia (menunggu endpoint, akun dan kode terverifikasi dari kantor).
-        Uji simulasi tidak membuktikan koneksi kantor.
-      </p>
-      <section className="connection-guide" aria-label="Tahapan koneksi">
-        <div><span className="eyebrow">Alur koneksi</span><h2>Konfigurasi sekali. Pantau setiap proses.</h2><p className="tiny muted">Koneksi dan tujuan mengikuti perusahaan yang sedang aktif.</p></div>
-        <ol><li><span>01</span>Simpan draft</li><li><span>02</span>Uji simulasi</li><li><span>03</span>Aktifkan</li></ol>
-      </section>
-      <div className="section-heading"><h2>Kolaborasi tim</h2><span className="tiny muted">Jira &amp; Lark</span></div>
-      <div className="integration-grid">
+      <div className="int-grid">
         {list.items.map((c) => (
-          <article key={c.id} className="card integration" aria-labelledby={`int-${c.id}`}>
-            <div>
-              <h2 id={`int-${c.id}`}>{PROVIDER_LABEL[c.provider]} <Badge tone={STATE[c.state].tone}>{STATE[c.state].label}</Badge></h2>
-              <p className="tiny muted">{c.displayName}</p>
-              <p className="tiny">{PROVIDER_ROLE[c.provider]}</p>
-              <p className="tiny muted">
-                {c.testedAt ? `Terakhir diuji ${instantLabel(c.testedAt, workspace.timezone)}` : 'Belum pernah diuji'} · {c.directoryCount} tujuan dummy
-              </p>
+          <section key={c.id} className="pcard int-card" aria-labelledby={`int-${c.id}`}>
+            <div className="hd">
+              <span className="int-logo" aria-hidden="true">{PROVIDER_LABEL[c.provider].slice(0, 1)}</span>
+              <h2 id={`int-${c.id}`}>{PROVIDER_LABEL[c.provider]}</h2>
+              <Badge tone="waiting">Belum tersambung</Badge>
+              <div className="r">
+                <Button className="btn-small" onClick={() => setOpen(c.id)} aria-label={`Kelola ${PROVIDER_LABEL[c.provider]}`}>Kelola</Button>
+              </div>
             </div>
-            <Button onClick={() => setOpen(c.id)} aria-label={`Konfigurasi ${PROVIDER_LABEL[c.provider]}`}>Konfigurasi →</Button>
-          </article>
+            <div className="bd">
+              <p className="int-role">{PROVIDER_ROLE[c.provider]}</p>
+              <dl className="kv int-kv">
+                <dt>Konfigurasi</dt><dd><Badge tone={STATE[c.state].tone}>{STATE[c.state].label}</Badge></dd>
+                <dt>Kredensial</dt><dd className="kv-text">Belum tersedia</dd>
+                <dt>Mapping</dt><dd className="kv-text">Belum tersedia</dd>
+                <dt>Terakhir diuji</dt><dd className="kv-text">{c.testedAt ? instantLabel(c.testedAt, tz) : 'Belum pernah diuji'}</dd>
+                <dt>Daftar tujuan</dt><dd className="kv-text">{c.directoryCount} entri uji</dd>
+              </dl>
+            </div>
+          </section>
         ))}
         {list.creatable.map((p) => (
-          <article key={p} className="card integration" aria-labelledby={`int-new-${p}`}>
-            <div>
-              <h2 id={`int-new-${p}`}>{PROVIDER_LABEL[p]} <Badge>Belum dibuat</Badge></h2>
-              <p className="tiny">{PROVIDER_ROLE[p]}</p>
+          <section key={p} className="pcard int-card" aria-labelledby={`int-new-${p}`}>
+            <div className="hd">
+              <span className="int-logo" aria-hidden="true">{PROVIDER_LABEL[p].slice(0, 1)}</span>
+              <h2 id={`int-new-${p}`}>{PROVIDER_LABEL[p]}</h2>
+              <Badge>Belum dibuat</Badge>
+              <div className="r"><Button className="btn-small" variant="primary" onClick={() => setCreating(p)}><Icon name="plus" size={14} /> Buat koneksi</Button></div>
             </div>
-            <Button onClick={() => setCreating(p)}>Buat koneksi simulasi</Button>
-          </article>
+            <div className="bd">
+              <p className="int-role">{PROVIDER_ROLE[p]}</p>
+              <p className="empty-mini">Belum ada koneksi {PROVIDER_LABEL[p]} di workspace ini. Koneksi baru dimulai sebagai draft.</p>
+            </div>
+          </section>
         ))}
+        <section className="pcard int-card" aria-labelledby="cif-title">
+          <div className="hd">
+            <span className="int-logo" aria-hidden="true"><Icon name="user" size={15} /></span>
+            <h2 id="cif-title">Customer Information File (CIF)</h2>
+            <Badge tone="waiting">Belum tersambung</Badge>
+          </div>
+          <div className="bd">
+            <p className="int-role">Satu referensi nasabah untuk penanganan tiket yang lebih tepat.</p>
+            <dl className="kv int-kv">
+              <dt>Adapter</dt><dd className="kv-text">Belum tersedia</dd>
+              <dt>Referensi nasabah</dt><dd className="kv-text">Belum diverifikasi ke sistem CIF</dd>
+            </dl>
+            <details className="int-more">
+              <summary>Rancangan alur CIF &amp; batas akses</summary>
+              <ol className="cif-flow">
+                <li><strong>Cari dalam perusahaan aktif</strong><span>Gunakan referensi CIF atau pencarian terbatas; hasil dari perusahaan lain tidak ditampilkan.</span></li>
+                <li><strong>Cocokkan nasabah</strong><span>Petugas memeriksa identitas tersamarkan sebelum memilih. Hindari menyalin data sensitif ke judul atau percakapan tiket.</span></li>
+                <li><strong>Tautkan referensi ke tiket</strong><span>Simpan ID sumber dan waktu verifikasi. Jika CIF tidak tersedia, tandai belum terverifikasi; jangan membuat identitas baru otomatis.</span></li>
+              </ol>
+              <p className="hintline">Aktivasi memerlukan kontrak API, pemetaan akses per perusahaan, dan pengujian isolasi data.</p>
+            </details>
+          </div>
+        </section>
       </div>
-      <section className="card cif-overview spaced" aria-labelledby="cif-title">
-        <div className="cif-heading"><span className="connector-icon"><Icon name="user" size={24} /></span><div><span className="eyebrow">Data nasabah</span><h2 id="cif-title">Customer Information File <Badge>Belum terhubung</Badge></h2></div></div>
-        <p className="muted">Satu referensi nasabah untuk penanganan tiket yang lebih tepat.</p>
-        <p className="tiny">Adapter CIF belum tersedia. Referensi nasabah saat ini adalah data dummy; identitasnya belum diverifikasi ke sistem CIF.</p>
-        <details><summary>Rancangan alur CIF &amp; batas akses</summary><ol className="cif-flow"><li><strong>Cari dalam perusahaan aktif</strong><span>Gunakan referensi CIF atau pencarian terbatas; hasil dari perusahaan lain tidak ditampilkan.</span></li><li><strong>Cocokkan nasabah</strong><span>Petugas memeriksa identitas tersamarkan sebelum memilih. Hindari menyalin data sensitif ke judul atau percakapan tiket.</span></li><li><strong>Tautkan referensi ke tiket</strong><span>Simpan ID sumber dan waktu verifikasi. Jika CIF tidak tersedia, tandai belum terverifikasi; jangan membuat identitas baru otomatis.</span></li></ol><p className="tiny muted">Alur ini belum menghubungi CIF. Aktivasi memerlukan kontrak API, pemetaan akses per perusahaan, dan pengujian isolasi data.</p></details>
+
+      <section className="pcard int-channels" aria-labelledby="int-channels">
+        <div className="hd"><h2 id="int-channels">Kanal layanan</h2><span className="sub">Kesiapan adapter</span></div>
+        <ul className="plain int-channel-list">
+          {UNAVAILABLE.map((u) => (
+            <li key={u.name}>
+              <div className="int-ch-hd"><strong>{u.name}</strong> <Badge>Belum tersedia</Badge></div>
+              <p>{u.body}</p>
+            </li>
+          ))}
+        </ul>
       </section>
-      <div className="section-heading spaced"><h2>Kanal layanan</h2><span className="tiny muted">Kesiapan adapter</span></div>
-      <div className="integration-grid">
-        {UNAVAILABLE.map((u) => (
-          <article key={u.name} className="card integration" aria-labelledby={`int-na-${u.name}`}>
-            <div>
-              <h2 id={`int-na-${u.name}`}>{u.name} <Badge>Belum tersedia</Badge></h2>
-              <p className="tiny muted">{u.body}</p>
-            </div>
-          </article>
-        ))}
-      </div>
+
+      <section className="pcard callout-amber" aria-labelledby="int-note">
+        <div className="bd">
+          <h2 id="int-note">Koneksi belum mengirim ke penyedia</h2>
+          <p className="hintline">
+            Kredensial dan mapping penyedia belum tersedia (menunggu endpoint, akun dan kode terverifikasi dari kantor).
+            Uji konfigurasi hanya memeriksa kelengkapan di aplikasi ini; tidak ada request ke Jira atau Lark dan hasilnya tidak membuktikan koneksi kantor.
+          </p>
+        </div>
+      </section>
       {creating && (
         <CreateDialog api={api} workspace={workspace} provider={creating} onClose={() => setCreating(null)}
           onDone={(c) => {
@@ -138,7 +174,7 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
 function CreateDialog({ api, workspace, provider, onClose, onDone }: {
   api: Api; workspace: Workspace; provider: ProviderCode; onClose: () => void; onDone: (c: IntegrationConnection) => void;
 }) {
-  const [name, setName] = useState(`${workspace.code} ${PROVIDER_LABEL[provider]} (simulasi)`);
+  const [name, setName] = useState(`${workspace.code} ${PROVIDER_LABEL[provider]}`);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<WriteError | null>(null);
   const formId = useId();
@@ -214,15 +250,15 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
             <Button onClick={onClose} disabled={busy}>Tutup</Button>
             {canDisable && <Button disabled={busy} onClick={() => setConfirmOff(true)}>Nonaktifkan</Button>}
             <Button disabled={busy || !canTest} onClick={() => void step('test')}
-              title={canTest ? undefined : 'Koneksi aktif; nonaktifkan dahulu untuk menguji ulang'}>Uji simulasi</Button>
+              title={canTest ? undefined : 'Koneksi aktif; nonaktifkan dahulu untuk menguji ulang'}>Uji konfigurasi</Button>
             <Button variant="primary" disabled={busy || !canActivate} onClick={() => void step('activate')}
-              title={canActivate ? undefined : 'Uji simulasi dahulu'}>Aktifkan</Button>
+              title={canActivate ? undefined : 'Uji konfigurasi dahulu'}>Aktifkan</Button>
           </>
         )}>
         <ol className="steps plain row" aria-label="Urutan aktivasi">
           {steps.map((s) => <li key={s.id} aria-current={s.done ? undefined : 'step'}>{s.done ? <strong>{s.label} ✓</strong> : <span>{s.label}</span>}</li>)}
         </ol>
-        <p className="banner spaced-bottom">Workspace {workspace.code} · status <strong>{STATE[c.state].label}</strong> · mode simulasi; tidak ada request jaringan ke {label}.</p>
+        <p className="banner spaced-bottom">Workspace {workspace.code} · konfigurasi <strong>{STATE[c.state].label}</strong> · belum tersambung; tidak ada request jaringan ke {label}.</p>
         {error && <WriteAlert error={error} onReload={onReload} />}
         <form className="row spaced-bottom" onSubmit={(e) => {
           e.preventDefault();
@@ -238,7 +274,7 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
         <dl className="props spaced-bottom">
           <div className="props-row"><dt>Kredensial</dt><dd>Belum tersedia — penyimpanan kredensial aman belum ada{list.canManageCredentials ? '' : '; Anda juga tidak memegang hak kelola kredensial'}.</dd></div>
           <div className="props-row"><dt>Mapping</dt><dd>Belum tersedia — {c.provider === 'jira' ? 'project dan issue type' : 'akun/kanal tujuan'} menunggu kode terverifikasi dari kantor.</dd></div>
-          <div className="props-row"><dt>Tujuan dummy</dt><dd>{c.directoryCount} entri (data uji)</dd></div>
+          <div className="props-row"><dt>Daftar tujuan</dt><dd>{c.directoryCount} entri uji</dd></div>
           <div className="props-row"><dt>Hasil uji terakhir</dt><dd>{c.lastTestNote ?? 'Belum pernah diuji.'}{c.testedAt ? ` (${instantLabel(c.testedAt, workspace.timezone)})` : ''}</dd></div>
         </dl>
         <section aria-labelledby={`log-${c.id}`}>

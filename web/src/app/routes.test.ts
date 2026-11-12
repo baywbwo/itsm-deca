@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   NEW_TICKET_FLAG,
   PAGES,
+  crumbLabel,
   allowedPages,
   dashboardQuery,
   drilldownHash,
@@ -125,7 +126,17 @@ describe('CP-UI1 sidebar groups (owner prototype)', () => {
     const current = (r: ReturnType<typeof route>) => navGroups(admin, r, true).flatMap((g) => g.items).filter((i) => i.current).map((i) => i.key);
     expect(current(route('tickets', 'view=board&status=open'))).toEqual(['board']);
     expect(current(route('tickets', 'status=open'))).toEqual(['tickets']);
+    expect(current(route('tickets', 'new=1'))).toEqual(['new']);
+    expect(current(route('tickets', 'view=board&new=1'))).toEqual(['new']);
+    // Without ticket.create the flag is dropped by the page; the nav keeps Tiket current meanwhile.
+    expect(navGroups(admin, route('tickets', 'new=1'), false).flatMap((g) => g.items).filter((i) => i.current).map((i) => i.key)).toEqual(['tickets']);
     expect(current(route('users'))).toEqual(['users']);
+  });
+
+  it('breadcrumb names the Tiket sub-pages', () => {
+    expect(crumbLabel(route('tickets', 'new=1'))).toBe('Tiket baru');
+    expect(crumbLabel(route('tickets', 'view=board'))).toBe('Board');
+    expect(crumbLabel(route('tickets'))).toBe('Tiket');
   });
 
   it('default deny: no ticket permission leaves no Operasional group; no workspace gives no nav', () => {

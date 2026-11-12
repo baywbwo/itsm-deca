@@ -6,8 +6,10 @@ import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
 import { Dialog } from '../components/Dialog';
 import { TextField } from '../components/Field';
+import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
+import { initials } from '../app/labels';
 import { ACTIVE_FILTERS, userWriteError, type ActiveFilter, type UserWriteError } from '../app/users';
 import { ConfirmDialog, useLoad } from './adminKit';
 
@@ -86,9 +88,9 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
   }
 
   const header = (
-    <PageHeader eyebrow="Administrasi platform" title="Pengguna"
-      description="Akun yang dapat masuk ke aplikasi. Kata sandi sementara hanya ditampilkan sekali."
-      action={<Button variant="primary" onClick={() => setAdding(true)}>＋ Tambah pengguna</Button>} />
+    <PageHeader title="Pengguna"
+      description="Akun yang dapat masuk ke aplikasi · kata sandi sementara hanya ditampilkan sekali"
+      action={<Button variant="primary" onClick={() => setAdding(true)}><Icon name="plus" size={16} /> Tambah pengguna</Button>} />
   );
   if (res.error) {
     const e = res.error;
@@ -106,9 +108,11 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
   return (
     <>
       {header}
-      <section className="card" aria-labelledby="users-title">
-        <div className="toolbar filterbar" role="search" aria-label="Cari dan filter pengguna">
-          <div className="toolbar-row">
+      <section className="pcard users-card" aria-labelledby="users-title">
+        <div className="hd">
+          <h2 id="users-title">Daftar pengguna</h2>
+          {first && <span className="sub">{rows.length}{cursor ? '+' : ''} akun{q || active !== 'all' ? ' cocok' : ''}</span>}
+          <div className="r usr-tools" role="search" aria-label="Cari dan filter pengguna">
             <form className="toolbar-search" onSubmit={(e) => { e.preventDefault(); setQ(text.trim()); }}>
               <label>
                 <span className="sr-only">Cari pengguna</span>
@@ -127,32 +131,35 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
             </label>
           </div>
         </div>
-        <h2 id="users-title" className="sr-only">Daftar pengguna</h2>
-        {!first ? <LoadingState label="Memuat pengguna…" /> : (
+        {!first ? <div className="bd"><LoadingState label="Memuat pengguna…" /></div> : (
           <>
-            <DataTable caption="Daftar pengguna platform" rows={rows} rowKey={(u) => u.id}
-              empty={q || active !== 'all'
-                ? { title: 'Tidak ada pengguna yang cocok', body: 'Ubah kata kunci atau filter status.' }
-                : { title: 'Belum ada pengguna', body: 'Tambah pengguna untuk memberi akses masuk.' }}
-              columns={[
-                {
-                  key: 'name', header: 'Nama',
-                  cell: (u) => (
-                    <>
-                      <strong>{u.displayName}</strong>{u.id === userId ? ' (saya)' : ''}
-                      <div className="tiny muted">{u.username ?? 'Tanpa kata sandi lokal'}</div>
-                    </>
-                  ),
-                },
-                { key: 'email', header: 'Email', cell: (u) => u.email ?? <span className="muted">—</span> },
-                {
-                  key: 'status', header: 'Status',
-                  cell: (u) => (
-                    <div className="row">
-                      <Badge tone={u.active ? 'ok' : 'neutral'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
-                      {u.platformAdmin && <Badge tone="blue">Admin platform</Badge>}
-                      {u.active && u.mustChangePassword && <Badge tone="waiting">Wajib ganti sandi</Badge>}
-                      {u.active && u.locked && <Badge tone="error">Terkunci</Badge>}
+            <div className="ptable">
+              <DataTable caption="Daftar pengguna platform" rows={rows} rowKey={(u) => u.id}
+                empty={q || active !== 'all'
+                  ? { title: 'Tidak ada pengguna yang cocok', body: 'Ubah kata kunci atau filter status.' }
+                  : { title: 'Belum ada pengguna', body: 'Tambah pengguna untuk memberi akses masuk.' }}
+                columns={[
+                  {
+                    key: 'name', header: 'Nama',
+                    cell: (u) => (
+                      <>
+                        <span className="cell-person">
+                          <span className="avatar" aria-hidden="true">{initials(u.displayName)}</span>
+                          <span><span><b>{u.displayName}</b>{u.id === userId ? ' (saya)' : ''}</span>
+                            <span className="tiny muted usr-login">{u.username ?? 'Tanpa kata sandi lokal'}</span></span>
+                        </span>
+                      </>
+                    ),
+                  },
+                  { key: 'email', header: 'Email', cell: (u) => u.email ?? <span className="muted">—</span> },
+                  {
+                    key: 'status', header: 'Status',
+                    cell: (u) => (
+                      <div className="row">
+                        <Badge tone={u.active ? 'ok' : 'neutral'}>{u.active ? 'Aktif' : 'Nonaktif'}</Badge>
+                        {u.platformAdmin && <Badge tone="blue">Admin platform</Badge>}
+                        {u.active && u.mustChangePassword && <Badge tone="waiting">Wajib ganti sandi</Badge>}
+                        {u.active && u.locked && <Badge tone="error">Terkunci</Badge>}
                     </div>
                   ),
                 },
@@ -163,7 +170,7 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                     if (u.id === userId) return <span className="tiny muted">Pakai menu akun</span>;
                     if (!u.active) return <span className="tiny muted">—</span>;
                     return (
-                      <div className="row">
+                      <div className="row usr-actions">
                         {u.username && (
                           <Button className="btn-small" aria-label={`Reset kata sandi ${u.displayName}`}
                             onClick={() => { setActionError(null); setPending({ kind: 'reset', user: u }); }}>Reset kata sandi</Button>
@@ -175,8 +182,9 @@ export function UsersPage({ api, userId, onNotice }: { api: Api; userId: string;
                   },
                 },
               ]} />
+            </div>
             {(cursor || extra) && (
-              <div className="row spaced-top">
+              <div className="row bd usr-more">
                 <Button onClick={() => void loadMore()} disabled={!cursor || loadingMore} aria-busy={loadingMore}>
                   {loadingMore ? 'Memuat…' : cursor ? 'Muat lebih banyak' : 'Semua sudah dimuat'}
                 </Button>
