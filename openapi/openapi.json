@@ -10045,6 +10045,9 @@
           },
           "403": {
             "description": "Butuh grant integration.manage"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -10101,6 +10104,9 @@
           },
           "422": {
             "description": "Isian tidak valid"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -10144,6 +10150,9 @@
           },
           "404": {
             "description": "Konfigurasi belum ada"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -10183,6 +10192,9 @@
           },
           "422": {
             "description": "Isian tidak valid"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -10236,6 +10248,9 @@
           },
           "409": {
             "description": "Versi tidak cocok"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -10276,6 +10291,9 @@
           },
           "404": {
             "description": "Tidak ditemukan"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
