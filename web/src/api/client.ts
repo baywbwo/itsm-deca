@@ -53,6 +53,8 @@ import {
   isUserCreated,
   isUserDeactivated,
   isUserList,
+  isCompanyOptionList,
+  isUserCompanySet,
   isMfaStatus,
   isMfaEnrollment,
   isRecoveryCodes,
@@ -140,6 +142,9 @@ import type {
   UserCreated,
   UserDeactivated,
   UserList,
+  CompanyOptionList,
+  SetUserCompanyRequest,
+  UserCompanySet,
   MfaStatus,
   MfaEnrollment,
   RecoveryCodes,
@@ -735,6 +740,14 @@ export function createApi(transport: Transport) {
     unlockUser: async (userId: string): Promise<void> => {
       await call({ method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/unlock`, headers: csrf() }, isEmpty, 204);
     },
+    /** CP5d: active companies a platform admin can place a user in. */
+    listPlatformCompanies: (signal?: AbortSignal): Promise<CompanyOptionList> =>
+      get('/api/v1/platform/companies', isCompanyOptionList, signal),
+    /** CP5d: sets the user's one company, role and grants (other memberships are deactivated; audited). */
+    setUserCompany: (userId: string, body: SetUserCompanyRequest): Promise<UserCompanySet> =>
+      call({
+        method: 'PUT', path: `/api/v1/users/${encodeURIComponent(userId)}/company`, headers: csrf(), body,
+      }, isUserCompanySet),
     /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
     getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
       get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),

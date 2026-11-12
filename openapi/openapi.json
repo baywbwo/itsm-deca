@@ -855,7 +855,8 @@
           "mfaEnrolled",
           "platformAdmin",
           "createdAt",
-          "deactivatedAt"
+          "deactivatedAt",
+          "company"
         ],
         "properties": {
           "id": {
@@ -905,6 +906,17 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "company": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HomeCompany"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CP5d. Null without an active membership."
           }
         }
       },
@@ -6419,6 +6431,71 @@
             "items": {
               "$ref": "#/components/schemas/DirectoryEntry"
             }
+          }
+        }
+      },
+      "HomeCompany": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "code",
+          "name",
+          "role",
+          "grants"
+        ],
+        "description": "CP5d. The user's one company: the home membership the server resolves (oldest active membership in an active workspace).",
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "admin.members",
+                "admin.settings",
+                "integration.manage",
+                "integration.credentials",
+                "integration.recovery"
+              ]
+            },
+            "description": "Live administration grants of the home membership."
+          }
+        }
+      },
+      "CompanyOption": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "code",
+          "name"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       }
@@ -12350,6 +12427,182 @@
           },
           "503": {
             "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/company": {
+      "put": {
+        "operationId": "setUserCompany",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5d. Password mode, platform_admin only (any company: the platform admin exemption from the one-company rule). Sets the user's one company, role and administration grants (grants replace the current set of that membership). Other active memberships of the user are deactivated and their grants revoked. Allowed on the caller itself; platform_admin is never changed here. Audited: workspace audit membership.deactivate (reason company_set) per deactivated membership, membership.company_set in the target company, and auth event user_company_set. No change = 200 with changed false and no audit. 409 user_inactive; 422 role, grants or workspaceId (unknown or inactive company). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "workspaceId",
+                  "role",
+                  "grants"
+                ],
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "cs",
+                      "lead_cs"
+                    ]
+                  },
+                  "grants": {
+                    "type": "array",
+                    "maxItems": 18,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "admin.members",
+                        "admin.settings",
+                        "integration.manage",
+                        "integration.credentials",
+                        "integration.recovery"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company set (or already so)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "user",
+                    "changed",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/UserListItem"
+                    },
+                    "changed": {
+                      "type": "boolean"
+                    },
+                    "auditEventId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid",
+                      "description": "membership.company_set audit row; null when nothing changed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "user_inactive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies": {
+      "get": {
+        "operationId": "listPlatformCompanies",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5d. Password mode, platform_admin only. Active companies a user can be assigned to, by workspace code.",
+        "responses": {
+          "200": {
+            "description": "Companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CompanyOption"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           }
         }
       }

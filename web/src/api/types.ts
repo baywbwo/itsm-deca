@@ -126,6 +126,12 @@ export type UserCreateRequest = NonNullable<operations['createUser']['requestBod
 export type UserCreated = Body<'createUser', 201>;
 export type TemporaryPassword = Body<'resetUserPassword', 200>;
 export type UserDeactivated = Body<'updateUser', 200>;
+// CP5d: one company per user, set by the platform admin across companies.
+export type HomeCompany = S['HomeCompany'];
+export type CompanyOption = S['CompanyOption'];
+export type CompanyOptionList = Body<'listPlatformCompanies', 200>;
+export type SetUserCompanyRequest = NonNullable<operations['setUserCompany']['requestBody']>['content']['application/json'];
+export type UserCompanySet = Body<'setUserCompany', 200>;
 // CP4c (US-1.2) own MFA.
 export type MfaStatus = S['MfaStatus'];
 export type MfaEnrollment = S['MfaEnrollment'];

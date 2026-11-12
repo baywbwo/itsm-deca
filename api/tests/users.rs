@@ -1143,3 +1143,542 @@ async fn cp_int_ai_settings_changes_need_a_fresh_step_up(pool: PgPool) {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+// ---- CP5d: the bootstrap administrator's home company and cross-company placement ----
+
+async fn ws_id(pool: &PgPool, code: &str) -> Uuid {
+    sqlx::query_scalar("SELECT id FROM workspaces WHERE code=$1")
+        .bind(code)
+        .fetch_one(pool)
+        .await
+        .expect("workspace")
+}
+/// (workspace code, company name, role, active) of every membership of the user.
+async fn memberships(pool: &PgPool, user: Uuid) -> Vec<(String, String, String, bool)> {
+    sqlx::query_as(
+        "SELECT w.code, c.name, m.role, m.active FROM workspace_memberships m \
+         JOIN workspaces w ON w.id=m.workspace_id JOIN companies c ON c.id=w.company_id \
+         WHERE m.user_id=$1 ORDER BY w.code",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await
+    .expect("memberships")
+}
+async fn live_grants(pool: &PgPool, user: Uuid, code: &str) -> Vec<String> {
+    sqlx::query_scalar(
+        "SELECT g.grant_code FROM workspace_grants g JOIN workspace_memberships m ON m.id=g.membership_id \
+         JOIN workspaces w ON w.id=g.workspace_id \
+         WHERE m.user_id=$1 AND w.code=$2 AND g.revoked_at IS NULL ORDER BY g.grant_code",
+    )
+    .bind(user)
+    .bind(code)
+    .fetch_all(pool)
+    .await
+    .expect("grants")
+}
+const ALL_GRANTS: [&str; 5] = [
+    "admin.members",
+    "admin.settings",
+    "integration.credentials",
+    "integration.manage",
+    "integration.recovery",
+];
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5d_operational_bootstrap_admin_is_home_in_pt_delta_omega_beta(pool: PgPool) {
+    let name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&pool)
+        .await
+        .expect("db");
+    let vars: HashMap<String, String> = [
+        ("ITSM_ENV", "production"),
+        ("ITSM_ACCESS_MODE", "password"),
+        ("ITSM_COOKIE_SECURE", "true"),
+        ("DATABASE_URL", "postgres://unused"),
+        ("ITSM_MFA", "on"),
+        (
+            "ITSM_KEYRING",
+            "t1:AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+        ),
+        ("ITSM_KEYRING_ACTIVE", "t1"),
+        (
+            "ITSM_MFA_RECOVERY_PEPPER",
+            "dGVzdC1wZXBwZXItdGVzdC1wZXBwZXItdGVzdC1wZXBwZXI=",
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.into(), v.into()))
+    .collect();
+    let cfg = Arc::new(Config::from_map(&vars).expect("production config"));
+    itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.dob", &name, ADMIN_PASSWORD)
+        .await
+        .expect("operational bootstrap");
+    let admin_id: Uuid =
+        sqlx::query_scalar("SELECT user_id FROM local_credentials WHERE username='admin.dob'")
+            .fetch_one(&pool)
+            .await
+            .expect("admin");
+    // Exactly one company (CP5a): DOB, named PT Delta Omega Beta, with every admin grant.
+    assert_eq!(
+        memberships(&pool, admin_id).await,
+        vec![(
+            "DOB".to_owned(),
+            "PT Delta Omega Beta".to_owned(),
+            "lead_cs".to_owned(),
+            true
+        )]
+    );
+    assert_eq!(live_grants(&pool, admin_id, "DOB").await, ALL_GRANTS);
+    // The other companies keep their names; every company still gets its catalogs.
+    let companies: Vec<(String, String)> =
+        sqlx::query_as("SELECT code, name FROM companies ORDER BY code")
+            .fetch_all(&pool)
+            .await
+            .expect("companies");
+    assert_eq!(
+        companies,
+        [
+            ("AJR", "PT Asia Jaya Remindo"),
+            ("BMT", "BMT"),
+            ("DOB", "PT Delta Omega Beta")
+        ]
+        .map(|(c, n)| (c.to_owned(), n.to_owned()))
+    );
+    let catalogs: Vec<i64> = sqlx::query_scalar(
+        "SELECT count(p.id) FROM workspaces w LEFT JOIN priorities p ON p.workspace_id=w.id \
+         GROUP BY w.code ORDER BY w.code",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("catalogs");
+    assert_eq!(catalogs, [4, 4, 4]);
+    // The header company the server hands the session: PT Delta Omega Beta only. Requests go to
+    // a production-configured app (the shared helpers run UAT, which an operational DB refuses).
+    let st = AppState {
+        pool: pool.clone(),
+        config: cfg.clone(),
+    };
+    let send =
+        |method: &'static str, path: String, body: Value, cookie: Option<String>, csrf: String| {
+            let st = st.clone();
+            async move {
+                let mut r = Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("content-type", "application/json")
+                    .header("x-itsm-login", "1")
+                    .header("sec-fetch-site", "same-origin")
+                    .header("x-csrf-token", csrf);
+                if let Some(c) = cookie {
+                    r = r.header("cookie", c);
+                }
+                let res = app(st)
+                    .oneshot(r.body(Body::from(body.to_string())).expect("request"))
+                    .await
+                    .expect("response");
+                let status = res.status();
+                let set = res
+                    .headers()
+                    .get("set-cookie")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.split(';').next())
+                    .map(str::to_owned);
+                let bytes = res.into_body().collect().await.expect("body").to_bytes();
+                (
+                    status,
+                    serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null),
+                    set,
+                )
+            }
+        };
+    let (status, session, cookie) = send(
+        "POST",
+        "/api/v1/login".into(),
+        json!({"username":"admin.dob","password":ADMIN_PASSWORD}),
+        None,
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{session}");
+    let csrf = session["csrfToken"].as_str().expect("csrf").to_owned();
+    let (status, e, _) = send(
+        "POST",
+        "/api/v1/me/mfa/enrollment".into(),
+        Value::Null,
+        cookie.clone(),
+        csrf.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{e}");
+    let secret = e["otpauthUri"]
+        .as_str()
+        .expect("uri")
+        .split(['?', '&'])
+        .find_map(|p| p.strip_prefix("secret="))
+        .expect("secret");
+    let code = itsm_api::mfa::code_at(
+        &itsm_api::mfa::base32_decode(secret).expect("base32"),
+        itsm_api::mfa::now_step(),
+    );
+    let confirm = format!(
+        "/api/v1/me/mfa/enrollment/{}/confirm",
+        e["enrollmentId"].as_str().expect("id")
+    );
+    let (status, body, _) = send(
+        "POST",
+        confirm,
+        json!({"code": code}),
+        cookie.clone(),
+        csrf.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, list, _) = send(
+        "GET",
+        "/api/v1/workspaces".into(),
+        Value::Null,
+        cookie.clone(),
+        csrf.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let items = list["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["code"], "DOB");
+    assert_eq!(items[0]["name"], "PT Delta Omega Beta");
+    let (status, users, _) = send(
+        "GET",
+        "/api/v1/users?q=admin.dob".into(),
+        Value::Null,
+        cookie,
+        csrf,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    assert_eq!(users["items"][0]["company"]["name"], "PT Delta Omega Beta");
+    assert_eq!(
+        users["items"][0]["company"]["grants"]
+            .as_array()
+            .map(Vec::len),
+        Some(5)
+    );
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5d_test_dummy_bootstrap_gives_one_home_membership(pool: PgPool) {
+    let name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(&pool)
+        .await
+        .expect("db");
+    seed::seed_uat(&pool, &name).await.expect("seed");
+    let cfg = state(&pool, "password").config;
+    itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.uji", &name, ADMIN_PASSWORD)
+        .await
+        .expect("bootstrap");
+    let admin_id: Uuid =
+        sqlx::query_scalar("SELECT user_id FROM local_credentials WHERE username='admin.uji'")
+            .fetch_one(&pool)
+            .await
+            .expect("admin");
+    // No DOB in the dummy seed: the first active company by code, and only that one.
+    let rows = memberships(&pool, admin_id).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].0, "DUMA");
+    assert_eq!(live_grants(&pool, admin_id, "DUMA").await, ALL_GRANTS);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5d_platform_admin_moves_members_across_companies_with_audit(pool: PgPool) {
+    let (admin_id, _) = fixture(&pool).await;
+    let a = admin(&pool).await;
+    let (duma, dumb) = (ws_id(&pool, "DUMA").await, ws_id(&pool, "DUMB").await);
+    let (status, companies) = call(
+        &pool,
+        "GET",
+        "/api/v1/platform/companies",
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{companies}");
+    let codes: Vec<&str> = companies["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter_map(|c| c["code"].as_str())
+        .collect();
+    assert_eq!(codes, ["DUMA", "DUMB"]);
+
+    // Lead Alfa: lead_cs in DUMA with one grant, moved to DUMB as cs with another grant.
+    let lead: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE external_subject='dummy:lead-alfa'")
+            .fetch_one(&pool)
+            .await
+            .expect("lead");
+    sqlx::query(
+        "INSERT INTO workspace_grants(workspace_id,membership_id,grant_code,granted_by) \
+         SELECT workspace_id,id,'admin.members',$2 FROM workspace_memberships WHERE user_id=$1",
+    )
+    .bind(lead)
+    .bind(admin_id)
+    .execute(&pool)
+    .await
+    .expect("grant");
+    let path = format!("/api/v1/users/{lead}/company");
+    let to_dumb = json!({"workspaceId": dumb, "role": "cs", "grants": ["admin.settings"]});
+    let (status, body) = call(&pool, "PUT", &path, to_dumb.clone(), (&a.0, &a.1)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["changed"], true);
+    assert_eq!(body["user"]["company"]["code"], "DUMB");
+    assert_eq!(body["user"]["company"]["role"], "cs");
+    assert_eq!(body["user"]["company"]["grants"], json!(["admin.settings"]));
+    let audit_id: Uuid = body["auditEventId"]
+        .as_str()
+        .expect("audit id")
+        .parse()
+        .expect("uuid");
+    let rows = memberships(&pool, lead).await;
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.0.as_str(), r.2.as_str(), r.3))
+            .collect::<Vec<_>>(),
+        [("DUMA", "lead_cs", false), ("DUMB", "cs", true)]
+    );
+    assert!(live_grants(&pool, lead, "DUMA").await.is_empty());
+    assert_eq!(live_grants(&pool, lead, "DUMB").await, ["admin.settings"]);
+    // Audit: the deactivation in the old company, the placement in the new one, the auth event.
+    let deactivated: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_events WHERE workspace_id=$1 AND action='membership.deactivate' \
+         AND actor_id=$2 AND safe_change->>'reason'='company_set'",
+    )
+    .bind(duma)
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .expect("deactivate audit");
+    assert_eq!(deactivated, 1);
+    let (ws, actor, action): (Uuid, Option<Uuid>, String) =
+        sqlx::query_as("SELECT workspace_id, actor_id, action FROM audit_events WHERE id=$1")
+            .bind(audit_id)
+            .fetch_one(&pool)
+            .await
+            .expect("set audit");
+    assert_eq!(
+        (ws, actor, action.as_str()),
+        (dumb, Some(admin_id), "membership.company_set")
+    );
+    let auth: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM auth_events WHERE event='user_company_set' AND outcome='success' \
+         AND user_id=$1 AND actor_id=$2",
+    )
+    .bind(lead)
+    .bind(admin_id)
+    .fetch_one(&pool)
+    .await
+    .expect("auth event");
+    assert_eq!(auth, 1);
+    let listed = list_all(&pool, &a, "active=all").await;
+    let row = listed
+        .iter()
+        .find(|u| u["id"] == lead.to_string())
+        .expect("listed");
+    assert_eq!(row["company"]["name"], "PT Dummy Beta (uji)");
+
+    // The same request again changes nothing and writes no audit.
+    let audits = "SELECT count(*) FROM audit_events WHERE actor_id=$1";
+    let before = count(&pool, audits, admin_id).await;
+    let (status, body) = call(&pool, "PUT", &path, to_dumb, (&a.0, &a.1)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["changed"], false);
+    assert_eq!(body["auditEventId"], Value::Null);
+    assert_eq!(count(&pool, audits, admin_id).await, before);
+
+    // Back to DUMA: the old membership is reactivated, DUMB's is deactivated.
+    let (status, body) = call(
+        &pool,
+        "PUT",
+        &path,
+        json!({"workspaceId": duma, "role": "lead_cs", "grants": []}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let active: Vec<String> = memberships(&pool, lead)
+        .await
+        .into_iter()
+        .filter(|r| r.3)
+        .map(|r| r.0)
+        .collect();
+    assert_eq!(active, ["DUMA"]);
+    assert!(live_grants(&pool, lead, "DUMB").await.is_empty());
+
+    // Refusals: unknown company, non-grant permission, unknown role.
+    for (body, field) in [
+        (
+            json!({"workspaceId": Uuid::new_v4(), "role": "cs", "grants": []}),
+            "workspaceId",
+        ),
+        (
+            json!({"workspaceId": dumb, "role": "cs", "grants": ["ticket.read"]}),
+            "grants",
+        ),
+        (
+            json!({"workspaceId": dumb, "role": "admin", "grants": []}),
+            "role",
+        ),
+    ] {
+        let (status, err) = call(&pool, "PUT", &path, body, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+        assert_eq!(err["error"]["field"], field);
+    }
+    // An inactive user is not placed anywhere.
+    let (gone, _) = create_user(&pool, &a, "pindah.nonaktif").await;
+    let (status, _) = call(
+        &pool,
+        "PATCH",
+        &format!("/api/v1/users/{gone}"),
+        json!({"active": false}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, err) = call(
+        &pool,
+        "PUT",
+        &format!("/api/v1/users/{gone}/company"),
+        json!({"workspaceId": dumb, "role": "cs", "grants": []}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    assert_eq!(err["error"]["code"], "user_inactive");
+
+    // The platform admin can move themselves (the owner's case: into DOB); the header follows.
+    let (status, body) = call(
+        &pool,
+        "PUT",
+        &format!("/api/v1/users/{admin_id}/company"),
+        json!({"workspaceId": dumb, "role": "lead_cs", "grants": ALL_GRANTS}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["platformAdmin"], true);
+    let (status, list) = call(
+        &pool,
+        "GET",
+        "/api/v1/workspaces",
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let items = list["items"].as_array().expect("items");
+    assert_eq!(items.len(), 1, "{list}");
+    assert_eq!(items[0]["code"], "DUMB");
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5d_non_admin_cannot_list_companies_or_move_members(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    let dumb = ws_id(&pool, "DUMB").await;
+    let (status, cookie, csrf) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, _) = call(
+        &pool,
+        "GET",
+        "/api/v1/platform/companies",
+        Value::Null,
+        (&cookie, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for target in [admin_id, plain] {
+        let (status, _) = call(
+            &pool,
+            "PUT",
+            &format!("/api/v1/users/{target}/company"),
+            json!({"workspaceId": dumb, "role": "lead_cs", "grants": ALL_GRANTS}),
+            (&cookie, &csrf),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM auth_events WHERE event='user_company_set' AND actor_id=$1",
+            plain
+        )
+        .await,
+        0
+    );
+    assert!(
+        count(&pool, "SELECT count(*) FROM platform_audit_events WHERE actor_id=$1 AND capability='platform.users'", plain).await
+            >= 3
+    );
+}
+
+/// 0025: only a company still named 'DOB' is renamed; the down migration restores it and is
+/// refused once a company assignment has been audited (auth_events is append-only).
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp5d_migration_0025_renames_only_the_unrenamed_dob(pool: PgPool) {
+    use itsm_api::db::MIGRATOR;
+    MIGRATOR.undo(&pool, 24).await.expect("undo to 0024");
+    for (code, name) in [("DOB", "DOB"), ("AJR", "AJR"), ("BMT", "BMT")] {
+        let company: Uuid =
+            sqlx::query_scalar("INSERT INTO companies(code,name) VALUES($1,$2) RETURNING id")
+                .bind(code)
+                .bind(name)
+                .fetch_one(&pool)
+                .await
+                .expect("company");
+        sqlx::query("INSERT INTO workspaces(company_id,code,name) VALUES($1,$2,$3)")
+            .bind(company)
+            .bind(code)
+            .bind(name)
+            .execute(&pool)
+            .await
+            .expect("workspace");
+    }
+    let names = || async {
+        sqlx::query_as::<_, (String, String, String)>(
+            "SELECT w.code, c.name, w.name FROM workspaces w JOIN companies c ON c.id=w.company_id ORDER BY w.code",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("names")
+    };
+    let row = |c: &str, n: &str| (c.to_owned(), n.to_owned(), n.to_owned());
+    MIGRATOR.run(&pool).await.expect("up");
+    assert_eq!(
+        names().await,
+        [
+            row("AJR", "AJR"),
+            row("BMT", "BMT"),
+            row("DOB", "PT Delta Omega Beta")
+        ]
+    );
+    MIGRATOR.undo(&pool, 24).await.expect("down");
+    assert_eq!(
+        names().await,
+        [row("AJR", "AJR"), row("BMT", "BMT"), row("DOB", "DOB")]
+    );
+    // A name the owner already chose is kept.
+    sqlx::query("UPDATE companies SET name='Delta Pilihan Owner' WHERE code='DOB'")
+        .execute(&pool)
+        .await
+        .expect("rename");
+    MIGRATOR.run(&pool).await.expect("up again");
+    let dob: String = sqlx::query_scalar("SELECT name FROM companies WHERE code='DOB'")
+        .fetch_one(&pool)
+        .await
+        .expect("dob");
+    assert_eq!(dob, "Delta Pilihan Owner");
+    sqlx::query("INSERT INTO auth_events(event,outcome) VALUES('user_company_set','success')")
+        .execute(&pool)
+        .await
+        .expect("audited assignment");
+    assert!(MIGRATOR.undo(&pool, 24).await.is_err());
+}

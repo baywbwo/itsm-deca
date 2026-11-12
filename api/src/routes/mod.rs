@@ -73,6 +73,8 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/users/{user_id}/password-reset"),
     ("post", "/api/v1/users/{user_id}/mfa-reset"),
     ("post", "/api/v1/users/{user_id}/unlock"),
+    ("put", "/api/v1/users/{user_id}/company"),
+    ("get", "/api/v1/platform/companies"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -306,6 +308,8 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
         .route("/api/v1/users/{user_id}/mfa-reset", post(users::mfa_reset))
         .route("/api/v1/users/{user_id}/unlock", post(users::unlock))
+        .route("/api/v1/users/{user_id}/company", put(users::set_company))
+        .route("/api/v1/platform/companies", get(users::companies))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

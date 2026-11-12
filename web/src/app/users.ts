@@ -1,7 +1,7 @@
 import { ApiError, isSessionReloadNeeded, rateLimitText, sessionReloadText } from '../api/client';
 
 /** CP3b user administration actions, for the words of a refusal. */
-export type UserAction = 'create' | 'reset' | 'deactivate' | 'unlock' | 'mfa_reset';
+export type UserAction = 'create' | 'reset' | 'deactivate' | 'unlock' | 'mfa_reset' | 'company';
 
 /** CP4c: the Reset MFA reason (TM-02 g), 1–500 characters after trimming. */
 export const MFA_RESET_REASON_MAX = 500;
@@ -55,6 +55,10 @@ export function userWriteError(e: unknown, action: UserAction): UserWriteError {
       break;
   }
   if (e.status === 422 && isField(e.field)) return { field: e.field, text: FIELD_TEXT[e.field], reload: false };
+  if (e.status === 422 && action === 'company' && e.field === 'workspaceId') {
+    return msg('Perusahaan tujuan tidak ada atau sudah nonaktif. Pilih perusahaan lain.');
+  }
+  if (e.status === 422 && action === 'company') return msg('Peran atau hak tambahan tidak valid. Tidak ada yang berubah.');
   if (e.status === 422 && e.field === 'reason') return msg(`Alasan wajib diisi, maksimal ${MFA_RESET_REASON_MAX} karakter.`);
   if (e.status === 429) return msg(`${rateLimitText(e)} Tidak ada yang berubah.`);
   if (e.status === 403) return msg('Hanya admin platform yang dapat mengelola pengguna. Tidak ada yang berubah.');

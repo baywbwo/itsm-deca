@@ -57,6 +57,9 @@ import type {
   UserDeactivated,
   UserList,
   UserListItem,
+  HomeCompany,
+  CompanyOptionList,
+  UserCompanySet,
   Workspace,
   WorkspacePermissions,
   MfaStatus,
@@ -478,7 +481,19 @@ const isTemp = (v: unknown) => isStr(v) && v.length > 0;
 export const isUserListItem = (v: unknown): v is UserListItem =>
   isObj(v) && isStr(v.id) && isStrOrNull(v.username) && isStr(v.displayName) && isStrOrNull(v.email) &&
   isBool(v.active) && isBool(v.mustChangePassword) && isBool(v.locked) && isBool(v.platformAdmin) &&
-  isBool(v.mfaEnrolled) && isStr(v.createdAt) && isStrOrNull(v.deactivatedAt);
+  isBool(v.mfaEnrolled) && isStr(v.createdAt) && isStrOrNull(v.deactivatedAt) &&
+  (v.company === null || isHomeCompany(v.company));
+
+// CP5d: the user's one company (home membership) and the companies a platform admin can pick from.
+export const isHomeCompany = (v: unknown): v is HomeCompany =>
+  isObj(v) && isStr(v.workspaceId) && isStr(v.code) && isStr(v.name) && (v.role === 'cs' || v.role === 'lead_cs') &&
+  isArr(v.grants, isGrant);
+
+export const isCompanyOptionList = (v: unknown): v is CompanyOptionList =>
+  isObj(v) && isArr(v.items, (c) => isObj(c) && isStr(c.workspaceId) && isStr(c.code) && isStr(c.name));
+
+export const isUserCompanySet = (v: unknown): v is UserCompanySet =>
+  isObj(v) && isUserListItem(v.user) && isBool(v.changed) && isStrOrNull(v.auditEventId);
 
 export const isUserList = (v: unknown): v is UserList =>
   isObj(v) && isArr(v.items, isUserListItem) && isStrOrNull(v.nextCursor);

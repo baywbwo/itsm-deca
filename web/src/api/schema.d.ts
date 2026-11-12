@@ -1488,6 +1488,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users/{user_id}/company": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description CP5d. Password mode, platform_admin only (any company: the platform admin exemption from the one-company rule). Sets the user's one company, role and administration grants (grants replace the current set of that membership). Other active memberships of the user are deactivated and their grants revoked. Allowed on the caller itself; platform_admin is never changed here. Audited: workspace audit membership.deactivate (reason company_set) per deactivated membership, membership.company_set in the target company, and auth event user_company_set. No change = 200 with changed false and no audit. 409 user_inactive; 422 role, grants or workspaceId (unknown or inactive company). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        put: operations["setUserCompany"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description CP5d. Password mode, platform_admin only. Active companies a user can be assigned to, by workspace code. */
+        get: operations["listPlatformCompanies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1676,6 +1710,8 @@ export interface components {
             createdAt: string;
             /** Format: date-time */
             deactivatedAt: string | null;
+            /** @description CP5d. Null without an active membership. */
+            company: components["schemas"]["HomeCompany"] | null;
         };
         Session: {
             user: components["schemas"]["User"];
@@ -3163,6 +3199,24 @@ export interface components {
         };
         JiraUserList: {
             items: components["schemas"]["DirectoryEntry"][];
+        };
+        /** @description CP5d. The user's one company: the home membership the server resolves (oldest active membership in an active workspace). */
+        HomeCompany: {
+            /** Format: uuid */
+            workspaceId: string;
+            code: string;
+            /** @description Company name. */
+            name: string;
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+            /** @description Live administration grants of the home membership. */
+            grants: ("admin.members" | "admin.settings" | "integration.manage" | "integration.credentials" | "integration.recovery")[];
+        };
+        CompanyOption: {
+            /** Format: uuid */
+            workspaceId: string;
+            code: string;
+            name: string;
         };
     };
     responses: {
@@ -6741,6 +6795,94 @@ export interface operations {
             429: components["responses"]["RateLimited"];
             502: components["responses"]["ProviderError"];
             503: components["responses"]["KeyringMissing"];
+        };
+    };
+    setUserCompany: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    workspaceId: string;
+                    /** @enum {string} */
+                    role: "cs" | "lead_cs";
+                    grants: ("admin.members" | "admin.settings" | "integration.manage" | "integration.credentials" | "integration.recovery")[];
+                };
+            };
+        };
+        responses: {
+            /** @description Company set (or already so) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        user: components["schemas"]["UserListItem"];
+                        changed: boolean;
+                        /**
+                         * Format: uuid
+                         * @description membership.company_set audit row; null when nothing changed.
+                         */
+                        auditEventId: string | null;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description user_inactive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    listPlatformCompanies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Companies */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["CompanyOption"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
 }

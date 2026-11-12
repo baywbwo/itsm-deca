@@ -446,7 +446,7 @@ function Page({ id, api, userId, mfaEnabled, data, query, uat, onNotice, onWorks
     case 'integrations':
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'users':
-      return <UsersPage api={api} userId={userId} mfaEnabled={mfaEnabled} onNotice={onNotice} />;
+      return <UsersPage api={api} userId={userId} mfaEnabled={mfaEnabled} onNotice={onNotice} onWorkspacesChanged={onWorkspacesChanged} />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }
