@@ -245,3 +245,61 @@ async fn migration_0021_rolls_back_and_reapplies(pool: PgPool) {
     );
     assert_eq!(kept, 1);
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn migration_0022_rolls_back_and_reapplies(pool: PgPool) {
+    let uid = user(&pool).await;
+    let shape = "SELECT (SELECT count(*) FROM information_schema.columns \
+                  WHERE table_name = 'auth_events' AND column_name = 'reason') \
+               + (SELECT count(*) FROM pg_constraint WHERE conname = 'auth_events_event_check' \
+                    AND pg_get_constraintdef(oid) LIKE '%user_unlock%' \
+                    AND pg_get_constraintdef(oid) LIKE '%mfa_disable%')";
+    let up: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "up");
+    assert_eq!(up, 2);
+    let st = sql_state(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome, reason) \
+             VALUES ($1, 'mfa_reset', 'success', ' padded ')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "untrimmed reason",
+    );
+    assert_eq!(st, "23514");
+    ok(db::MIGRATOR.undo(&pool, 21).await, "undo to 0021");
+    let down: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "down");
+    assert_eq!(down, 0);
+    let st = sql_state(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'user_unlock', 'success')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "user_unlock on 0021",
+    );
+    assert_eq!(st, "23514");
+    ok(db::MIGRATOR.run(&pool).await, "re-apply");
+    let again: i64 = ok(sqlx::query_scalar(shape).fetch_one(&pool).await, "again");
+    assert_eq!(again, 2);
+    ok(
+        sqlx::query(
+            "INSERT INTO auth_events (user_id, event, outcome, reason) \
+             VALUES ($1, 'mfa_reset', 'success', 'Uji sintetis')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await,
+        "reason row",
+    );
+    // An mfa-reset reason is audit evidence: down is refused rather than dropping it.
+    assert!(db::MIGRATOR.undo(&pool, 21).await.is_err());
+    let kept: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE reason IS NOT NULL")
+            .fetch_one(&pool)
+            .await,
+        "kept",
+    );
+    assert_eq!(kept, 1);
+}

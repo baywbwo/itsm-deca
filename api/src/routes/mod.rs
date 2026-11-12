@@ -38,8 +38,10 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("delete", "/api/v1/session"),
     ("post", "/api/v1/session/csrf"),
     ("post", "/api/v1/session/logout-all"),
+    ("post", "/api/v1/session/step-up"),
     ("post", "/api/v1/account/password"),
     ("get", "/api/v1/me/mfa"),
+    ("delete", "/api/v1/me/mfa"),
     ("post", "/api/v1/me/mfa/enrollment"),
     ("post", "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm"),
     ("post", "/api/v1/me/mfa/recovery-codes"),
@@ -47,6 +49,8 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/users"),
     ("patch", "/api/v1/users/{user_id}"),
     ("post", "/api/v1/users/{user_id}/password-reset"),
+    ("post", "/api/v1/users/{user_id}/mfa-reset"),
+    ("post", "/api/v1/users/{user_id}/unlock"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -215,8 +219,12 @@ pub fn api_router() -> Router<AppState> {
         )
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
         .route("/api/v1/session/logout-all", post(session::logout_all))
+        .route("/api/v1/session/step-up", post(mfa::step_up))
         .route("/api/v1/account/password", post(password::change_password))
-        .route("/api/v1/me/mfa", get(mfa::get_status))
+        .route(
+            "/api/v1/me/mfa",
+            get(mfa::get_status).merge(delete(mfa::delete_mfa)),
+        )
         .route("/api/v1/me/mfa/enrollment", post(mfa::start_enrollment))
         .route(
             "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm",
@@ -229,6 +237,8 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/users", get(users::list).merge(post(users::create)))
         .route("/api/v1/users/{user_id}", patch(users::update))
         .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
+        .route("/api/v1/users/{user_id}/mfa-reset", post(users::mfa_reset))
+        .route("/api/v1/users/{user_id}/unlock", post(users::unlock))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

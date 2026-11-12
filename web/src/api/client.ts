@@ -255,6 +255,10 @@ export function createApi(transport: Transport) {
   let refreshing: Promise<string> | null = null;
   // CP3a: a 401 on any request after a session was established means the session ended on the
   // server (idle/absolute limit, revoked elsewhere). Listeners return the person to the login.
+  // CP4b: a 401 step_up_required or mfa_invalid refuses one sensitive action; the session lives on.
+  const SESSION_KEPT_401 = new Set(['step_up_required', 'mfa_invalid']);
+  const endsSession = (r: TransportResponse) =>
+    r.status === 401 && !(isErrorBody(r.body) && SESSION_KEPT_401.has(r.body.error.code));
   let sessionActive = false;
   const endedListeners = new Set<() => void>();
   function sessionEnded() {
@@ -301,7 +305,7 @@ export function createApi(transport: Transport) {
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
     const res = await send(req);
-    if (res.status === 401) sessionEnded();
+    if (endsSession(res)) sessionEnded();
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {

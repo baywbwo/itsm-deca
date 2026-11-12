@@ -21,6 +21,8 @@ use crate::error::AppError;
 pub const SESSION_TTL_HOURS: i32 = 12;
 /// Sessions unused for this long are revoked (US-1.6).
 pub const SESSION_IDLE_MINUTES: i32 = 30;
+/// A-9: a step-up (POST /session/step-up) authorises sensitive actions for this long.
+pub const STEP_UP_MINUTES: i32 = 5;
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const UAT_ENTRY_HEADER: &str = "x-itsm-uat-entry";
 pub const UAT_ENTRY_PATH: &str = "/api/v1/uat/session";
@@ -68,6 +70,8 @@ pub struct Session {
     pub must_change_password: bool,
     /// US-1.2: MFA is mandatory for this user and this session has not passed it yet.
     pub mfa_pending: bool,
+    /// A-9: a second factor was re-entered on this session within [`STEP_UP_MINUTES`].
+    pub step_up_fresh: bool,
     csrf_hash: Vec<u8>,
 }
 
@@ -186,15 +190,19 @@ pub async fn rotate_csrf(pool: &PgPool, session_id: Uuid) -> Result<String, AppE
     Ok(csrf_token)
 }
 
+// id, user_id, csrf_hash, uat_superadmin grant, must_change_password, mfa_pending, step_up_fresh
+type SessionRow = (Uuid, Uuid, Vec<u8>, bool, bool, bool, bool);
+
 async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppError> {
-    let row: Option<(Uuid, Uuid, Vec<u8>, bool, bool, bool)> = sqlx::query_as(
+    let row: Option<SessionRow> = sqlx::query_as(
         "SELECT s.id, s.user_id, s.csrf_hash, \
                 EXISTS (SELECT 1 FROM platform_grants g \
                         WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin'), \
                 coalesce((SELECT c.must_change_password FROM local_credentials c \
                           WHERE c.user_id = s.user_id), false), \
                 (s.access_mode = 'password' AND s.mfa_verified_at IS NULL \
-                 AND itsm_mfa_required(s.user_id)) \
+                 AND itsm_mfa_required(s.user_id)), \
+                coalesce(s.step_up_at > now() - make_interval(mins => $3), false) \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
            AND (s.idle_expires_at IS NULL OR s.idle_expires_at > now()) \
@@ -204,6 +212,7 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
     )
     .bind(digest(token))
     .bind(state.config.access_mode.as_str())
+    .bind(STEP_UP_MINUTES)
     .fetch_optional(&state.pool)
     .await?;
     match &row {
@@ -236,16 +245,19 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
         }
     }
     Ok(row.map(
-        |(id, user_id, csrf_hash, grant, must_change_password, mfa_pending)| Session {
-            id,
-            user_id,
-            must_change_password,
-            mfa_pending,
-            // The grant is honoured only while the server runs in UAT Superadmin mode;
-            // the session's access_mode was matched above.
-            uat_superadmin: grant
-                && state.config.access_mode == crate::config::AccessMode::UatSuperadmin,
-            csrf_hash,
+        |(id, user_id, csrf_hash, grant, must_change_password, mfa_pending, step_up_fresh)| {
+            Session {
+                id,
+                user_id,
+                must_change_password,
+                mfa_pending,
+                step_up_fresh,
+                // The grant is honoured only while the server runs in UAT Superadmin mode;
+                // the session's access_mode was matched above.
+                uat_superadmin: grant
+                    && state.config.access_mode == crate::config::AccessMode::UatSuperadmin,
+                csrf_hash,
+            }
         },
     ))
 }
@@ -422,6 +434,7 @@ mod tests {
             uat_superadmin: false,
             must_change_password: false,
             mfa_pending: false,
+            step_up_fresh: false,
             csrf_hash: digest("right"),
         };
         let mut h = HeaderMap::new();

@@ -764,6 +764,8 @@ async fn companies_are_superadmin_only_and_start_without_members(pool: PgPool) {
     );
 
     let t = tok(&pool, f.admin).await;
+    // CP4b: UAT Superadmin has no factor, so the step-up guard is skipped (no step_up_at here)
+    // and the step-up endpoint itself does not exist outside password mode.
     let r = write(&pool, "POST", "/api/v1/companies", &t, body.clone()).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
     audit_exists(&pool, &r.json["auditEventId"], "company.create", f.admin).await;
@@ -783,6 +785,20 @@ async fn companies_are_superadmin_only_and_start_without_members(pool: PgPool) {
     assert_eq!(r.json["error"]["field"], "code");
     let r = get(&pool, &ws_uri(ws, "settings"), &lead).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND, "no implicit membership");
+    let r = write(
+        &pool,
+        "POST",
+        "/api/v1/session/step-up",
+        &t,
+        json!({"code": "000000"}),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::NOT_FOUND,
+        "no step-up in UAT mode: {}",
+        r.json
+    );
 
     let list = get(&pool, "/api/v1/companies", &t).await;
     assert_eq!(list.status, StatusCode::OK, "{}", list.json);

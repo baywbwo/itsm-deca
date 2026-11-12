@@ -88,6 +88,7 @@ pub async fn create(
     payload: Result<Json<CreateUserBody>, JsonRejection>,
 ) -> Result<Response, AppError> {
     platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
     let b = body(payload)?;
     let username = b.username.trim().to_lowercase();
     if !(3..=254).contains(&username.len())
@@ -187,6 +188,7 @@ pub async fn reset_password(
     Path(raw): Path<String>,
 ) -> Result<Response, AppError> {
     platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
     let id = user_id(&raw)?;
     let _permit = hash_slot()?;
     let (password, hash) = temporary_password().await?;
@@ -259,6 +261,7 @@ pub async fn update(
     payload: Result<Json<UpdateUserBody>, JsonRejection>,
 ) -> Result<Response, AppError> {
     platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
     let id = user_id(&raw)?;
     // Fields other than `active` (incl. `version`) are deferred: refused as 422, not 400.
     let b = body(payload).map_err(|_| AppError::Validation("active"))?;
@@ -307,6 +310,108 @@ pub async fn update(
     Ok(Json(json!({"id": id, "active": false})).into_response())
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MfaResetBody {
+    reason: String,
+}
+
+/// TM-02 (g): another platform admin removes a user's second factor (lost device). Factor, seed,
+/// recovery codes and pending challenges are deleted and every session is revoked; a user for
+/// whom MFA is mandatory must enrol again at the next login. The reason is kept in the audit row.
+/// Idempotent (204 also without a factor). Needs a fresh step-up.
+pub async fn mfa_reset(
+    State(state): State<AppState>,
+    s: Session,
+    Path(raw): Path<String>,
+    payload: Result<Json<MfaResetBody>, JsonRejection>,
+) -> Result<Response, AppError> {
+    platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
+    let id = user_id(&raw)?;
+    let b = body(payload)?;
+    let reason = b.reason.trim();
+    if reason.is_empty() || reason.chars().count() > 500 {
+        return Err(AppError::Validation("reason"));
+    }
+    // Resetting one's own factor would let a stolen admin session drop MFA (TM-02 g).
+    if id == s.user_id {
+        return Err(AppError::Conflict("self_mfa_reset"));
+    }
+    let mut tx = state.pool.begin().await?;
+    let _: Uuid =
+        sqlx::query_scalar("SELECT user_id FROM local_credentials WHERE user_id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    super::mfa::remove_factor(&mut tx, id).await?;
+    sqlx::query(
+        "UPDATE sessions SET revoked_at=now(), revoked_reason='mfa_reset' \
+         WHERE user_id=$1 AND revoked_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auth_events(user_id,event,outcome,actor_id,reason) \
+         VALUES($1,'mfa_reset','success',$2,$3)",
+    )
+    .bind(id)
+    .bind(s.user_id)
+    .bind(reason)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    tracing::info!(actor = %s.user_id, user_id = %id, "mfa reset");
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// PD-1: clears the password and TOTP lockout of a user before it runs out. Audited as
+/// `user_unlock`. Sessions are untouched.
+pub async fn unlock(
+    State(state): State<AppState>,
+    s: Session,
+    Path(raw): Path<String>,
+) -> Result<Response, AppError> {
+    platform_admin(&state, &s).await?;
+    let id = user_id(&raw)?;
+    let mut tx = state.pool.begin().await?;
+    let username: String =
+        sqlx::query_scalar("SELECT username FROM local_credentials WHERE user_id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::NotFound)?;
+    sqlx::query(
+        "UPDATE local_credentials SET failed_attempts=0, locked_until=NULL, updated_at=now() \
+         WHERE user_id=$1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE user_mfa_totp SET failed_attempts=0, locked_until=NULL, version=version+1 \
+         WHERE user_id=$1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    auth_event_by(
+        &mut tx,
+        Some(s.user_id),
+        Some(id),
+        &username,
+        "user_unlock",
+        "success",
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    tracing::info!(actor = %s.user_id, user_id = %id, "user unlocked");
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 const LIST_DEFAULT_LIMIT: i64 = 50;
 const LIST_MAX_LIMIT: i64 = 100;
 const MAX_SEARCH_CHARS: usize = 100;
@@ -329,7 +434,10 @@ pub struct UserListItem {
     email: Option<String>,
     active: bool,
     must_change_password: bool,
+    /// Password or TOTP lockout in force (PD-1).
     locked: bool,
+    /// A confirmed TOTP factor exists (S-12). No factor data leaves the server.
+    mfa_enrolled: bool,
     platform_admin: bool,
     created_at: String,
     deactivated_at: Option<String>,
@@ -349,7 +457,10 @@ const LIST_SQL: &str = concat!(
     "SELECT u.id, c.username, u.display_name, u.email, \
      (u.active AND u.deactivated_at IS NULL) AS active, \
      coalesce(c.must_change_password, false) AS must_change_password, \
-     coalesce(c.locked_until > now(), false) AS locked, \
+     (coalesce(c.locked_until > now(), false) OR EXISTS (SELECT 1 FROM user_mfa_totp t \
+       WHERE t.user_id = u.id AND t.locked_until > now())) AS locked, \
+     EXISTS (SELECT 1 FROM user_mfa_totp t WHERE t.user_id = u.id \
+       AND t.confirmed_at IS NOT NULL) AS mfa_enrolled, \
      EXISTS (SELECT 1 FROM platform_grants g WHERE g.user_id = u.id \
        AND g.grant_code = 'platform_admin') AS platform_admin, ",
     "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, ",

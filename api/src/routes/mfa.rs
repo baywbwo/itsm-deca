@@ -115,6 +115,141 @@ async fn count_failure(tx: &mut PgConnection, user_id: Uuid) -> Result<bool, App
     .await?)
 }
 
+/// A second factor as presented by the client.
+pub(crate) enum Factor {
+    Totp(String),
+    Recovery(String),
+}
+
+impl Factor {
+    fn len(&self) -> usize {
+        match self {
+            Factor::Totp(v) | Factor::Recovery(v) => v.len(),
+        }
+    }
+}
+
+/// Checks a second factor of `user_id` inside `tx` and audits the outcome: TOTP under
+/// `totp_event` (`mfa_verify` at login, `step_up` for a step-up), recovery codes always as
+/// `recovery_code_used`. The fifth failure in a row locks TOTP (TM-02 d); a recovery code still
+/// works while TOTP is locked and clears the lock (TM-10). Returns false on any refusal; the
+/// caller commits the audit and answers `mfa_invalid`.
+async fn check_factor(
+    state: &AppState,
+    keys: &MfaKeys,
+    tx: &mut PgConnection,
+    user_id: Uuid,
+    username: &str,
+    factor: Factor,
+    totp_event: &str,
+) -> Result<bool, AppError> {
+    let row: Option<(Uuid, Option<i64>, bool)> = sqlx::query_as(
+        "SELECT secret_id, last_used_step, coalesce(locked_until > now(), false) \
+         FROM user_mfa_totp WHERE user_id = $1 AND confirmed_at IS NOT NULL FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((secret_id, last_used_step, locked)) = row else {
+        auth_event(
+            tx,
+            Some(user_id),
+            username,
+            totp_event,
+            "denied",
+            Some("not_enrolled"),
+        )
+        .await?;
+        return Ok(false);
+    };
+    let (event, failure) = match factor {
+        Factor::Totp(code) => {
+            if locked {
+                auth_event(
+                    tx,
+                    Some(user_id),
+                    username,
+                    totp_event,
+                    "denied",
+                    Some("locked"),
+                )
+                .await?;
+                return Ok(false);
+            }
+            let seed = crypto::load_secret(&state.pool, &keys.keyring, secret_id, None, Purpose::TotpSeed)
+                .await
+                .map_err(|e| {
+                    tracing::error!(error.kind = "totp_seed_unreadable", error = %e, "totp seed unavailable");
+                    AppError::Unavailable
+                })?;
+            match mfa::verify_totp(seed.expose(), &code, mfa::now_step(), last_used_step) {
+                Ok(step) => {
+                    sqlx::query(
+                        "UPDATE user_mfa_totp SET last_used_step = $2, failed_attempts = 0, \
+                         locked_until = NULL, version = version + 1 WHERE user_id = $1",
+                    )
+                    .bind(user_id)
+                    .bind(i64::try_from(step).map_err(|_| AppError::MfaInvalid)?)
+                    .execute(&mut *tx)
+                    .await?;
+                    auth_event(tx, Some(user_id), username, totp_event, "success", None).await?;
+                    return Ok(true);
+                }
+                Err(failure) => (totp_event, failure.as_str()),
+            }
+        }
+        Factor::Recovery(recovery) => {
+            let spent: Option<Uuid> = match mfa::normalize_recovery_code(&recovery) {
+                None => None,
+                Some(n) => {
+                    sqlx::query_scalar(
+                        "UPDATE mfa_recovery_codes SET used_at = now() \
+                         WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL RETURNING id",
+                    )
+                    .bind(user_id)
+                    .bind(keys.recovery_hash(&n))
+                    .fetch_optional(&mut *tx)
+                    .await?
+                }
+            };
+            if spent.is_some() {
+                sqlx::query(
+                    "UPDATE user_mfa_totp SET failed_attempts = 0, locked_until = NULL, \
+                     version = version + 1 WHERE user_id = $1",
+                )
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+                auth_event(
+                    tx,
+                    Some(user_id),
+                    username,
+                    "recovery_code_used",
+                    "success",
+                    None,
+                )
+                .await?;
+                return Ok(true);
+            }
+            ("recovery_code_used", "bad_code")
+        }
+    };
+    let now_locked = count_failure(tx, user_id).await?;
+    auth_event(tx, Some(user_id), username, event, "failed", Some(failure)).await?;
+    if now_locked {
+        auth_event(
+            tx,
+            Some(user_id),
+            username,
+            "lockout",
+            "success",
+            Some("mfa"),
+        )
+        .await?;
+    }
+    Ok(false)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct LoginMfaBody {
@@ -134,16 +269,12 @@ pub async fn login_mfa(
 ) -> Result<Response, AppError> {
     let keys = keys(&state)?;
     let b = body(payload)?;
-    let (code, recovery) = match (b.code, b.recovery_code) {
-        (Some(c), None) => (Some(c), None),
-        (None, Some(r)) => (None, Some(r)),
+    let factor = match (b.code, b.recovery_code) {
+        (Some(c), None) => Factor::Totp(c),
+        (None, Some(r)) => Factor::Recovery(r),
         _ => return Err(AppError::Validation("code")),
     };
-    if code
-        .as_ref()
-        .or(recovery.as_ref())
-        .is_some_and(|v| v.len() > MAX_CODE_LEN)
-    {
+    if factor.len() > MAX_CODE_LEN {
         return Err(AppError::MfaInvalid);
     }
     let mut tx = state.pool.begin().await?;
@@ -192,148 +323,19 @@ pub async fn login_mfa(
         tx.commit().await?;
         return Err(AppError::MfaInvalid);
     }
-    let factor: Option<(Uuid, Option<i64>, bool)> = sqlx::query_as(
-        "SELECT secret_id, last_used_step, coalesce(locked_until > now(), false) \
-         FROM user_mfa_totp WHERE user_id = $1 AND confirmed_at IS NOT NULL FOR UPDATE",
+    if !check_factor(
+        &state,
+        &keys,
+        &mut tx,
+        user_id,
+        &username,
+        factor,
+        "mfa_verify",
     )
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some((secret_id, last_used_step, locked)) = factor else {
-        auth_event(
-            &mut tx,
-            Some(user_id),
-            &username,
-            "mfa_verify",
-            "denied",
-            Some("not_enrolled"),
-        )
-        .await?;
+    .await?
+    {
         tx.commit().await?;
         return Err(AppError::MfaInvalid);
-    };
-
-    if let Some(code) = code {
-        if locked {
-            auth_event(
-                &mut tx,
-                Some(user_id),
-                &username,
-                "mfa_verify",
-                "denied",
-                Some("locked"),
-            )
-            .await?;
-            tx.commit().await?;
-            return Err(AppError::MfaInvalid);
-        }
-        let seed = crypto::load_secret(&state.pool, &keys.keyring, secret_id, None, Purpose::TotpSeed)
-            .await
-            .map_err(|e| {
-                tracing::error!(error.kind = "totp_seed_unreadable", error = %e, "totp seed unavailable");
-                AppError::Unavailable
-            })?;
-        match mfa::verify_totp(seed.expose(), &code, mfa::now_step(), last_used_step) {
-            Ok(step) => {
-                sqlx::query(
-                    "UPDATE user_mfa_totp SET last_used_step = $2, failed_attempts = 0, \
-                     locked_until = NULL, version = version + 1 WHERE user_id = $1",
-                )
-                .bind(user_id)
-                .bind(i64::try_from(step).map_err(|_| AppError::MfaInvalid)?)
-                .execute(&mut *tx)
-                .await?;
-                auth_event(
-                    &mut tx,
-                    Some(user_id),
-                    &username,
-                    "mfa_verify",
-                    "success",
-                    None,
-                )
-                .await?;
-            }
-            Err(failure) => {
-                let now_locked = count_failure(&mut tx, user_id).await?;
-                auth_event(
-                    &mut tx,
-                    Some(user_id),
-                    &username,
-                    "mfa_verify",
-                    "failed",
-                    Some(failure.as_str()),
-                )
-                .await?;
-                if now_locked {
-                    auth_event(
-                        &mut tx,
-                        Some(user_id),
-                        &username,
-                        "lockout",
-                        "success",
-                        Some("mfa"),
-                    )
-                    .await?;
-                }
-                tx.commit().await?;
-                return Err(AppError::MfaInvalid);
-            }
-        }
-    } else if let Some(recovery) = recovery {
-        let spent: Option<Uuid> = match mfa::normalize_recovery_code(&recovery) {
-            None => None,
-            Some(n) => {
-                sqlx::query_scalar(
-                    "UPDATE mfa_recovery_codes SET used_at = now() \
-                     WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL RETURNING id",
-                )
-                .bind(user_id)
-                .bind(keys.recovery_hash(&n))
-                .fetch_optional(&mut *tx)
-                .await?
-            }
-        };
-        if spent.is_none() {
-            let now_locked = count_failure(&mut tx, user_id).await?;
-            auth_event(
-                &mut tx,
-                Some(user_id),
-                &username,
-                "recovery_code_used",
-                "failed",
-                Some("bad_code"),
-            )
-            .await?;
-            if now_locked {
-                auth_event(
-                    &mut tx,
-                    Some(user_id),
-                    &username,
-                    "lockout",
-                    "success",
-                    Some("mfa"),
-                )
-                .await?;
-            }
-            tx.commit().await?;
-            return Err(AppError::MfaInvalid);
-        }
-        sqlx::query(
-            "UPDATE user_mfa_totp SET failed_attempts = 0, locked_until = NULL, \
-             version = version + 1 WHERE user_id = $1",
-        )
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
-        auth_event(
-            &mut tx,
-            Some(user_id),
-            &username,
-            "recovery_code_used",
-            "success",
-            None,
-        )
-        .await?;
     }
     sqlx::query("UPDATE mfa_login_challenges SET used_at = now() WHERE id = $1")
         .bind(b.challenge_id)
@@ -555,7 +557,7 @@ pub async fn confirm_enrollment(
 }
 
 /// POST /me/mfa/recovery-codes: a new batch of ten; every unused code of the old batch is spent.
-/// Step-up re-authentication (FSD) arrives with CP4b.
+/// Needs a fresh step-up (A-9).
 pub async fn regenerate_recovery_codes(
     State(state): State<AppState>,
     s: Session,
@@ -572,6 +574,7 @@ pub async fn regenerate_recovery_codes(
     if !enrolled {
         return Err(AppError::Conflict("mfa_not_enrolled"));
     }
+    crate::authz::require_step_up(&state, &s)?;
     sqlx::query(
         "UPDATE mfa_recovery_codes SET used_at = now() WHERE user_id = $1 AND used_at IS NULL",
     )
@@ -595,4 +598,117 @@ pub async fn regenerate_recovery_codes(
         Json(json!({"recoveryCodes": codes})),
     )
         .into_response())
+}
+
+/// Drops every second-factor record of `user_id`: the TOTP factor and its sealed seed, recovery
+/// codes and pending login challenges. Returns whether a factor (confirmed or not) existed.
+pub(crate) async fn remove_factor(tx: &mut PgConnection, user_id: Uuid) -> Result<bool, AppError> {
+    let secret: Option<Uuid> =
+        sqlx::query_scalar("DELETE FROM user_mfa_totp WHERE user_id = $1 RETURNING secret_id")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if let Some(secret) = secret {
+        sqlx::query("DELETE FROM encrypted_secrets WHERE id = $1 AND purpose = 'totp_seed'")
+            .bind(secret)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("DELETE FROM mfa_recovery_codes WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mfa_login_challenges WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    Ok(secret.is_some())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StepUpBody {
+    code: String,
+}
+
+/// POST /session/step-up (A-9): a TOTP code (six digits) or a recovery code re-entered on this
+/// session opens sensitive actions for five minutes. Failures count towards the same TOTP lock as
+/// the login; a wrong, reused or locked factor is 401 `mfa_invalid`.
+pub async fn step_up(
+    State(state): State<AppState>,
+    s: Session,
+    payload: Result<Json<StepUpBody>, JsonRejection>,
+) -> Result<Response, AppError> {
+    let keys = keys(&state)?;
+    let b = body(payload)?;
+    if b.code.len() > MAX_CODE_LEN {
+        return Err(AppError::MfaInvalid);
+    }
+    let trimmed = b.code.trim();
+    // Recovery codes are 16 base32 characters, never six digits.
+    let factor =
+        if trimmed.len() == mfa::DIGITS as usize && trimmed.bytes().all(|c| c.is_ascii_digit()) {
+            Factor::Totp(b.code)
+        } else {
+            Factor::Recovery(b.code)
+        };
+    let mut tx = state.pool.begin().await?;
+    let username: String =
+        sqlx::query_scalar("SELECT username FROM local_credentials WHERE user_id = $1 FOR UPDATE")
+            .bind(s.user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::Forbidden)?;
+    let (enrolled, _) = status(&mut tx, s.user_id).await?;
+    if !enrolled {
+        return Err(AppError::Conflict("mfa_not_enrolled"));
+    }
+    if !check_factor(
+        &state, &keys, &mut tx, s.user_id, &username, factor, "step_up",
+    )
+    .await?
+    {
+        tx.commit().await?;
+        return Err(AppError::MfaInvalid);
+    }
+    sqlx::query("UPDATE sessions SET step_up_at = now() WHERE id = $1")
+        .bind(s.id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// DELETE /me/mfa: removes the caller's own second factor. Refused (409 `mfa_required_for_role`)
+/// while MFA is mandatory for the caller (TM-02 a); needs a fresh step-up. Idempotent: without a
+/// factor it answers 204 and changes nothing.
+pub async fn delete_mfa(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
+    keys(&state)?;
+    let mut tx = state.pool.begin().await?;
+    let username: String =
+        sqlx::query_scalar("SELECT username FROM local_credentials WHERE user_id = $1 FOR UPDATE")
+            .bind(s.user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AppError::Forbidden)?;
+    let (enrolled, required) = status(&mut tx, s.user_id).await?;
+    if required {
+        return Err(AppError::Conflict("mfa_required_for_role"));
+    }
+    if !enrolled {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
+    crate::authz::require_step_up(&state, &s)?;
+    remove_factor(&mut tx, s.user_id).await?;
+    auth_event(
+        &mut tx,
+        Some(s.user_id),
+        &username,
+        "mfa_disable",
+        "success",
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }

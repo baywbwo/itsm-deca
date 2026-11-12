@@ -164,6 +164,23 @@ describe('CP3a session ended mid-use', () => {
     off();
   });
 
+  it('a 401 step_up_required or mfa_invalid refuses the action but keeps the session (CP4b)', async () => {
+    const { api } = mock((r) => {
+      if (r.path === '/api/v1/session') return res(200, { user, banner: null, uatSuperadmin: false, mustChangePassword: false });
+      if (r.path === '/api/v1/session/csrf') return res(200, { csrfToken: 'csrf-2' });
+      if (r.path === '/api/v1/users') return err(401, 'step_up_required');
+      if (r.path.includes('/password-reset')) return err(401, 'mfa_invalid');
+      return undefined;
+    });
+    let ended = 0;
+    api.onSessionEnded(() => { ended += 1; });
+    await api.getSession();
+    await expect(api.createUser({ username: 'x', displayName: 'X' } as never)).rejects.toMatchObject({ status: 401, code: 'step_up_required' });
+    await expect(api.resetUserPassword('u-1')).rejects.toMatchObject({ status: 401, code: 'mfa_invalid' });
+    expect(ended).toBe(0);
+    expect(api.hasCsrf()).toBe(true);
+  });
+
   it('a 401 on login or on the first session read is not an expiry', async () => {
     const { api } = mock((r) => {
       if (r.path === '/api/v1/login') return err(401, 'unauthenticated');

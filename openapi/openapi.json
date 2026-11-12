@@ -843,6 +843,7 @@
           "active",
           "mustChangePassword",
           "locked",
+          "mfaEnrolled",
           "platformAdmin",
           "createdAt",
           "deactivatedAt"
@@ -876,7 +877,11 @@
           },
           "locked": {
             "type": "boolean",
-            "description": "Currently locked out after failed logins."
+            "description": "Currently locked out after failed password or TOTP attempts (cleared by POST /users/{user_id}/unlock)."
+          },
+          "mfaEnrolled": {
+            "type": "boolean",
+            "description": "CP4b: has a confirmed TOTP authenticator. Never exposes the seed or recovery codes."
           },
           "platformAdmin": {
             "type": "boolean"
@@ -926,14 +931,14 @@
             "type": "boolean",
             "description": "CP3b: holds the platform_admin grant (password mode); the client offers the user administration page only then."
           },
-            "mfaEnrolled": {
-              "type": "boolean",
-              "description": "US-1.2: password mode, the user has a confirmed TOTP authenticator. Always false in UAT Superadmin mode."
-            },
-            "mfaRequired": {
-              "type": "boolean",
-              "description": "US-1.2: MFA is mandatory for this user (platform_admin, or a live admin.*, integration.* or ai.manage grant). While required and not verified, the session is pre-MFA: only session, CSRF refresh, logout-all, meta and the /me/mfa enrolment routes answer; everything else is 403 forbidden."
-            }
+          "mfaEnrolled": {
+            "type": "boolean",
+            "description": "US-1.2: password mode, the user has a confirmed TOTP authenticator. Always false in UAT Superadmin mode."
+          },
+          "mfaRequired": {
+            "type": "boolean",
+            "description": "US-1.2: MFA is mandatory for this user (platform_admin, or a live admin.*, integration.* or ai.manage grant). While required and not verified, the session is pre-MFA: only session, CSRF refresh, logout-all, meta and the /me/mfa enrolment routes answer; everything else is 403 forbidden."
+          }
         }
       },
       "MfaStatus": {
@@ -5780,6 +5785,35 @@
             "writeOnly": true
           }
         }
+      },
+      "StepUpRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "A 6-digit TOTP code or an unused recovery code."
+          }
+        }
+      },
+      "MfaResetRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Why the factor is reset; trimmed, stored in the audit event."
+          }
+        }
       }
     },
     "responses": {
@@ -6998,6 +7032,52 @@
             "$ref": "#/components/responses/RateLimited"
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteMyMfa",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP4b. Removes the caller's own authenticator and recovery codes. 409 mfa_required_for_role when MFA is mandatory for the caller (platform_admin or an admin.*/integration.*/ai.manage grant). 204 without change when nothing is enrolled. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. Audited as mfa_disable. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "responses": {
+          "204": {
+            "description": "Authenticator removed (or none enrolled)"
+          },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "mfa_required_for_role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
       }
     },
     "/api/v1/me/mfa/enrollment": {
@@ -7170,7 +7250,7 @@
             "sessionCookie": []
           }
         ],
-        "description": "US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Step-up re-authentication follows in CP4b. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "description": "US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403.",
         "responses": {
           "201": {
             "description": "New batch; shown once",
@@ -7194,7 +7274,14 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/CsrfFailed"
@@ -7329,7 +7416,7 @@
             "sessionCookie": []
           }
         ],
-        "description": "US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets.",
+        "description": "US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403.",
         "requestBody": {
           "required": true,
           "content": {
@@ -7365,9 +7452,6 @@
           }
         },
         "responses": {
-          "400": {
-            "$ref": "#/components/responses/InvalidRequest"
-          },
           "201": {
             "description": "User created",
             "content": {
@@ -7423,8 +7507,18 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
@@ -7459,7 +7553,7 @@
             "sessionCookie": []
           }
         ],
-        "description": "US-1.7. Password mode, platform_admin only. Currently only {\"active\": false}: sets deactivated_at, revokes every session of the user (admin_revoke), keeps history; anything else is 422. 409 user_inactive when already inactive, 409 last_admin when it would deactivate the last active platform_admin. Requires the CSRF token. Audited as user_deactivate.",
+        "description": "US-1.7. Password mode, platform_admin only. Currently only {\"active\": false}: sets deactivated_at, revokes every session of the user (admin_revoke), keeps history; anything else is 422. 409 user_inactive when already inactive, 409 last_admin when it would deactivate the last active platform_admin. Requires the CSRF token. Audited as user_deactivate. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403.",
         "parameters": [
           {
             "name": "user_id",
@@ -7516,7 +7610,14 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
@@ -7551,7 +7652,7 @@
             "sessionCookie": []
           }
         ],
-        "description": "US-1.5. Password mode, platform_admin only. Issues a new one-time temporary password: must_change_password=true, credential_version raised, lockout cleared, every session of the user revoked (admin_revoke). 409 user_inactive for a deactivated user. Requires the CSRF token. Audited as password_reset_issue without secrets.",
+        "description": "US-1.5. Password mode, platform_admin only. Issues a new one-time temporary password: must_change_password=true, credential_version raised, lockout cleared, every session of the user revoked (admin_revoke). 409 user_inactive for a deactivated user. Requires the CSRF token. Audited as password_reset_issue without secrets. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403.",
         "parameters": [
           {
             "name": "user_id",
@@ -7585,7 +7686,14 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthenticated"
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
@@ -9355,7 +9463,8 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "undefined CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
       }
     },
     "/api/v1/companies/{company_id}": {
@@ -9415,7 +9524,8 @@
           "429": {
             "$ref": "#/components/responses/RateLimited"
           }
-        }
+        },
+        "description": "CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it."
       }
     },
     "/api/v1/companies/{company_id}/profile": {
@@ -10734,6 +10844,181 @@
           },
           "503": {
             "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/session/step-up": {
+      "post": {
+        "operationId": "stepUpSession",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP4b (A-9). Re-authenticates the current session with a TOTP code or a recovery code; on success the session may use step-up actions for 5 minutes. A recovery code is spent and clears a TOTP lock. Wrong codes count toward the same lockout as the MFA login step (5 failures, 15 minutes); audited as step_up / recovery_code_used / lockout. Not allowed in a pre-MFA session. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Step-up recorded on this session"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "description": "unauthenticated, or mfa_invalid (wrong, replayed or locked code)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "mfa_not_enrolled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/mfa-reset": {
+      "post": {
+        "operationId": "resetUserMfa",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "CP4b. Password mode, platform_admin only. Deletes the user's authenticator and recovery codes and revokes every session (mfa_reset); the user must enrol again at the next login when MFA is mandatory. 409 self_mfa_reset for the caller's own account (use DELETE /me/mfa). Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. Idempotent. Requires the CSRF token. Audited as mfa_reset with actor and reason.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Factor removed, sessions revoked"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "self_mfa_reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/unlock": {
+      "post": {
+        "operationId": "unlockUser",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "CP4b. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). No step-up (04b E1). Idempotent. Requires the CSRF token. Audited as user_unlock with actor.",
+        "responses": {
+          "204": {
+            "description": "Lockout cleared"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }

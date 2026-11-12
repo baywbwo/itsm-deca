@@ -270,7 +270,8 @@ export interface paths {
         get: operations["getMyMfa"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** @description CP4b. Removes the caller's own authenticator and recovery codes. 409 mfa_required_for_role when MFA is mandatory for the caller (platform_admin or an admin.*\/integration.*\/ai.manage grant). 204 without change when nothing is enrolled. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. Audited as mfa_disable. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        delete: operations["deleteMyMfa"];
         options?: never;
         head?: never;
         patch?: never;
@@ -319,7 +320,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Step-up re-authentication follows in CP4b. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        /** @description US-1.2. Issues a new batch of 10 recovery codes (shown once); every earlier code is spent. 409 mfa_not_enrolled without a confirmed authenticator. Not allowed in a pre-MFA session. Audited as recovery_codes_issue. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. */
         post: operations["regenerateRecoveryCodes"];
         delete?: never;
         options?: never;
@@ -337,7 +338,7 @@ export interface paths {
         /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). User directory, newest first (created_at, id), keyset-paged. Never returns password hashes, lockout counters or credential versions. */
         get: operations["listUsers"];
         put?: never;
-        /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets. */
+        /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. */
         post: operations["createUser"];
         delete?: never;
         options?: never;
@@ -358,7 +359,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** @description US-1.7. Password mode, platform_admin only. Currently only {"active": false}: sets deactivated_at, revokes every session of the user (admin_revoke), keeps history; anything else is 422. 409 user_inactive when already inactive, 409 last_admin when it would deactivate the last active platform_admin. Requires the CSRF token. Audited as user_deactivate. */
+        /** @description US-1.7. Password mode, platform_admin only. Currently only {"active": false}: sets deactivated_at, revokes every session of the user (admin_revoke), keeps history; anything else is 422. 409 user_inactive when already inactive, 409 last_admin when it would deactivate the last active platform_admin. Requires the CSRF token. Audited as user_deactivate. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. */
         patch: operations["updateUser"];
         trace?: never;
     };
@@ -371,7 +372,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description US-1.5. Password mode, platform_admin only. Issues a new one-time temporary password: must_change_password=true, credential_version raised, lockout cleared, every session of the user revoked (admin_revoke). 409 user_inactive for a deactivated user. Requires the CSRF token. Audited as password_reset_issue without secrets. */
+        /** @description US-1.5. Password mode, platform_admin only. Issues a new one-time temporary password: must_change_password=true, credential_version raised, lockout cleared, every session of the user revoked (admin_revoke). 409 user_inactive for a deactivated user. Requires the CSRF token. Audited as password_reset_issue without secrets. Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. */
         post: operations["resetUserPassword"];
         delete?: never;
         options?: never;
@@ -883,7 +884,10 @@ export interface paths {
         /** All companies (UAT superadmin only) */
         get: operations["listCompanies"];
         put?: never;
-        /** Create company + workspace (UAT superadmin only; no memberships) */
+        /**
+         * Create company + workspace (UAT superadmin only; no memberships)
+         * @description undefined CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
+         */
         post: operations["createCompany"];
         delete?: never;
         options?: never;
@@ -904,7 +908,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Activate/deactivate a company (UAT superadmin only) */
+        /**
+         * Activate/deactivate a company (UAT superadmin only)
+         * @description CP4b: the step-up guard applies in password mode; UAT Superadmin (no factor) skips it.
+         */
         patch: operations["setCompanyActive"];
         trace?: never;
     };
@@ -1221,6 +1228,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/step-up": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description CP4b (A-9). Re-authenticates the current session with a TOTP code or a recovery code; on success the session may use step-up actions for 5 minutes. A recovery code is spent and clears a TOTP lock. Wrong codes count toward the same lockout as the MFA login step (5 failures, 15 minutes); audited as step_up / recovery_code_used / lockout. Not allowed in a pre-MFA session. Requires the CSRF token. Password mode only (404 otherwise); 503 dependency_unavailable when MFA keys are not configured. */
+        post: operations["stepUpSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}/mfa-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description CP4b. Password mode, platform_admin only. Deletes the user's authenticator and recovery codes and revokes every session (mfa_reset); the user must enrol again at the next login when MFA is mandatory. 409 self_mfa_reset for the caller's own account (use DELETE /me/mfa). Needs a step-up within the last 5 minutes (POST /session/step-up), else 401 step_up_required; the guard runs after the permission check, so a caller without the right still gets 403. Idempotent. Requires the CSRF token. Audited as mfa_reset with actor and reason. */
+        post: operations["resetUserMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}/unlock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description CP4b. Password mode, platform_admin only. Clears the password and TOTP lockout (failed attempts and locked_until). No step-up (04b E1). Idempotent. Requires the CSRF token. Audited as user_unlock with actor. */
+        post: operations["unlockUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1400,8 +1458,10 @@ export interface components {
             email: string | null;
             active: boolean;
             mustChangePassword: boolean;
-            /** @description Currently locked out after failed logins. */
+            /** @description Currently locked out after failed password or TOTP attempts (cleared by POST /users/{user_id}/unlock). */
             locked: boolean;
+            /** @description CP4b: has a confirmed TOTP authenticator. Never exposes the seed or recovery codes. */
+            mfaEnrolled: boolean;
             platformAdmin: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -2742,6 +2802,14 @@ export interface components {
             username: string;
             password: string;
         };
+        StepUpRequest: {
+            /** @description A 6-digit TOTP code or an unused recovery code. */
+            code: string;
+        };
+        MfaResetRequest: {
+            /** @description Why the factor is reset; trimmed, stored in the audit event. */
+            reason: string;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -3540,6 +3608,46 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
+    deleteMyMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticator removed (or none enrolled) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_required_for_role */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
     startMfaEnrollment: {
         parameters: {
             query?: never;
@@ -3650,7 +3758,15 @@ export interface operations {
                     "application/json": components["schemas"]["RecoveryCodes"];
                 };
             };
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["CsrfFailed"];
             404: components["responses"]["NotFound"];
             /** @description mfa_not_enrolled */
@@ -3741,7 +3857,15 @@ export interface operations {
                 };
             };
             400: components["responses"]["InvalidRequest"];
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             /** @description username_taken or email_taken */
@@ -3788,7 +3912,15 @@ export interface operations {
                     };
                 };
             };
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             /** @description user_inactive or last_admin */
@@ -3827,7 +3959,15 @@ export interface operations {
                     };
                 };
             };
-            401: components["responses"]["Unauthenticated"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             /** @description user_inactive */
@@ -5660,6 +5800,123 @@ export interface operations {
             422: components["responses"]["ValidationFailed"];
             429: components["responses"]["RateLimited"];
             503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    stepUpSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StepUpRequest"];
+            };
+        };
+        responses: {
+            /** @description Step-up recorded on this session */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            /** @description unauthenticated, or mfa_invalid (wrong, replayed or locked code) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            /** @description mfa_not_enrolled */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    resetUserMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MfaResetRequest"];
+            };
+        };
+        responses: {
+            /** @description Factor removed, sessions revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            /** @description unauthenticated or step_up_required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description self_mfa_reset */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["DependencyUnavailable"];
+        };
+    };
+    unlockUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Lockout cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
         };
     };
 }

@@ -254,6 +254,12 @@ async fn challenge(pool: &PgPool, username: &str) -> String {
         .to_owned()
 }
 
+/// POST /session/step-up with the TOTP code `ahead` steps from now (anti-replay needs a new step).
+async fn step_up(pool: &PgPool, a: &(String, String), seed: &[u8], ahead: u64) -> Reply {
+    let code = mfa::code_at(seed, mfa::now_step() + ahead);
+    post(pool, "/api/v1/session/step-up", json!({"code": code}), a).await
+}
+
 async fn second_step(pool: &PgPool, body: Value) -> Reply {
     send(pool, true, "POST", "/api/v1/login/mfa", body, true, None).await
 }
@@ -459,6 +465,10 @@ async fn us_1_2_recovery_code_is_single_use_and_regeneration_spends_the_old_batc
     let session = auth(&ok);
     let left = get(&pool, "/api/v1/me/mfa", &session).await;
     assert_eq!(left.body["recoveryCodesLeft"], 9);
+    assert_eq!(
+        step_up(&pool, &session, &e.seed, 1).await.status,
+        StatusCode::NO_CONTENT
+    );
 
     let fresh = post(
         &pool,
@@ -742,6 +752,10 @@ async fn us_1_2_no_seed_or_codes_in_responses_audit_or_logs(pool: PgPool) {
         done.body.clone(),
         wrong.body.clone(),
     ];
+    assert_eq!(
+        step_up(&pool, &s, &e.seed, 1).await.status,
+        StatusCode::NO_CONTENT
+    );
     let regen = post(&pool, "/api/v1/me/mfa/recovery-codes", Value::Null, &s).await;
     let regen_codes: Vec<String> = regen.body["recoveryCodes"]
         .as_array()
@@ -829,4 +843,221 @@ async fn us_1_2_without_keys_mfa_is_unavailable_in_uat(pool: PgPool) {
     )
     .await;
     assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+async fn delete(pool: &PgPool, path: &str, a: &(String, String)) -> Reply {
+    send(
+        pool,
+        true,
+        "DELETE",
+        path,
+        Value::Null,
+        false,
+        Some((&a.0, &a.1)),
+    )
+    .await
+}
+
+async fn expire_step_up(pool: &PgPool, user: Uuid) {
+    sqlx::query(
+        "UPDATE sessions SET step_up_at = now() - interval '5 minutes 1 second' \
+         WHERE user_id = $1 AND step_up_at IS NOT NULL",
+    )
+    .bind(user)
+    .execute(pool)
+    .await
+    .expect("expire step-up");
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_step_up_opens_sensitive_actions_for_five_minutes(pool: PgPool) {
+    let (admin, _) = fixture(&pool).await;
+    let e = enrol(&pool, "admin@example.test").await;
+    let s = &e.session;
+    let regen = post(&pool, "/api/v1/me/mfa/recovery-codes", Value::Null, s).await;
+    assert_eq!(regen.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(regen.body["error"]["code"], "step_up_required");
+
+    let wrong = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": wrong_code(&e.seed)}),
+        s,
+    )
+    .await;
+    assert_eq!(wrong.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(wrong.body["error"]["code"], "mfa_invalid");
+    assert_eq!(events(&pool, admin, "step_up", "failed").await, 1);
+    let regen = post(&pool, "/api/v1/me/mfa/recovery-codes", Value::Null, s).await;
+    assert_eq!(
+        regen.body["error"]["code"], "step_up_required",
+        "a failure opens nothing"
+    );
+
+    let code = mfa::code_at(&e.seed, mfa::now_step() + 1);
+    let ok = post(&pool, "/api/v1/session/step-up", json!({"code": code}), s).await;
+    assert_eq!(ok.status, StatusCode::NO_CONTENT, "{}", ok.body);
+    assert_eq!(events(&pool, admin, "step_up", "success").await, 1);
+    let regen = post(&pool, "/api/v1/me/mfa/recovery-codes", Value::Null, s).await;
+    assert_eq!(regen.status, StatusCode::CREATED, "{}", regen.body);
+    let codes: Vec<String> = regen.body["recoveryCodes"]
+        .as_array()
+        .expect("codes")
+        .iter()
+        .filter_map(|c| c.as_str().map(str::to_owned))
+        .collect();
+    let replay = post(&pool, "/api/v1/session/step-up", json!({"code": code}), s).await;
+    assert_eq!(
+        replay.body["error"]["code"], "mfa_invalid",
+        "same code twice"
+    );
+
+    // Older than five minutes: closed again.
+    expire_step_up(&pool, admin).await;
+    let regen = post(&pool, "/api/v1/me/mfa/recovery-codes", Value::Null, s).await;
+    assert_eq!(regen.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(regen.body["error"]["code"], "step_up_required");
+    // The regenerated batch replaced the enrolment codes: an old code does not step up.
+    let old = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": e.codes[1]}),
+        s,
+    )
+    .await;
+    assert_eq!(old.body["error"]["code"], "mfa_invalid");
+    // A current recovery code steps up (and is spent).
+    let r = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": codes[0]}),
+        s,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
+    assert_eq!(
+        get(&pool, "/api/v1/me/mfa", s).await.body["recoveryCodesLeft"],
+        9
+    );
+    let r = delete(&pool, "/api/v1/me/mfa", s).await;
+    assert_eq!(
+        r.body["error"]["code"], "mfa_required_for_role",
+        "step-up passed, role refuses"
+    );
+
+    // Step-up belongs to one session: a new session of the same user starts closed.
+    let c = challenge(&pool, "admin@example.test").await;
+    let other = second_step(&pool, json!({"challengeId": c, "recoveryCode": codes[1]})).await;
+    assert_eq!(other.status, StatusCode::OK, "{}", other.body);
+    let regen = post(
+        &pool,
+        "/api/v1/me/mfa/recovery-codes",
+        Value::Null,
+        &auth(&other),
+    )
+    .await;
+    assert_eq!(regen.body["error"]["code"], "step_up_required");
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_step_up_failures_lock_like_the_login_and_need_an_enrolled_factor(pool: PgPool) {
+    let (admin, plain) = fixture(&pool).await;
+    let e = enrol(&pool, "admin@example.test").await;
+    let bad = wrong_code(&e.seed);
+    for _ in 0..5 {
+        let r = post(
+            &pool,
+            "/api/v1/session/step-up",
+            json!({"code": bad}),
+            &e.session,
+        )
+        .await;
+        assert_eq!(r.body["error"]["code"], "mfa_invalid");
+    }
+    assert_eq!(events(&pool, admin, "lockout", "success").await, 1);
+    let good = mfa::code_at(&e.seed, mfa::now_step() + 1);
+    let r = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": good}),
+        &e.session,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED, "TOTP locked");
+    assert_eq!(events(&pool, admin, "step_up", "denied").await, 1);
+    // The same lock holds at login (shared counter).
+    let c = challenge(&pool, "admin@example.test").await;
+    let r = second_step(&pool, json!({"challengeId": c, "code": good})).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    // A recovery code still works while TOTP is locked and clears the lock (TM-10).
+    let r = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": e.codes[0]}),
+        &e.session,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
+
+    // A user without a factor cannot step up.
+    let login = password_login(&pool, "plain@example.test").await;
+    assert_eq!(login.status, StatusCode::CREATED);
+    let r = post(
+        &pool,
+        "/api/v1/session/step-up",
+        json!({"code": "123456"}),
+        &auth(&login),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"]["code"], "mfa_not_enrolled");
+    assert_eq!(events(&pool, plain, "step_up", "failed").await, 0);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_delete_own_mfa_is_refused_for_admins_and_needs_step_up(pool: PgPool) {
+    let (admin, plain) = fixture(&pool).await;
+    let a = enrol(&pool, "admin@example.test").await;
+    assert_eq!(
+        step_up(&pool, &a.session, &a.seed, 1).await.status,
+        StatusCode::NO_CONTENT
+    );
+    let r = delete(&pool, "/api/v1/me/mfa", &a.session).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["error"]["code"], "mfa_required_for_role");
+    assert_eq!(
+        get(&pool, "/api/v1/me/mfa", &a.session).await.body["enrolled"],
+        true
+    );
+    assert_eq!(events(&pool, admin, "mfa_disable", "success").await, 0);
+
+    // A plain user enrolled voluntarily may remove the factor, after a step-up.
+    let p = enrol(&pool, "plain@example.test").await;
+    let r = delete(&pool, "/api/v1/me/mfa", &p.session).await;
+    assert_eq!(r.body["error"]["code"], "step_up_required");
+    assert_eq!(
+        step_up(&pool, &p.session, &p.seed, 1).await.status,
+        StatusCode::NO_CONTENT
+    );
+    let r = delete(&pool, "/api/v1/me/mfa", &p.session).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{}", r.body);
+    let left: i64 = sqlx::query_scalar(
+        "SELECT (SELECT count(*) FROM user_mfa_totp WHERE user_id = $1) \
+              + (SELECT count(*) FROM mfa_recovery_codes WHERE user_id = $1) \
+              + (SELECT count(*) FROM encrypted_secrets WHERE created_by = $1 AND purpose = 'totp_seed')",
+    )
+    .bind(plain)
+    .fetch_one(&pool)
+    .await
+    .expect("left");
+    assert_eq!(left, 0);
+    assert_eq!(events(&pool, plain, "mfa_disable", "success").await, 1);
+    let r = delete(&pool, "/api/v1/me/mfa", &p.session).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "idempotent");
+    assert_eq!(events(&pool, plain, "mfa_disable", "success").await, 1);
+    // The next login is a single step again.
+    assert_eq!(
+        password_login(&pool, "plain@example.test").await.status,
+        StatusCode::CREATED
+    );
 }

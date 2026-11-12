@@ -184,8 +184,9 @@ async fn admin(pool: &PgPool) -> (String, String) {
     enrol_mfa(pool, &a).await;
     a
 }
-/// US-1.2: an administrator's first session is pre-MFA; enrolling verifies it.
-async fn enrol_mfa(pool: &PgPool, a: &(String, String)) {
+/// US-1.2: an administrator's first session is pre-MFA; enrolling verifies it. A step-up follows
+/// (A-9) so the session can use the sensitive user-administration endpoints. Returns the seed.
+async fn enrol_mfa(pool: &PgPool, a: &(String, String)) -> Vec<u8> {
     let (status, body) = call(
         pool,
         "POST",
@@ -212,6 +213,21 @@ async fn enrol_mfa(pool: &PgPool, a: &(String, String)) {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
+    step_up(pool, a, &seed, 1).await;
+    seed
+}
+/// POST /session/step-up with the TOTP code `ahead` steps from now (anti-replay needs a new step).
+async fn step_up(pool: &PgPool, a: &(String, String), seed: &[u8], ahead: u64) {
+    let code = itsm_api::mfa::code_at(seed, itsm_api::mfa::now_step() + ahead);
+    let (status, body) = call(
+        pool,
+        "POST",
+        "/api/v1/session/step-up",
+        json!({"code": code}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 }
 async fn create_user(pool: &PgPool, a: &(String, String), username: &str) -> (Uuid, String) {
     let (status, body) = call(
@@ -560,6 +576,7 @@ async fn us_1_3_list_users_searches_filters_pages_and_hides_secrets(pool: PgPool
             "email",
             "id",
             "locked",
+            "mfaEnrolled",
             "mustChangePassword",
             "platformAdmin",
             "username"
@@ -573,11 +590,13 @@ async fn us_1_3_list_users_searches_filters_pages_and_hides_secrets(pool: PgPool
         .find(|i| i["id"] == admin_id.to_string())
         .expect("admin listed");
     assert_eq!(me["platformAdmin"], true);
+    assert_eq!(me["mfaEnrolled"], true);
     let other = all
         .iter()
         .find(|i| i["id"] == plain.to_string())
         .expect("plain listed");
     assert_eq!(other["platformAdmin"], false);
+    assert_eq!(other["mfaEnrolled"], false);
 
     // Keyset paging (limit 1) returns the same rows in the same order, without repeats.
     let paged = list_all(&pool, &a, "limit=1").await;
@@ -709,5 +728,289 @@ async fn us_1_3_initial_admin_from_init_password_can_administer_users(pool: PgPo
         itsm_api::password_bootstrap::bootstrap(&pool, &cfg, "admin.kedua", &name, ADMIN_PASSWORD)
             .await
             .is_err()
+    );
+}
+
+async fn expire_step_up(pool: &PgPool, user: Uuid) {
+    sqlx::query(
+        "UPDATE sessions SET step_up_at = now() - interval '5 minutes 1 second' \
+         WHERE user_id = $1 AND step_up_at IS NOT NULL",
+    )
+    .bind(user)
+    .execute(pool)
+    .await
+    .expect("expire step-up");
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_sensitive_user_admin_needs_a_fresh_step_up(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    let a = admin(&pool).await;
+    let (_, temp) = create_user(&pool, &a, "fresh.step@example.test").await;
+    assert!(!temp.is_empty());
+    expire_step_up(&pool, admin_id).await;
+    // A UAT Superadmin grant changes nothing in password mode (the grant counts only in UAT mode).
+    sqlx::query("INSERT INTO platform_grants(user_id,grant_code) VALUES($1,'uat_superadmin')")
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("grant");
+    for (method, path, body) in [
+        (
+            "POST",
+            "/api/v1/users".to_owned(),
+            json!({"username":"stale.step@example.test","displayName":"Synthetic"}),
+        ),
+        (
+            "POST",
+            format!("/api/v1/users/{plain}/password-reset"),
+            Value::Null,
+        ),
+        (
+            "PATCH",
+            format!("/api/v1/users/{plain}"),
+            json!({"active": false}),
+        ),
+        (
+            "POST",
+            format!("/api/v1/users/{plain}/mfa-reset"),
+            json!({"reason": "Perangkat hilang (uji sintetis)"}),
+        ),
+    ] {
+        let (status, body) = call(&pool, method, &path, body, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}");
+        assert_eq!(body["error"]["code"], "step_up_required", "{method} {path}");
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM local_credentials WHERE username='stale.step@example.test' AND user_id<>$1",
+            admin_id
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM users WHERE id=$1 AND active",
+            plain
+        )
+        .await,
+        1
+    );
+    // Unlock is not a step-up action (04b E1).
+    let (status, _) = call(
+        &pool,
+        "POST",
+        &format!("/api/v1/users/{plain}/unlock"),
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_mfa_reset_revokes_sessions_and_forces_reenrolment(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    sqlx::query("INSERT INTO platform_grants(user_id,grant_code) VALUES($1,'platform_admin')")
+        .bind(plain)
+        .execute(&pool)
+        .await
+        .expect("second admin");
+    let (status, cookie, csrf) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let p = (cookie, csrf);
+    enrol_mfa(&pool, &p).await;
+    let a = admin(&pool).await;
+    let reset = format!("/api/v1/users/{plain}/mfa-reset");
+
+    for bad in [json!({"reason": "   "}), json!({"reason": "x".repeat(501)})] {
+        let (status, body) = call(&pool, "POST", &reset, bad, (&a.0, &a.1)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["error"]["field"], "reason");
+    }
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &format!("/api/v1/users/{admin_id}/mfa-reset"),
+        json!({"reason": "Uji sintetis"}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "self_mfa_reset");
+    let (status, _) = call(
+        &pool,
+        "POST",
+        &format!("/api/v1/users/{}/mfa-reset", Uuid::new_v4()),
+        json!({"reason": "Uji sintetis"}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &reset,
+        json!({"reason": "  Perangkat hilang (uji sintetis)  "}),
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (status, _) = call(&pool, "GET", "/api/v1/session", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "sessions revoked");
+    assert!(
+        count(
+            &pool,
+            "SELECT count(*) FROM sessions WHERE user_id=$1 AND revoked_reason='mfa_reset'",
+            plain
+        )
+        .await
+            >= 1
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT (SELECT count(*) FROM user_mfa_totp WHERE user_id=$1) \
+                  + (SELECT count(*) FROM mfa_recovery_codes WHERE user_id=$1) \
+                  + (SELECT count(*) FROM encrypted_secrets WHERE created_by=$1 AND purpose='totp_seed')",
+            plain
+        )
+        .await,
+        0
+    );
+    let (actor, reason): (Option<Uuid>, Option<String>) = sqlx::query_as(
+        "SELECT actor_id, reason FROM auth_events WHERE user_id=$1 AND event='mfa_reset' AND outcome='success'",
+    )
+    .bind(plain)
+    .fetch_one(&pool)
+    .await
+    .expect("audit");
+    assert_eq!(actor, Some(admin_id));
+    assert_eq!(reason.as_deref(), Some("Perangkat hilang (uji sintetis)"));
+    let list = list_all(&pool, &a, "q=plain@").await;
+    assert_eq!(list[0]["mfaEnrolled"], false);
+
+    // MFA is mandatory for this admin: the next login is pre-MFA until enrolled again.
+    let (status, cookie, csrf) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED, "single step: no factor left");
+    let p = (cookie, csrf);
+    let (_, session) = call(&pool, "GET", "/api/v1/session", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(session["mfaRequired"], true);
+    let (status, _) = call(&pool, "GET", "/api/v1/users", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "pre-MFA");
+    enrol_mfa(&pool, &p).await;
+    let (status, _) = call(&pool, "GET", "/api/v1/users", Value::Null, (&p.0, &p.1)).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_unlock_clears_password_and_totp_lockout(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    let (status, cookie, csrf) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED);
+    enrol_mfa(&pool, &(cookie, csrf)).await;
+    let a = admin(&pool).await;
+    for sql in [
+        "UPDATE local_credentials SET failed_attempts=5, locked_until=now()+interval '15 minutes' WHERE user_id=$1",
+        "UPDATE user_mfa_totp SET failed_attempts=5, locked_until=now()+interval '15 minutes', version=version+1 WHERE user_id=$1",
+    ] {
+        sqlx::query(sql)
+            .bind(plain)
+            .execute(&pool)
+            .await
+            .expect("lock");
+    }
+    let (status, _, _) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_ne!(status, StatusCode::CREATED, "locked");
+    assert_eq!(list_all(&pool, &a, "q=plain@").await[0]["locked"], true);
+    // Only the TOTP lock still counts as locked.
+    sqlx::query(
+        "UPDATE local_credentials SET failed_attempts=0, locked_until=NULL WHERE user_id=$1",
+    )
+    .bind(plain)
+    .execute(&pool)
+    .await
+    .expect("password unlock");
+    assert_eq!(list_all(&pool, &a, "q=plain@").await[0]["locked"], true);
+    sqlx::query("UPDATE local_credentials SET failed_attempts=5, locked_until=now()+interval '15 minutes' WHERE user_id=$1")
+        .bind(plain)
+        .execute(&pool)
+        .await
+        .expect("relock");
+
+    let (status, body) = call(
+        &pool,
+        "POST",
+        &format!("/api/v1/users/{plain}/unlock"),
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT (SELECT count(*) FROM local_credentials WHERE user_id=$1 \
+                       AND (failed_attempts>0 OR locked_until IS NOT NULL)) \
+                  + (SELECT count(*) FROM user_mfa_totp WHERE user_id=$1 \
+                       AND (failed_attempts>0 OR locked_until IS NOT NULL))",
+            plain
+        )
+        .await,
+        0
+    );
+    assert_eq!(list_all(&pool, &a, "q=plain@").await[0]["locked"], false);
+    let actor: Option<Uuid> = sqlx::query_scalar(
+        "SELECT actor_id FROM auth_events WHERE user_id=$1 AND event='user_unlock' AND outcome='success'",
+    )
+    .bind(plain)
+    .fetch_one(&pool)
+    .await
+    .expect("audit");
+    assert_eq!(actor, Some(admin_id));
+    // The password step works again (an enrolled user now gets the MFA challenge).
+    let (status, _, _) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(
+        &pool,
+        "POST",
+        &format!("/api/v1/users/{}/unlock", Uuid::new_v4()),
+        Value::Null,
+        (&a.0, &a.1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp4b_non_admin_gets_403_on_mfa_reset_and_unlock(pool: PgPool) {
+    let (admin_id, plain) = fixture(&pool).await;
+    let (status, cookie, csrf) = login(&pool, "plain@example.test", ADMIN_PASSWORD).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let p = (cookie, csrf);
+    for (path, body) in [
+        (
+            format!("/api/v1/users/{admin_id}/mfa-reset"),
+            json!({"reason": "Uji sintetis"}),
+        ),
+        (format!("/api/v1/users/{admin_id}/unlock"), Value::Null),
+    ] {
+        // 403 comes before the step-up check: no hint that a step-up would help.
+        let (status, body) = call(&pool, "POST", &path, body, (&p.0, &p.1)).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(body["error"]["code"], "forbidden");
+    }
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT count(*) FROM auth_events WHERE actor_id=$1 AND event IN ('mfa_reset','user_unlock')",
+            plain
+        )
+        .await,
+        0
     );
 }

@@ -82,6 +82,10 @@ pub enum AppError {
     MfaChallengeExpired,
     #[error("mfa_enrollment_expired")]
     MfaEnrollmentExpired,
+    /// A-9: a sensitive action needs a second factor re-entered within the last 5 minutes
+    /// (POST /session/step-up). Nothing was changed.
+    #[error("step_up_required")]
+    StepUpRequired,
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -205,6 +209,11 @@ impl AppError {
                 StatusCode::GONE,
                 "mfa_enrollment_expired",
                 "Pendaftaran autentikator kedaluwarsa. Mulai ulang pendaftaran.",
+            ),
+            AppError::StepUpRequired => (
+                StatusCode::UNAUTHORIZED,
+                "step_up_required",
+                "Masukkan ulang kode autentikator untuk melanjutkan tindakan ini.",
             ),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
