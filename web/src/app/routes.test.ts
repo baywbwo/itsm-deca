@@ -39,13 +39,15 @@ describe('routes', () => {
     expect(allowedPages(['integration.recovery'], false).map((p) => p.id)).toEqual(['integrations']);
   });
 
-  it('CP3b: Pengguna only for a platform admin session, never from workspace permissions or UAT', () => {
+  it('CP3b/CP5c: Pengguna and Login SSO only for a platform admin session, never from workspace permissions or UAT', () => {
     const all = PAGES.flatMap((p) => p.anyOf);
     expect(allowedPages(all, true).map((p) => p.id)).not.toContain('users');
-    expect(allowedPages([], false, true).map((p) => p.id)).toEqual(['users']);
-    expect(allowedPages(['admin.settings'], false, true).map((p) => p.id)).toEqual(['settings', 'users']);
-    // All three sit in the Administrasi nav section.
-    expect(PAGES.filter((p) => p.admin).map((p) => p.id)).toEqual(['settings', 'integrations', 'users']);
+    expect(allowedPages(all, true).map((p) => p.id)).not.toContain('sso');
+    expect(allowedPages([], false, true).map((p) => p.id)).toEqual(['users', 'sso']);
+    expect(allowedPages(['admin.settings'], false, true).map((p) => p.id)).toEqual(['settings', 'users', 'sso']);
+    // All of them sit in the Administrasi nav section.
+    expect(PAGES.filter((p) => p.admin).map((p) => p.id)).toEqual(['settings', 'integrations', 'users', 'sso']);
+    expect(parseHash('#/w/abc/sso').page).toBe('sso');
     expect(parseHash('#/w/abc/users')).toEqual({ workspaceId: 'abc', page: 'users', query: '' });
   });
 
@@ -111,7 +113,7 @@ describe('CP-UI1 sidebar groups (owner prototype)', () => {
     expect(shape(navGroups(admin, route('dashboard'), true))).toEqual([
       ['Operasional', ['Dashboard', 'Tiket', 'Board', 'Tiket baru']],
       ['Analitik', ['Laporan']],
-      ['Administrasi', ['Pengaturan', 'Integrasi', 'Pengguna']],
+      ['Administrasi', ['Pengaturan', 'Integrasi', 'Pengguna', 'Login SSO']],
     ]);
   });
 

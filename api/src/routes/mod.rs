@@ -16,6 +16,7 @@ pub mod reports;
 pub mod saved_views;
 pub mod session;
 pub mod settings;
+pub mod sso_admin;
 pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
@@ -78,6 +79,23 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/users/{user_id}/unlock"),
     ("put", "/api/v1/users/{user_id}/company"),
     ("get", "/api/v1/platform/companies"),
+    ("get", "/api/v1/platform/sso"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso/secret"),
+    ("post", "/api/v1/platform/companies/{company_id}/sso/test"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso/enabled"),
+    (
+        "get",
+        "/api/v1/platform/companies/{company_id}/sso/identities",
+    ),
+    (
+        "post",
+        "/api/v1/platform/companies/{company_id}/sso/identities",
+    ),
+    (
+        "delete",
+        "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}",
+    ),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -318,6 +336,28 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/users/{user_id}/unlock", post(users::unlock))
         .route("/api/v1/users/{user_id}/company", put(users::set_company))
         .route("/api/v1/platform/companies", get(users::companies))
+        .route("/api/v1/platform/sso", get(sso_admin::overview))
+        .route("/api/v1/platform/companies/{company_id}/sso", put(sso_admin::save))
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/secret",
+            put(sso_admin::put_secret),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/test",
+            post(sso_admin::test),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/enabled",
+            put(sso_admin::set_enabled),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/identities",
+            get(sso_admin::identities).merge(post(sso_admin::link)),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}",
+            delete(sso_admin::unlink),
+        )
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

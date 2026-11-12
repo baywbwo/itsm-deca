@@ -745,6 +745,18 @@ impl Drop for SecretInput {
     }
 }
 
+impl SecretInput {
+    /// The value without surrounding blanks, refused when empty, longer than 4000 bytes or
+    /// holding control characters.
+    pub(crate) fn checked(&self) -> Result<&str, AppError> {
+        let value = self.0.trim();
+        if !(1..=4000).contains(&value.len()) || value.chars().any(char::is_control) {
+            return Err(AppError::Validation("secret"));
+        }
+        Ok(value)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CredentialBody {
@@ -779,10 +791,7 @@ pub async fn put_credential(
         .keyring
         .clone()
         .ok_or(AppError::KeyringMissing)?;
-    let value = b.secret.0.trim();
-    if !(1..=4000).contains(&value.len()) || value.chars().any(char::is_control) {
-        return Err(AppError::Validation("secret"));
-    }
+    let value = b.secret.checked()?;
     let ws = access.workspace_id;
     let mut tx = state.pool.begin().await?;
     let cur = lock(&mut tx, ws, id, b.version).await?;

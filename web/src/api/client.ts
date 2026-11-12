@@ -55,6 +55,12 @@ import {
   isUserList,
   isCompanyOptionList,
   isUserCompanySet,
+  isSsoOverview,
+  isSsoProviderResult,
+  isSsoTestResult,
+  isSsoIdentityList,
+  isSsoIdentityLinked,
+  isSsoIdentityUnlinked,
   isMfaStatus,
   isMfaEnrollment,
   isRecoveryCodes,
@@ -145,6 +151,13 @@ import type {
   CompanyOptionList,
   SetUserCompanyRequest,
   UserCompanySet,
+  SsoOverview,
+  SsoProviderResult,
+  SsoSettingsRequest,
+  SsoTestResult,
+  SsoIdentityList,
+  SsoIdentityLinked,
+  SsoIdentityUnlinked,
   MfaStatus,
   MfaEnrollment,
   RecoveryCodes,
@@ -383,6 +396,7 @@ export function createApi(transport: Transport) {
   const get = <T>(path: string, guard: Guard<T>, signal?: AbortSignal) =>
     call({ method: 'GET', path, headers: {}, signal }, guard);
   const ws = (id: string) => `/api/v1/workspaces/${encodeURIComponent(id)}`;
+  const sso = (companyId: string) => `/api/v1/platform/companies/${encodeURIComponent(companyId)}/sso`;
   const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
 
   return {
@@ -748,6 +762,27 @@ export function createApi(transport: Transport) {
       call({
         method: 'PUT', path: `/api/v1/users/${encodeURIComponent(userId)}/company`, headers: csrf(), body,
       }, isUserCompanySet),
+    /** CP5c: every company with its IdP and the server's SSO settings (platform_admin). */
+    getPlatformSso: (signal?: AbortSignal): Promise<SsoOverview> =>
+      get('/api/v1/platform/sso', isSsoOverview, signal),
+    /** CP5c: creates (version null, 201) or updates the company's IdP. A move needs a new test. */
+    saveCompanySso: (companyId: string, body: SsoSettingsRequest): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}`, headers: csrf(), body }, isSsoProviderResult, [200, 201]),
+    /** CP5c: write-only client secret (sealed on the server; never returned). */
+    setCompanySsoSecret: (companyId: string, secret: string, version: number): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}/secret`, headers: csrf(), body: { secret, version } }, isSsoProviderResult),
+    testCompanySso: (companyId: string, version: number): Promise<SsoTestResult> =>
+      call({ method: 'POST', path: `${sso(companyId)}/test`, headers: csrf(), body: { version } }, isSsoTestResult),
+    setCompanySsoEnabled: (companyId: string, enabled: boolean, version: number): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}/enabled`, headers: csrf(), body: { enabled, version } }, isSsoProviderResult),
+    listCompanySsoIdentities: (companyId: string, q: string, signal?: AbortSignal): Promise<SsoIdentityList> =>
+      get(`${sso(companyId)}/identities${withParam('', 'q', q.trim() || null)}`, isSsoIdentityList, signal),
+    linkCompanySsoIdentity: (companyId: string, userId: string, subject: string): Promise<SsoIdentityLinked> =>
+      call({ method: 'POST', path: `${sso(companyId)}/identities`, headers: csrf(), body: { userId, subject } }, isSsoIdentityLinked, 201),
+    unlinkCompanySsoIdentity: (companyId: string, identityId: string): Promise<SsoIdentityUnlinked> =>
+      call({
+        method: 'DELETE', path: `${sso(companyId)}/identities/${encodeURIComponent(identityId)}`, headers: csrf(),
+      }, isSsoIdentityUnlinked),
     /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
     getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
       get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),

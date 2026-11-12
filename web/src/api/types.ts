@@ -132,6 +132,18 @@ export type CompanyOption = S['CompanyOption'];
 export type CompanyOptionList = Body<'listPlatformCompanies', 200>;
 export type SetUserCompanyRequest = NonNullable<operations['setUserCompany']['requestBody']>['content']['application/json'];
 export type UserCompanySet = Body<'setUserCompany', 200>;
+// CP5c company SSO administration (password mode, platform_admin only).
+export type SsoProvider = S['SsoProvider'];
+export type SsoRoleMapping = S['SsoRoleMapping'];
+export type SsoCompany = S['SsoCompany'];
+export type SsoOverview = Body<'getPlatformSso', 200>;
+export type SsoProviderResult = S['SsoProviderResult'];
+export type SsoSettingsRequest = NonNullable<operations['saveCompanySso']['requestBody']>['content']['application/json'];
+export type SsoTestResult = Body<'testCompanySso', 200>;
+export type SsoIdentity = S['SsoIdentity'];
+export type SsoIdentityList = Body<'listCompanySsoIdentities', 200>;
+export type SsoIdentityLinked = Body<'linkCompanySsoIdentity', 201>;
+export type SsoIdentityUnlinked = Body<'unlinkCompanySsoIdentity', 200>;
 // CP4c (US-1.2) own MFA.
 export type MfaStatus = S['MfaStatus'];
 export type MfaEnrollment = S['MfaEnrollment'];

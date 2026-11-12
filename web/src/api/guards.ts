@@ -1,6 +1,15 @@
 // Runtime checks at the network boundary. The compile-time types are generated; these
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
+  SsoCompany,
+  SsoIdentity,
+  SsoIdentityLinked,
+  SsoIdentityList,
+  SsoIdentityUnlinked,
+  SsoOverview,
+  SsoProvider,
+  SsoProviderResult,
+  SsoTestResult,
   ActivityPage,
   AttachmentUploaded,
   ConversationPanel,
@@ -88,6 +97,8 @@ export function isMeta(v: unknown): v is Meta {
   if (v.environment !== 'uat' && v.environment !== 'production') return false;
   if (v.accessMode !== 'uat_superadmin' && v.accessMode !== 'sso' && v.accessMode !== 'password') return false;
   if (!isStrOrNull(v.banner)) return false;
+  // CP5c: absent from an older server = no SSO offered.
+  if (v.sso !== undefined && !isBool(v.sso)) return false;
   const uat = v.uat;
   if (uat === undefined || uat === null) return true;
   return (
@@ -515,3 +526,33 @@ export const isMfaEnrollment = (v: unknown): v is MfaEnrollment =>
 
 export const isRecoveryCodes = (v: unknown): v is RecoveryCodes =>
   isObj(v) && isArr(v.recoveryCodes, isStr) && (v.recoveryCodes as unknown[]).length === 10;
+
+// CP5c company SSO administration. The client secret never comes back (only secretSet).
+const isSsoMapping = (m: unknown) => isObj(m) && isStr(m.group) && (m.role === 'cs' || m.role === 'lead_cs');
+export const isSsoProvider = (v: unknown): v is SsoProvider =>
+  isObj(v) && isStr(v.id) && isStr(v.displayName) && isStr(v.issuer) && isStr(v.clientId) &&
+  isBool(v.secretSet) && isStrOrNull(v.secretUpdatedAt) && isArr(v.emailDomains, isStr) &&
+  isArr(v.extraHosts, isStr) && isStr(v.groupClaim) && isArr(v.roleMapping, isSsoMapping) &&
+  isBool(v.syncRoles) && isBool(v.enabled) && (v.lastTestOk === null || isBool(v.lastTestOk)) &&
+  isStrOrNull(v.lastTestedAt) && isNum(v.version) && !('secret' in v);
+const isSsoCompany = (v: unknown): v is SsoCompany =>
+  isObj(v) && isStr(v.companyId) && isStr(v.workspaceId) && isStr(v.code) && isStr(v.name) &&
+  isBool(v.active) && isNum(v.identities) && (v.provider === null || isSsoProvider(v.provider));
+export const isSsoOverview = (v: unknown): v is SsoOverview =>
+  isObj(v) && isArr(v.items, isSsoCompany) && isObj(v.server) &&
+  (v.server.auth === 'password' || v.server.auth === 'sso' || v.server.auth === 'both') &&
+  isStrOrNull(v.server.redirectUri) && isBool(v.server.keyring) && isBool(v.server.lab);
+export const isSsoProviderResult = (v: unknown): v is SsoProviderResult =>
+  isObj(v) && isSsoProvider(v.item) && isStr(v.auditEventId);
+export const isSsoTestResult = (v: unknown): v is SsoTestResult =>
+  isObj(v) && isSsoProvider(v.item) && isStr(v.auditEventId) && isObj(v.result) && isBool(v.result.ok) &&
+  isStrOrNull(v.result.stage) && isStrOrNull(v.result.code);
+const isSsoIdentity = (v: unknown): v is SsoIdentity =>
+  isObj(v) && isStr(v.id) && isStr(v.userId) && isStr(v.displayName) && isStrOrNull(v.email) &&
+  isBool(v.userActive) && isStr(v.subject) && isBool(v.provisioned) && isStr(v.createdAt) && isStrOrNull(v.lastLoginAt);
+export const isSsoIdentityList = (v: unknown): v is SsoIdentityList =>
+  isObj(v) && isArr(v.items, isSsoIdentity) && isNum(v.total);
+export const isSsoIdentityLinked = (v: unknown): v is SsoIdentityLinked =>
+  isObj(v) && isSsoIdentity(v.item) && isStr(v.auditEventId);
+export const isSsoIdentityUnlinked = (v: unknown): v is SsoIdentityUnlinked =>
+  isObj(v) && isStr(v.id) && isStr(v.auditEventId);

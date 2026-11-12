@@ -7,7 +7,8 @@ import { Icon, type IconName } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { Popover } from '../components/Popover';
 import { PlannedPage } from '../pages/PlannedPage';
-import { AccountMenu, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { AccountMenu, AwaitingAccessScreen, ChangePasswordScreen, LoginScreen, accountRole, type LoginNotice } from '../pages/AccountScreens';
+import { awaitingAccess, ssoLoginNotice, takeSsoResult } from './sso';
 import { MfaEnrolScreen, MfaReloginScreen, StepUpDialog } from '../pages/MfaScreens';
 import logoWhiteUrl from '../assets/qash-logo-white.png';
 import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
@@ -26,11 +27,17 @@ const SettingsPage = lazy(() => import('../pages/SettingsPage').then((m) => ({ d
 const ReportsPage = lazy(() => import('../pages/ReportsPage').then((m) => ({ default: m.ReportsPage })));
 const IntegrationsPage = lazy(() => import('../pages/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })));
 const UsersPage = lazy(() => import('../pages/UsersPage').then((m) => ({ default: m.UsersPage })));
+const SsoPage = lazy(() => import('../pages/SsoPage').then((m) => ({ default: m.SsoPage })));
+
+// Read at most once per page load (StrictMode may run state initialisers twice).
+let ssoResult: string | null | undefined;
+const firstSsoResult = () => (ssoResult === undefined ? (ssoResult = takeSsoResult()) : ssoResult);
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
   // Why the login is showing again (session ended, logged out everywhere); cleared on login.
-  const [notice, setNotice] = useState<LoginNotice | null>(null);
+  // CP5c: a failed SSO round trip comes back as `/?sso=<code>`; read once, then dropped from the URL.
+  const [notice, setNotice] = useState<LoginNotice | null>(() => ssoLoginNotice(firstSsoResult()));
   // Username typed at login in this tab, for the client-side "not the username" check only.
   const [username, setUsername] = useState<string | null>(null);
 
@@ -73,6 +80,9 @@ export function App({ api }: { api: Api }) {
     return <ChangePasswordScreen api={api} session={boot.session} username={username} onChanged={retry}
       onLogout={() => { void api.logout().finally(retry); }} />;
   }
+  if (awaitingAccess(boot.session, boot.workspaces)) {
+    return <AwaitingAccessScreen session={boot.session} onRetry={retry} onLogout={() => { void api.logout().finally(retry); }} />;
+  }
   return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry}
     username={username} onLoggedOutAll={loggedOutAll} />;
 }
@@ -89,7 +99,7 @@ function SideBrand() {
 
 const NAV_ICON: Record<NavItem['key'], IconName> = {
   dashboard: 'dashboard', tickets: 'tickets', board: 'board', new: 'plus', reports: 'reports',
-  settings: 'settings', integrations: 'integrations', users: 'users',
+  settings: 'settings', integrations: 'integrations', users: 'users', sso: 'lock',
 };
 
 function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, username, onLoggedOutAll }: {
@@ -447,6 +457,8 @@ function Page({ id, api, userId, mfaEnabled, data, query, uat, onNotice, onWorks
       return <IntegrationsPage api={api} workspace={data.workspace} onNotice={onNotice} />;
     case 'users':
       return <UsersPage api={api} userId={userId} mfaEnabled={mfaEnabled} onNotice={onNotice} onWorkspacesChanged={onWorkspacesChanged} />;
+    case 'sso':
+      return <SsoPage api={api} timezone={data.workspace.timezone} onNotice={onNotice} />;
     default:
       return <PlannedPage page={pageDef(id)} workspace={data.workspace} query={query} />;
   }

@@ -15,6 +15,8 @@ use crate::{AppState, UAT_BANNER, db};
 pub struct Meta {
     environment: &'static str,
     access_mode: &'static str,
+    /// CP5c: company sign-in through OIDC is offered (`ITSM_AUTH` sso|both in password mode).
+    sso: bool,
     banner: Option<&'static str>,
     /// Present only in UAT Superadmin mode; the FE shows it on every screen.
     uat: Option<UatNotice>,
@@ -49,6 +51,7 @@ pub async fn meta(State(state): State<AppState>) -> Json<Meta> {
             Environment::Production => "production",
         },
         access_mode: state.config.access_mode.as_str(),
+        sso: state.config.access_mode == AccessMode::Password && state.config.auth.methods.oidc(),
         banner: uat.then_some(UAT_BANNER),
         uat: uat.then(uat_notice),
     })

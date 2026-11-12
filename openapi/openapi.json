@@ -757,7 +757,10 @@
                   "integration_not_live",
                   "provider_error",
                   "integration_not_configured",
-                  "integration_mode_mismatch"
+                  "integration_mode_mismatch",
+                  "idp_not_ready",
+                  "subject_linked",
+                  "user_linked"
                 ]
               },
               "message": {
@@ -786,6 +789,7 @@
         "required": [
           "environment",
           "accessMode",
+          "sso",
           "banner"
         ],
         "properties": {
@@ -803,6 +807,10 @@
               "sso",
               "password"
             ]
+          },
+          "sso": {
+            "type": "boolean",
+            "description": "Company sign-in through OIDC is offered (ITSM_AUTH sso or both, password access mode). The login screen then shows \"Masuk dengan SSO\"."
           },
           "banner": {
             "type": [
@@ -6496,6 +6504,245 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "SsoProvider": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "issuer",
+          "clientId",
+          "secretSet",
+          "secretUpdatedAt",
+          "emailDomains",
+          "extraHosts",
+          "groupClaim",
+          "roleMapping",
+          "syncRoles",
+          "enabled",
+          "lastTestOk",
+          "lastTestedAt",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "secretSet": {
+            "type": "boolean",
+            "description": "A client secret is stored. The secret itself is never returned."
+          },
+          "secretUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "emailDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "extraHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "groupClaim": {
+            "type": "string"
+          },
+          "roleMapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SsoRoleMapping"
+            }
+          },
+          "syncRoles": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "lastTestOk": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Result of the last discovery test; null = not tested since the issuer, client id or hosts changed."
+          },
+          "lastTestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "SsoRoleMapping": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group",
+          "role"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          }
+        }
+      },
+      "SsoCompany": {
+        "type": "object",
+        "required": [
+          "companyId",
+          "workspaceId",
+          "code",
+          "name",
+          "active",
+          "identities",
+          "provider"
+        ],
+        "properties": {
+          "companyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "identities": {
+            "type": "integer",
+            "description": "Accounts linked to the company's IdP."
+          },
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SsoProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SsoProviderResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/SsoProvider"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SsoIdentity": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "displayName",
+          "email",
+          "userActive",
+          "subject",
+          "provisioned",
+          "createdAt",
+          "lastLoginAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userActive": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "provisioned": {
+            "type": "boolean",
+            "description": "Created by just-in-time provisioning (false = linked by an administrator)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SsoVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
           }
         }
       }
@@ -12685,6 +12932,690 @@
                       "items": {
                         "$ref": "#/components/schemas/CompanyOption"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/sso": {
+      "get": {
+        "operationId": "getPlatformSso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5c. Password mode, platform_admin only. Every company with its identity provider (null when none) and the server's SSO settings: ITSM_AUTH, the redirect URI to register at each IdP, whether the server keyring is present, and lab mode.",
+        "responses": {
+          "200": {
+            "description": "Companies and SSO settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "server"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SsoCompany"
+                      }
+                    },
+                    "server": {
+                      "type": "object",
+                      "required": [
+                        "auth",
+                        "redirectUri",
+                        "keyring",
+                        "lab"
+                      ],
+                      "properties": {
+                        "auth": {
+                          "type": "string",
+                          "enum": [
+                            "password",
+                            "sso",
+                            "both"
+                          ]
+                        },
+                        "redirectUri": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "keyring": {
+                          "type": "boolean"
+                        },
+                        "lab": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso": {
+      "put": {
+        "operationId": "saveCompanySso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Creates (no version, 201) or updates (version, 200) the company's identity provider. Changing the issuer, client id or extra hosts clears the test result and turns the IdP off (its sessions end): it must pass the discovery test again. The issuer is kept exactly as given (https, no port, query, fragment or user info; http and private addresses only in lab mode). Audited idp.create / idp.update. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "displayName",
+                  "issuer",
+                  "clientId",
+                  "groupClaim",
+                  "syncRoles"
+                ],
+                "properties": {
+                  "displayName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "issuer": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "emailDomains": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Domains whose verified addresses may be provisioned just in time."
+                  },
+                  "extraHosts": {
+                    "type": "array",
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Endpoint hosts allowed besides the issuer host (e.g. oauth2.googleapis.com)."
+                  },
+                  "groupClaim": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:/-]{1,100}$"
+                  },
+                  "roleMapping": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {
+                      "$ref": "#/components/schemas/SsoRoleMapping"
+                    }
+                  },
+                  "syncRoles": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/secret": {
+      "put": {
+        "operationId": "setCompanySsoSecret",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Stores or replaces the IdP client secret, sealed with the server keyring (write-only; never returned, logged or audited). Audited idp.secret.set. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "secret",
+                  "version"
+                ],
+                "properties": {
+                  "secret": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "writeOnly": true
+                  },
+                  "version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/test": {
+      "post": {
+        "operationId": "testCompanySso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Discovery test: fetches the discovery document and the key set through the egress guard (stale version = 409 before any request). A pass marks the IdP ready to enable. A failure on an IdP that is on is reported and audited but leaves it on; on an IdP that is off it is stored. Codes are stable (unreachable, timeout, refused, http_404, discovery_issuer, jwks, ...), never IdP text. Audited idp.test. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SsoVersion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "item",
+                    "result",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/SsoProvider"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "result": {
+                      "type": "object",
+                      "required": [
+                        "ok",
+                        "stage",
+                        "code"
+                      ],
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "stage": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "policy",
+                            "discovery",
+                            "jwks",
+                            null
+                          ]
+                        },
+                        "code": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/enabled": {
+      "put": {
+        "operationId": "setCompanySsoEnabled",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Turns company sign-in through the IdP on or off. On needs a stored secret and a passing test (409 idp_not_ready) and the server keyring (503). Off ends every session made through the IdP. No change = 422 rule_violation. Audited idp.enable / idp.disable. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "enabled",
+                  "version"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/identities": {
+      "get": {
+        "operationId": "listCompanySsoIdentities",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "description": "Filter on name, e-mail or subject."
+          }
+        ],
+        "description": "CP5c. Password mode, platform_admin only. Accounts linked to the company's IdP (at most 100, by name; total counts every match). 404 when the company has no IdP.",
+        "responses": {
+          "200": {
+            "description": "Linked accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "total"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SsoIdentity"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "linkCompanySsoIdentity",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Links an existing active account to an IdP subject (the sub claim), for accounts that cannot be provisioned by verified address (e.g. Entra ID). The account must not work in another company. 409 user_inactive, user_in_other_company, subject_linked or user_linked; 422 userId (unknown) or subject. Audited identity.link and auth event identity_link. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "userId",
+                  "subject"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "item",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/SsoIdentity"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}": {
+      "delete": {
+        "operationId": "unlinkCompanySsoIdentity",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          },
+          {
+            "name": "identity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "CP5c. Removes a link. The account and its memberships stay; its sessions through this IdP end. Audited identity.unlink and auth event identity_unlink. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "responses": {
+          "200": {
+            "description": "Unlinked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
                     }
                   }
                 }

@@ -1565,6 +1565,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/platform/sso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description CP5c. Password mode, platform_admin only. Every company with its identity provider (null when none) and the server's SSO settings: ITSM_AUTH, the redirect URI to register at each IdP, whether the server keyring is present, and lab mode. */
+        get: operations["getPlatformSso"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description CP5c. Creates (no version, 201) or updates (version, 200) the company's identity provider. Changing the issuer, client id or extra hosts clears the test result and turns the IdP off (its sessions end): it must pass the discovery test again. The issuer is kept exactly as given (https, no port, query, fragment or user info; http and private addresses only in lab mode). Audited idp.create / idp.update. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        put: operations["saveCompanySso"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso/secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description CP5c. Stores or replaces the IdP client secret, sealed with the server keyring (write-only; never returned, logged or audited). Audited idp.secret.set. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        put: operations["setCompanySsoSecret"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description CP5c. Discovery test: fetches the discovery document and the key set through the egress guard (stale version = 409 before any request). A pass marks the IdP ready to enable. A failure on an IdP that is on is reported and audited but leaves it on; on an IdP that is off it is stored. Codes are stable (unreachable, timeout, refused, http_404, discovery_issuer, jwks, ...), never IdP text. Audited idp.test. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        post: operations["testCompanySso"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description CP5c. Turns company sign-in through the IdP on or off. On needs a stored secret and a passing test (409 idp_not_ready) and the server keyring (503). Off ends every session made through the IdP. No change = 422 rule_violation. Audited idp.enable / idp.disable. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        put: operations["setCompanySsoEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso/identities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description CP5c. Password mode, platform_admin only. Accounts linked to the company's IdP (at most 100, by name; total counts every match). 404 when the company has no IdP. */
+        get: operations["listCompanySsoIdentities"];
+        put?: never;
+        /** @description CP5c. Links an existing active account to an IdP subject (the sub claim), for accounts that cannot be provisioned by verified address (e.g. Entra ID). The account must not work in another company. 409 user_inactive, user_in_other_company, subject_linked or user_linked; 422 userId (unknown) or subject. Audited identity.link and auth event identity_link. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        post: operations["linkCompanySsoIdentity"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description CP5c. Removes a link. The account and its memberships stay; its sessions through this IdP end. Audited identity.unlink and auth event identity_unlink. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check). */
+        delete: operations["unlinkCompanySsoIdentity"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1707,7 +1827,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company" | "keyring_missing" | "integration_not_live" | "provider_error" | "integration_not_configured" | "integration_mode_mismatch";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company" | "keyring_missing" | "integration_not_live" | "provider_error" | "integration_not_configured" | "integration_mode_mismatch" | "idp_not_ready" | "subject_linked" | "user_linked";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -1725,6 +1845,8 @@ export interface components {
             environment: "uat" | "production";
             /** @enum {string} */
             accessMode: "uat_superadmin" | "sso" | "password";
+            /** @description Company sign-in through OIDC is offered (ITSM_AUTH sso or both, password access mode). The login screen then shows "Masuk dengan SSO". */
+            sso: boolean;
             /** @example Mode uji — Superadmin */
             banner: string | null;
             /** @description Present only in UAT Superadmin mode; null/absent otherwise. */
@@ -3260,6 +3382,69 @@ export interface components {
             workspaceId: string;
             code: string;
             name: string;
+        };
+        SsoProvider: {
+            /** Format: uuid */
+            id: string;
+            displayName: string;
+            issuer: string;
+            clientId: string;
+            /** @description A client secret is stored. The secret itself is never returned. */
+            secretSet: boolean;
+            /** Format: date-time */
+            secretUpdatedAt: string | null;
+            emailDomains: string[];
+            extraHosts: string[];
+            groupClaim: string;
+            roleMapping: components["schemas"]["SsoRoleMapping"][];
+            syncRoles: boolean;
+            enabled: boolean;
+            /** @description Result of the last discovery test; null = not tested since the issuer, client id or hosts changed. */
+            lastTestOk: boolean | null;
+            /** Format: date-time */
+            lastTestedAt: string | null;
+            version: number;
+        };
+        SsoRoleMapping: {
+            group: string;
+            /** @enum {string} */
+            role: "cs" | "lead_cs";
+        };
+        SsoCompany: {
+            /** Format: uuid */
+            companyId: string;
+            /** Format: uuid */
+            workspaceId: string;
+            code: string;
+            name: string;
+            active: boolean;
+            /** @description Accounts linked to the company's IdP. */
+            identities: number;
+            provider: components["schemas"]["SsoProvider"] | null;
+        };
+        SsoProviderResult: {
+            item: components["schemas"]["SsoProvider"];
+            /** Format: uuid */
+            auditEventId: string;
+        };
+        SsoIdentity: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            userId: string;
+            displayName: string;
+            email: string | null;
+            userActive: boolean;
+            subject: string;
+            /** @description Created by just-in-time provisioning (false = linked by an administrator). */
+            provisioned: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            lastLoginAt: string | null;
+        };
+        SsoVersion: {
+            version: number;
         };
     };
     responses: {
@@ -6970,6 +7155,317 @@ export interface operations {
                 content: {
                     "application/json": {
                         items: components["schemas"]["CompanyOption"][];
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getPlatformSso: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Companies and SSO settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["SsoCompany"][];
+                        server: {
+                            /** @enum {string} */
+                            auth: "password" | "sso" | "both";
+                            redirectUri: string | null;
+                            keyring: boolean;
+                            lab: boolean;
+                        };
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    saveCompanySso: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    displayName: string;
+                    issuer: string;
+                    clientId: string;
+                    /** @description Domains whose verified addresses may be provisioned just in time. */
+                    emailDomains?: string[];
+                    /** @description Endpoint hosts allowed besides the issuer host (e.g. oauth2.googleapis.com). */
+                    extraHosts?: string[];
+                    groupClaim: string;
+                    roleMapping?: components["schemas"]["SsoRoleMapping"][];
+                    syncRoles: boolean;
+                    version?: number | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SsoProviderResult"];
+                };
+            };
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SsoProviderResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    setCompanySsoSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    secret: string;
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Stored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SsoProviderResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    testCompanySso: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SsoVersion"];
+            };
+        };
+        responses: {
+            /** @description Tested */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        item: components["schemas"]["SsoProvider"];
+                        /** Format: uuid */
+                        auditEventId: string;
+                        result: {
+                            ok: boolean;
+                            /** @enum {string|null} */
+                            stage: "policy" | "discovery" | "jwks" | null;
+                            code: string | null;
+                        };
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    setCompanySsoEnabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    enabled: boolean;
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SsoProviderResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    listCompanySsoIdentities: {
+        parameters: {
+            query?: {
+                /** @description Filter on name, e-mail or subject. */
+                q?: string;
+            };
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Linked accounts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["SsoIdentity"][];
+                        total: number;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    linkCompanySsoIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    userId: string;
+                    subject: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Linked */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        item: components["schemas"]["SsoIdentity"];
+                        /** Format: uuid */
+                        auditEventId: string;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    unlinkCompanySsoIdentity: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                company_id: components["parameters"]["CompanyId"];
+                identity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                        /** Format: uuid */
+                        auditEventId: string;
                     };
                 };
             };
