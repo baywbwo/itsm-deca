@@ -225,6 +225,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session/logout-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.6. Revokes every session of the caller (revoked_reason logout_all), including this one, records auth event logout_all and clears the cookie. Requires the CSRF token. */
+        post: operations["logoutAllSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/account/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.4. Password mode only. Changes the caller's own password: new password at least 12 characters, not the username, not the current password. Raises credential_version, revokes the caller's other sessions (password_change) and keeps this one; clears must_change_password. While must_change_password is set, every other route except session, CSRF refresh, logout-all and meta answers 403 forbidden. Requires the CSRF token. Failures are audited without secrets. */
+        post: operations["changeOwnPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.3. Password mode, platform_admin grant only (403 forbidden otherwise, platform denied audit). Creates a local user with a one-time temporary password (CSPRNG, 24 characters) and must_change_password=true. Username is unique case-insensitively; email optional and unique. Requires the CSRF token. Audited as user_create without secrets. */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** @description US-1.7. Password mode, platform_admin only. Currently only {"active": false}: sets deactivated_at, revokes every session of the user (admin_revoke), keeps history; anything else is 422. 409 user_inactive when already inactive, 409 last_admin when it would deactivate the last active platform_admin. Requires the CSRF token. Audited as user_deactivate. */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/users/{user_id}/password-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description US-1.5. Password mode, platform_admin only. Issues a new one-time temporary password: must_change_password=true, credential_version raised, lockout cleared, every session of the user revoked (admin_revoke). 409 user_inactive for a deactivated user. Requires the CSRF token. Audited as password_reset_issue without secrets. */
+        post: operations["resetUserPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/workspaces": {
         parameters: {
             query?: never;
@@ -1213,6 +1298,8 @@ export interface components {
             user: components["schemas"]["User"];
             banner: string | null;
             uatSuperadmin: boolean;
+            /** @description US-1.4: true while the user must change the password; every route except the account and session paths answers 403 until then. */
+            mustChangePassword: boolean;
         };
         SessionIssued: components["schemas"]["Session"] & {
             /** @description Returned once; keep in memory only. */
@@ -3235,6 +3322,197 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    logoutAllSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All sessions revoked; cookie cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    changeOwnPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    currentPassword: string;
+                    newPassword: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Password changed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["CsrfFailed"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    username: string;
+                    displayName: string;
+                    email?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description User created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        user: {
+                            /** Format: uuid */
+                            id: string;
+                            username: string;
+                            displayName: string;
+                            email?: string | null;
+                            active: boolean;
+                            mustChangePassword: boolean;
+                        };
+                        /** @description Shown once; never stored in clear */
+                        temporaryPassword: string;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description username_taken or email_taken */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @constant */
+                    active: false;
+                };
+            };
+        };
+        responses: {
+            /** @description User deactivated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        id: string;
+                        active: boolean;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description user_inactive or last_admin */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            422: components["responses"]["ValidationFailed"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Temporary password issued */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Shown once; never stored in clear */
+                        temporaryPassword: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description user_inactive */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };

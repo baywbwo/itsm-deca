@@ -611,9 +611,10 @@ async fn us_1_4_must_change_password_blocks_other_routes_until_changed(pool: PgP
         false,
         Some(&cookie),
     )
-    .await
-    .0;
-    assert_eq!(current, StatusCode::OK, "session read stays allowed");
+    .await;
+    assert_eq!(current.0, StatusCode::OK, "session read stays allowed");
+    // CP3a: a reloaded tab learns the flag from the session read, not only from the login.
+    assert_eq!(current.1["mustChangePassword"], true);
     let (s, _) = call(
         &pool,
         "/api/v1/account/password",
@@ -624,6 +625,17 @@ async fn us_1_4_must_change_password_blocks_other_routes_until_changed(pool: PgP
     .await;
     assert_eq!(s, StatusCode::NO_CONTENT);
     assert_eq!(workspaces(&pool, &cookie).await, StatusCode::OK);
+    let after = request(
+        &pool,
+        "password",
+        "/api/v1/session",
+        "GET",
+        Value::Null,
+        false,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(after.1["mustChangePassword"], false);
     let flag: bool = sqlx::query_scalar("SELECT must_change_password FROM local_credentials")
         .fetch_one(&pool)
         .await

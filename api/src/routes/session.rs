@@ -60,6 +60,8 @@ pub struct SessionView {
     user: UserView,
     banner: Option<&'static str>,
     uat_superadmin: bool,
+    /// US-1.4: the client shows only the change-password screen until this is false.
+    must_change_password: bool,
 }
 
 #[derive(Serialize)]
@@ -110,6 +112,7 @@ pub async fn uat_enter(State(state): State<AppState>) -> Result<Response, AppErr
             },
             banner: Some(UAT_BANNER),
             uat_superadmin: true,
+            must_change_password: false,
         },
         csrf_token: issued.csrf_token,
     };
@@ -139,6 +142,7 @@ pub async fn current(
         },
         banner: (state.config.access_mode == AccessMode::UatSuperadmin).then_some(UAT_BANNER),
         uat_superadmin: s.uat_superadmin,
+        must_change_password: s.must_change_password,
     }))
 }
 

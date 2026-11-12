@@ -82,7 +82,10 @@ export function isMeta(v: unknown): v is Meta {
 export function isSession(v: unknown): v is Session {
   return (
     isObj(v) && isObj(v.user) && isStr(v.user.id) && isStr(v.user.displayName) &&
-    isStrOrNull(v.banner) && typeof v.uatSuperadmin === 'boolean'
+    isStrOrNull(v.banner) && typeof v.uatSuperadmin === 'boolean' &&
+    // US-1.4. Absent in responses recorded before CP3a (review package): read as false; the
+    // server still refuses every other route while the password must be changed.
+    (v.mustChangePassword === undefined || typeof v.mustChangePassword === 'boolean')
   );
 }
 

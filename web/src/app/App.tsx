@@ -1,5 +1,4 @@
 import { Fragment, Component, Suspense, lazy, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import logoUrl from '../assets/logo-qash.svg';
 import { ApiError, type Api } from '../api/client';
 import type { Meta, Session, Workspace } from '../api/types';
 import { Button } from '../components/Button';
@@ -8,6 +7,8 @@ import { SelectField } from '../components/Field';
 import { Icon } from '../components/Icon';
 import { ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
 import { PlannedPage } from '../pages/PlannedPage';
+import { AccountMenu, ChangePasswordScreen, LoginScreen, ModePicker, type LoginNotice } from '../pages/AccountScreens';
+import { LOGGED_OUT_ALL_TEXT, SESSION_ENDED_TEXT, SESSION_ENDED_TITLE } from './account';
 import { drafts } from './drafts';
 import { navigate, resolvePendingNav, setNavGuard, useBoot, useHashRoute, usePendingNav, useScope, type ScopeData } from './hooks';
 import { initials, roleLabel } from './labels';
@@ -25,6 +26,24 @@ const IntegrationsPage = lazy(() => import('../pages/IntegrationsPage').then((m)
 
 export function App({ api }: { api: Api }) {
   const { boot, retry } = useBoot(api);
+  // Why the login is showing again (session ended, logged out everywhere); cleared on login.
+  const [notice, setNotice] = useState<LoginNotice | null>(null);
+  // Username typed at login in this tab, for the client-side "not the username" check only.
+  const [username, setUsername] = useState<string | null>(null);
+
+  // CP3a: a 401 in the middle of work (idle/absolute limit, revoked elsewhere) reloads the
+  // session, which lands on the login with the reason. In-memory drafts stay for the same user.
+  useEffect(() => api.onSessionEnded(() => {
+    setNotice({ title: SESSION_ENDED_TITLE, text: SESSION_ENDED_TEXT });
+    retry();
+  }), [api, retry]);
+
+  const loggedIn = useCallback((name: string) => { setNotice(null); setUsername(name); retry(); }, [retry]);
+  const loggedOutAll = useCallback(() => {
+    drafts.clear();
+    setNotice({ title: 'Keluar dari semua perangkat', text: LOGGED_OUT_ALL_TEXT });
+    retry();
+  }, [retry]);
 
   if (boot.status === 'loading') {
     return <main className="main"><LoadingState label="Menyiapkan sesi…" /></main>;
@@ -38,36 +57,14 @@ export function App({ api }: { api: Api }) {
     );
   }
   if (boot.status === 'no_access') {
-    return <PasswordLogin api={api} meta={boot.meta} onSuccess={retry} />;
+    return <LoginScreen api={api} meta={boot.meta} notice={notice} onSuccess={loggedIn} />;
   }
-  return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry} />;
-}
-
-const MODE_LINKS = { sandbox: 'https://sandbox-itsm.scowork.my.id:8443/', operational: 'https://itsm.scowork.my.id:8443/' };
-function ModePicker({ sandbox }: { sandbox: boolean }) {
-  return <div className="deployment-picker"><label htmlFor="deployment-mode">Lingkungan</label>
-    <select id="deployment-mode" value={sandbox ? 'sandbox' : 'operational'} onChange={e => { window.location.href = MODE_LINKS[e.target.value as keyof typeof MODE_LINKS]; }}>
-      <option value="operational">Operasional · data kerja</option><option value="sandbox">Sandbox · data latihan</option>
-    </select><small>{sandbox ? 'Data latihan terpisah dari operasional.' : 'Database operasional terpisah dari sandbox.'}</small></div>;
-}
-function PasswordLogin({ api, meta, onSuccess }: { api: Api; meta: Meta; onSuccess: () => void }) {
-  const [username, U] = useState(''), [password, P] = useState(''), [busy, B] = useState(false), [error, E] = useState('');
-  async function login(e: React.FormEvent) {
-    e.preventDefault(); if (busy) return; B(true); E('');
-    try { await api.login(username, password); P(''); onSuccess(); }
-    catch { P(''); E('Tidak dapat masuk. Periksa akun dan password, atau coba kembali setelah beberapa saat.'); }
-    finally { B(false); }
+  if (boot.status === 'must_change') {
+    return <ChangePasswordScreen api={api} session={boot.session} username={username} onChanged={retry}
+      onLogout={() => { void api.logout().finally(retry); }} />;
   }
-  return <main className="password-login"><section className="login-card"><img className="brand-logo" src={logoUrl} alt="Qash" />
-    <p className="eyebrow">DECA SERVICE DESK</p><h1>Masuk ke ruang kerja</h1><p className="muted">Kelola layanan dan pengaduan perusahaan Anda.</p>
-    <ModePicker sandbox={meta.environment === 'uat'} />
-    {meta.accessMode === 'password' ? <form onSubmit={e => void login(e)}>
-      <label htmlFor="login-username">Email / username</label><input id="login-username" className="field-control" autoComplete="username" required maxLength={254} value={username} onChange={e => U(e.target.value)} disabled={busy} />
-      <label htmlFor="login-password">Password</label><input id="login-password" className="field-control" type="password" autoComplete="current-password" required maxLength={1024} value={password} onChange={e => P(e.target.value)} disabled={busy} />
-      {error && <p role="alert" className="field-error">{error}</p>}<Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Masuk'}</Button>
-    </form> : <p>Akses SSO belum dikonfigurasi.</p>}
-    <p className="tiny muted">{meta.environment === 'uat' ? 'Sandbox — gunakan data latihan saja.' : 'Operasional — akses sesuai perusahaan dan peran.'}</p>
-  </section></main>;
+  return <Shell api={api} meta={boot.meta} session={boot.session} workspaces={boot.workspaces} onReenter={retry}
+    onLoggedOutAll={loggedOutAll} />;
 }
 
 /** Logo of the active company's preset, or a neutral text mark when none is configured. */
@@ -92,12 +89,13 @@ function BrandBlock({ brand }: { brand: ActiveBrand }) {
   );
 }
 
-function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
+function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter, onLoggedOutAll }: {
   api: Api;
   meta: Meta;
   session: Session;
   workspaces: Workspace[];
   onReenter: () => void;
+  onLoggedOutAll: () => void;
 }) {
   const route = useHashRoute();
   const [attempt, setAttempt] = useState(0);
@@ -258,8 +256,8 @@ function Shell({ api, meta, session, workspaces: bootWorkspaces, onReenter }: {
                   workspaceId: route.workspaceId!, page: 'tickets', query: new URLSearchParams({ q }).toString(),
                 }))} />
               )}
-              <span className="avatar top-avatar" role="img" aria-label={`Profil: ${session.user.displayName}`}
-                title={session.user.displayName}>{initials(session.user.displayName)}</span>
+              <AccountMenu api={api} session={session} passwordMode={meta.accessMode === 'password'}
+                onLoggedOutAll={onLoggedOutAll} />
             </div>
           </div>
           <div className="content">

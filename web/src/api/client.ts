@@ -171,6 +171,18 @@ export function sessionReloadText(requestId: string | null): string {
   return `Token keamanan sesi di tab ini tidak dapat diperbarui otomatis. Permintaan belum diproses dan isian Anda tetap di sini. Muat ulang halaman (salin isian dulu bila perlu), lalu kirim lagi.${rid}`;
 }
 
+/**
+ * CP3a login copy. A wrong password, an unknown, locked or deactivated account all answer 401 and
+ * read the same, so the screen never tells which one it was. 429 says when to try again.
+ */
+export function loginErrorText(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 429) return rateLimitText(e);
+    if (e.code === 'network') return 'Server tidak dapat dihubungi. Periksa koneksi lalu coba lagi.';
+  }
+  return 'Tidak dapat masuk. Periksa nama pengguna dan kata sandi, atau coba lagi setelah beberapa saat.';
+}
+
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
 
 /** Same-origin fetch; the session cookie is HttpOnly and never touched by script. */
@@ -232,6 +244,19 @@ export function createApi(transport: Transport) {
   // A 429 is returned to the caller as is: never re-sent here (a person decides when to retry).
   let csrfToken: string | null = null;
   let refreshing: Promise<string> | null = null;
+  // CP3a: a 401 on any request after a session was established means the session ended on the
+  // server (idle/absolute limit, revoked elsewhere). Listeners return the person to the login.
+  let sessionActive = false;
+  const endedListeners = new Set<() => void>();
+  function sessionEnded() {
+    if (!sessionActive) return;
+    sessionActive = false;
+    csrfToken = null;
+    endedListeners.forEach((fn) => fn());
+  }
+  const toSession = (v: Session): Session => ({
+    user: v.user, banner: v.banner, uatSuperadmin: v.uatSuperadmin, mustChangePassword: v.mustChangePassword === true,
+  });
 
   const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);
 
@@ -242,6 +267,7 @@ export function createApi(transport: Transport) {
         method: 'POST', path: '/api/v1/session/csrf', headers: { 'X-ITSM-CSRF-Refresh': '1' },
         signal: AbortSignal.timeout(10_000),
       });
+      if (res.status === 401) sessionEnded();
       if (res.status !== 200 || !isCsrfIssued(res.body)) {
         const wait = isErrorBody(res.body) ? (res.body.error as { retryAfterSeconds?: unknown }).retryAfterSeconds : null;
         throw isErrorBody(res.body)
@@ -265,6 +291,7 @@ export function createApi(transport: Transport) {
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
     const res = await send(req);
+    if (res.status === 401) sessionEnded();
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
@@ -292,15 +319,41 @@ export function createApi(transport: Transport) {
     async login(username: string, password: string): Promise<Session> {
       const issued = await call({ method: 'POST', path: '/api/v1/login', headers: { 'X-ITSM-Login': '1' }, body: { username, password } }, isSessionIssued, 201);
       csrfToken = issued.csrfToken;
-      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+      sessionActive = true;
+      return toSession(issued);
     },
     async logout(): Promise<void> {
+      sessionActive = false;
       await call({ method: 'DELETE', path: '/api/v1/session', headers: csrf() }, isEmpty, 204);
       csrfToken = null;
     },
+    /** US-1.6: ends every session of this user, this one included (the cookie is cleared). */
+    async logoutAll(): Promise<void> {
+      await call({ method: 'POST', path: '/api/v1/session/logout-all', headers: csrf() }, isEmpty, 204);
+      sessionActive = false;
+      csrfToken = null;
+    },
+    /**
+     * US-1.4: own password. 204 keeps this session (other sessions are revoked by the server);
+     * 422 names the field to fix in `ApiError.field` (currentPassword | newPassword).
+     */
+    changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+      await call({
+        method: 'POST', path: '/api/v1/account/password', headers: csrf(), body: { currentPassword, newPassword },
+      }, isEmpty, 204);
+    },
+    /** Called once each time an established session ends with a 401; returns the unsubscribe. */
+    onSessionEnded(fn: () => void): () => void {
+      endedListeners.add(fn);
+      return () => { endedListeners.delete(fn); };
+    },
     hasCsrf: () => csrfToken !== null,
     getMeta: (signal?: AbortSignal): Promise<Meta> => get('/api/v1/meta', isMeta, signal),
-    getSession: (signal?: AbortSignal): Promise<Session> => get('/api/v1/session', isSession, signal),
+    async getSession(signal?: AbortSignal): Promise<Session> {
+      const s = toSession(await get('/api/v1/session', isSession, signal));
+      sessionActive = true;
+      return s;
+    },
     /** Direct UAT Superadmin entry; the server refuses it outside UAT on a marked dummy DB. */
     async enterUat(signal?: AbortSignal): Promise<Session> {
       const issued = await call(
@@ -309,7 +362,8 @@ export function createApi(transport: Transport) {
         201,
       );
       csrfToken = issued.csrfToken;
-      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+      sessionActive = true;
+      return toSession(issued);
     },
     listWorkspaces: async (signal?: AbortSignal): Promise<Workspace[]> =>
       (await get('/api/v1/workspaces', isWorkspaceList, signal)).items,

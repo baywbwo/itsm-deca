@@ -823,7 +823,8 @@
         "required": [
           "user",
           "banner",
-          "uatSuperadmin"
+          "uatSuperadmin",
+          "mustChangePassword"
         ],
         "properties": {
           "user": {
@@ -837,6 +838,10 @@
           },
           "uatSuperadmin": {
             "type": "boolean"
+          },
+          "mustChangePassword": {
+            "type": "boolean",
+            "description": "US-1.4: true while the user must change the password; every route except the account and session paths answers 403 until then."
           }
         }
       },
