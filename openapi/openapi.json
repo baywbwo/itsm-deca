@@ -3,7 +3,7 @@
   "info": {
     "title": "ITSM API",
     "version": "0.12.0-d10",
-    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden; each such 403 to a member leaves one append-only audit_events row (action access.denied, outcome denied, safe projection: permission, method, route template; no IDs, query or body). 404, 401 and CSRF refusals write no row. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease \u2192 unknown). + D10 operational company reports (O06/C21/C22): server preview over the whole scope (Jakarta-day period, received/resolved basis, status + PIC/kanal/kategori/prioritas filters, unique tickets vs resolution cycles kept apart) and an idempotent, audited CSV export with scoped download, SHA-256, expiry and formula-injection neutralization. Official BI/regulator report stays held (422 regulator_mapping_unavailable); the export is labelled non-regulator."
+    "description": "D02a foundation + D02 domain read contract + D03 permission foundation + D05 dashboard aggregates + D06 ticket List/Board (filters, keyset cursor, whole-scope counts) and status/PIC mutations + C32 private saved views. Every operation is authorised server-side, default deny: a workspace the caller cannot see answers 404, a visible workspace without the needed permission answers 403 forbidden; each such 403 to a member leaves one append-only audit_events row (action access.denied, outcome denied, safe projection: permission, method, route template; no IDs, query or body). 404, 401 and CSRF refusals write no row. Business permissions come from the role (cs, lead_cs); administration and integration rights come only from explicit workspace grants. Permission endpoints are UI metadata, never a source of access. Domain-rule refusals answer 422 rule_violation with a generic message; optimistic-lock conflicts answer 409 version_conflict. Source of truth for BE/FE; TS types are generated from this file. UAT only: direct Superadmin entry on a marked dummy database. Production and SSO are not available. D07: idempotent ticket intake (O05), PIC history, Jira/Lark SIMULATION outbox with permissioned retry/reconcile. + D08c saved-view List columns (allowlist, persisted per user+workspace) and the simulated outbox worker (claim lease, bounded transient retry with backoff, expired lease → unknown). + D10 operational company reports (O06/C21/C22): server preview over the whole scope (Jakarta-day period, received/resolved basis, status + PIC/kanal/kategori/prioritas filters, unique tickets vs resolution cycles kept apart) and an idempotent, audited CSV export with scoped download, SHA-256, expiry and formula-injection neutralization. Official BI/regulator report stays held (422 regulator_mapping_unavailable); the export is labelled non-regulator."
   },
   "servers": [
     {
@@ -786,7 +786,7 @@
               "null"
             ],
             "examples": [
-              "Mode uji \u2014 Superadmin"
+              "Mode uji — Superadmin"
             ]
           },
           "uat": {
@@ -1444,7 +1444,7 @@
           "banner": {
             "type": "string",
             "examples": [
-              "Mode uji \u2014 Superadmin"
+              "Mode uji — Superadmin"
             ]
           },
           "persistent": {
@@ -4659,7 +4659,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200,
-            "description": "Exact account subject; unknown \u2192 422 (no enumeration)."
+            "description": "Exact account subject; unknown → 422 (no enumeration)."
           },
           "role": {
             "type": "string",
@@ -5622,6 +5622,273 @@
             "writeOnly": true
           }
         }
+      },
+      "AiProviderView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "state",
+          "version",
+          "secret",
+          "keyPresent"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keyEnv": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keyPresent": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "testedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastTestNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          },
+          "secret": {
+            "type": "string",
+            "enum": [
+              "env_only"
+            ]
+          }
+        }
+      },
+      "McpServerView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "transport",
+          "enabled",
+          "version",
+          "authPresent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http",
+              "stdio"
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authEnv": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authPresent": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "testedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastTestNote": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "AiSettingsView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "providers",
+          "mcpServers",
+          "notes"
+        ],
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiProviderView"
+            }
+          },
+          "mcpServers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/McpServerView"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AiProviderInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "keyEnv": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        }
+      },
+      "McpServerInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "transport"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "http",
+              "stdio"
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authEnv": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "McpServerPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authEnv": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
       }
     },
     "responses": {
@@ -6101,7 +6368,7 @@
             "name": "resolvedFrom",
             "in": "query",
             "required": false,
-            "description": "RFC 3339, inclusive: tickets with \u22651 resolve event at or after this instant (each ticket once).",
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
             "schema": {
               "type": "string"
             }
@@ -6139,7 +6406,7 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "Page size 1\u2013100.",
+            "description": "Page size 1–100.",
             "schema": {
               "type": "integer",
               "minimum": 1,
@@ -6188,7 +6455,7 @@
       "post": {
         "operationId": "createTicket",
         "summary": "Create one ticket (O05 intake), idempotently",
-        "description": "Ticket, related work, outbox intents and the ticket.create audit are written in one transaction. Simulated Jira/Lark delivery runs after commit (\u22642 s) and never undoes the ticket; intents report pending/success/failed/unknown honestly.",
+        "description": "Ticket, related work, outbox intents and the ticket.create audit are written in one transaction. Simulated Jira/Lark delivery runs after commit (≤2 s) and never undoes the ticket; intents report pending/success/failed/unknown honestly.",
         "security": [
           {
             "sessionCookie": [],
@@ -6348,7 +6615,7 @@
             "name": "resolvedFrom",
             "in": "query",
             "required": false,
-            "description": "RFC 3339, inclusive: tickets with \u22651 resolve event at or after this instant (each ticket once).",
+            "description": "RFC 3339, inclusive: tickets with ≥1 resolve event at or after this instant (each ticket once).",
             "schema": {
               "type": "string"
             }
@@ -6386,7 +6653,7 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "Items per column 1\u201350.",
+            "description": "Items per column 1–50.",
             "schema": {
               "type": "integer",
               "minimum": 1,
@@ -8141,7 +8408,7 @@
     "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/attachments": {
       "post": {
         "operationId": "uploadTicketAttachment",
-        "summary": "Upload an attachment: quarantine \u2192 scan \u2192 bind (D08b)",
+        "summary": "Upload an attachment: quarantine → scan → bind (D08b)",
         "description": "attachment.upload. Raw file body (any Content-Type; the server sniffs PDF/PNG/JPEG). File name in X-File-Name, percent-encoded UTF-8. Bound to the ticket only after an explicit clean clamd verdict; infected/scan error/scanner unavailable are recorded, audited as failed, the bytes deleted, and nothing is bound. Closed ticket = 422.",
         "security": [
           {
@@ -8648,7 +8915,7 @@
       },
       "post": {
         "operationId": "createCatalogEntry",
-        "summary": "Add catalog entry (admin.settings; priorities fixed \u2192 422)",
+        "summary": "Add catalog entry (admin.settings; priorities fixed → 422)",
         "security": [
           {
             "sessionCookie": [],
@@ -9749,6 +10016,266 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings": {
+      "get": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "getAiSettings",
+        "summary": "Setelan koneksi LLM & MCP",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Daftar penyedia LLM dan MCP server",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiSettingsView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Butuh grant integration.manage"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}": {
+      "put": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "saveAiProvider",
+        "summary": "Simpan konfigurasi penyedia LLM (tanpa rahasia)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "openai",
+                "anthropic"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiProviderInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Konfigurasi tersimpan berstatus draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProviderView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Versi tidak cocok"
+          },
+          "422": {
+            "description": "Isian tidak valid"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings/providers/{provider}/test": {
+      "post": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "testAiProvider",
+        "summary": "Uji koneksi penyedia LLM",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "openai",
+                "anthropic"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hasil uji (berhasil/gagal) beserta catatan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProviderView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Konfigurasi belum ada"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers": {
+      "post": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "createMcpServer",
+        "summary": "Tambah MCP server",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP server dibuat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Isian tidak valid"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}": {
+      "patch": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "updateMcpServer",
+        "summary": "Ubah MCP server",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP server diperbarui",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tidak ditemukan"
+          },
+          "409": {
+            "description": "Versi tidak cocok"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}/test": {
+      "post": {
+        "tags": [
+          "ai-settings"
+        ],
+        "operationId": "testMcpServer",
+        "summary": "Uji koneksi MCP server",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hasil uji beserta catatan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Tidak ditemukan"
           }
         }
       }

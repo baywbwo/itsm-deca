@@ -31,6 +31,9 @@ import type {
   CatalogEntryResult,
   IntegrationConnection,
   IntegrationList,
+  AiSettingsView,
+  AiProviderView,
+  McpServerView,
   IntegrationResult,
   Meta,
   PermissionCode,
@@ -362,6 +365,23 @@ const isConnection = (v: unknown): v is IntegrationConnection =>
   isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) &&
   v.credential === 'not_available' && v.mapping === 'not_available' &&
   isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** D18: penyedia LLM — rahasia tidak pernah ada di payload, jadi tidak ada yang divalidasi di situ. */
+export const isAiProviderView = (v: unknown): v is AiProviderView =>
+  isRecord(v) && typeof v.provider === 'string' && typeof v.state === 'string' &&
+  typeof v.keyPresent === 'boolean' && typeof v.version === 'number' && v.secret === 'env_only';
+
+export const isMcpServerView = (v: unknown): v is McpServerView =>
+  isRecord(v) && typeof v.id === 'string' && typeof v.name === 'string' &&
+  (v.transport === 'http' || v.transport === 'stdio') && typeof v.enabled === 'boolean' &&
+  typeof v.version === 'number' && typeof v.authPresent === 'boolean';
+
+export const isAiSettingsView = (v: unknown): v is AiSettingsView =>
+  isRecord(v) && Array.isArray(v.providers) && v.providers.every(isAiProviderView) &&
+  Array.isArray(v.mcpServers) && v.mcpServers.every(isMcpServerView) && Array.isArray(v.notes);
+
 export const isIntegrationList = (v: unknown): v is IntegrationList =>
   isObj(v) && isStr(v.workspaceId) && isArr(v.items, isConnection) && isArr(v.creatable, isProviderCode) &&
   typeof v.canManageCredentials === 'boolean';
