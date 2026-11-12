@@ -46,6 +46,10 @@ import {
   isReportRun,
   isReportExportResult,
   isWorkspacePermissions,
+  isTemporaryPassword,
+  isUserCreated,
+  isUserDeactivated,
+  isUserList,
 } from './guards';
 import type {
   ActivityPage,
@@ -120,6 +124,11 @@ import type {
   ReportExportResult,
   Workspace,
   WorkspacePermissions,
+  TemporaryPassword,
+  UserCreateRequest,
+  UserCreated,
+  UserDeactivated,
+  UserList,
 } from './types';
 
 export interface TransportRequest {
@@ -178,6 +187,18 @@ export const SESSION_RELOAD_TITLE = 'Sesi perlu dimuat ulang';
 export function sessionReloadText(requestId: string | null): string {
   const rid = requestId ? ` (ID permintaan ${requestId})` : '';
   return `Token keamanan sesi di tab ini tidak dapat diperbarui otomatis. Permintaan belum diproses dan isian Anda tetap di sini. Muat ulang halaman (salin isian dulu bila perlu), lalu kirim lagi.${rid}`;
+}
+
+/**
+ * CP3a login copy. A wrong password, an unknown, locked or deactivated account all answer 401 and
+ * read the same, so the screen never tells which one it was. 429 says when to try again.
+ */
+export function loginErrorText(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.status === 429) return rateLimitText(e);
+    if (e.code === 'network') return 'Server tidak dapat dihubungi. Periksa koneksi lalu coba lagi.';
+  }
+  return 'Tidak dapat masuk. Periksa nama pengguna dan kata sandi, atau coba lagi setelah beberapa saat.';
 }
 
 export const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError';
@@ -241,6 +262,24 @@ export function createApi(transport: Transport) {
   // A 429 is returned to the caller as is: never re-sent here (a person decides when to retry).
   let csrfToken: string | null = null;
   let refreshing: Promise<string> | null = null;
+  // CP3a: a 401 on any request after a session was established means the session ended on the
+  // server (idle/absolute limit, revoked elsewhere). Listeners return the person to the login.
+  // CP4b: a 401 step_up_required or mfa_invalid refuses one sensitive action; the session lives on.
+  const SESSION_KEPT_401 = new Set(['step_up_required', 'mfa_invalid']);
+  const endsSession = (r: TransportResponse) =>
+    r.status === 401 && !(isErrorBody(r.body) && SESSION_KEPT_401.has(r.body.error.code));
+  let sessionActive = false;
+  const endedListeners = new Set<() => void>();
+  function sessionEnded() {
+    if (!sessionActive) return;
+    sessionActive = false;
+    csrfToken = null;
+    endedListeners.forEach((fn) => fn());
+  }
+  const toSession = (v: Session): Session => ({
+    user: v.user, banner: v.banner, uatSuperadmin: v.uatSuperadmin, mustChangePassword: v.mustChangePassword === true,
+    platformAdmin: v.platformAdmin === true, mfaEnrolled: v.mfaEnrolled === true, mfaRequired: v.mfaRequired === true,
+  });
 
   const CSRF_EXEMPT = new Set(['/api/v1/uat/session', '/api/v1/session/csrf', '/api/v1/login']);
 
@@ -251,6 +290,7 @@ export function createApi(transport: Transport) {
         method: 'POST', path: '/api/v1/session/csrf', headers: { 'X-ITSM-CSRF-Refresh': '1' },
         signal: AbortSignal.timeout(10_000),
       });
+      if (res.status === 401) sessionEnded();
       if (res.status !== 200 || !isCsrfIssued(res.body)) {
         const wait = isErrorBody(res.body) ? (res.body.error as { retryAfterSeconds?: unknown }).retryAfterSeconds : null;
         throw isErrorBody(res.body)
@@ -274,6 +314,7 @@ export function createApi(transport: Transport) {
 
   async function call<T>(req: TransportRequest, guard: Guard<T>, ok: number | number[] = 200): Promise<T> {
     const res = await send(req);
+    if (endsSession(res)) sessionEnded();
     const okStatus = Array.isArray(ok) ? ok.includes(res.status) : res.status === ok;
     if (okStatus && guard(res.body)) return res.body;
     if (isErrorBody(res.body)) {
@@ -301,15 +342,41 @@ export function createApi(transport: Transport) {
     async login(username: string, password: string): Promise<Session> {
       const issued = await call({ method: 'POST', path: '/api/v1/login', headers: { 'X-ITSM-Login': '1' }, body: { username, password } }, isSessionIssued, 201);
       csrfToken = issued.csrfToken;
-      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+      sessionActive = true;
+      return toSession(issued);
     },
     async logout(): Promise<void> {
+      sessionActive = false;
       await call({ method: 'DELETE', path: '/api/v1/session', headers: csrf() }, isEmpty, 204);
       csrfToken = null;
     },
+    /** US-1.6: ends every session of this user, this one included (the cookie is cleared). */
+    async logoutAll(): Promise<void> {
+      await call({ method: 'POST', path: '/api/v1/session/logout-all', headers: csrf() }, isEmpty, 204);
+      sessionActive = false;
+      csrfToken = null;
+    },
+    /**
+     * US-1.4: own password. 204 keeps this session (other sessions are revoked by the server);
+     * 422 names the field to fix in `ApiError.field` (currentPassword | newPassword).
+     */
+    changePassword: async (currentPassword: string, newPassword: string): Promise<void> => {
+      await call({
+        method: 'POST', path: '/api/v1/account/password', headers: csrf(), body: { currentPassword, newPassword },
+      }, isEmpty, 204);
+    },
+    /** Called once each time an established session ends with a 401; returns the unsubscribe. */
+    onSessionEnded(fn: () => void): () => void {
+      endedListeners.add(fn);
+      return () => { endedListeners.delete(fn); };
+    },
     hasCsrf: () => csrfToken !== null,
     getMeta: (signal?: AbortSignal): Promise<Meta> => get('/api/v1/meta', isMeta, signal),
-    getSession: (signal?: AbortSignal): Promise<Session> => get('/api/v1/session', isSession, signal),
+    async getSession(signal?: AbortSignal): Promise<Session> {
+      const s = toSession(await get('/api/v1/session', isSession, signal));
+      sessionActive = true;
+      return s;
+    },
     /** Direct UAT Superadmin entry; the server refuses it outside UAT on a marked dummy DB. */
     async enterUat(signal?: AbortSignal): Promise<Session> {
       const issued = await call(
@@ -318,7 +385,8 @@ export function createApi(transport: Transport) {
         201,
       );
       csrfToken = issued.csrfToken;
-      return { user: issued.user, banner: issued.banner, uatSuperadmin: issued.uatSuperadmin };
+      sessionActive = true;
+      return toSession(issued);
     },
     listWorkspaces: async (signal?: AbortSignal): Promise<Workspace[]> =>
       (await get('/api/v1/workspaces', isWorkspaceList, signal)).items,
@@ -521,6 +589,29 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
       }, isIntegrationResult),
+    /**
+     * CP3b platform user directory (platform_admin only; 403 otherwise). `active` is
+     * `true`/`false`/`all`; the cursor is only valid for the same search and filter.
+     */
+    listUsers: (filter: { q?: string; active?: 'true' | 'false' | 'all' }, cursor: string | null, signal?: AbortSignal): Promise<UserList> => {
+      const q = new URLSearchParams();
+      if (filter.q?.trim()) q.set('q', filter.q.trim());
+      if (filter.active) q.set('active', filter.active);
+      return get(`/api/v1/users${withParam(q.toString(), 'cursor', cursor)}`, isUserList, signal);
+    },
+    /** US-1.3: the temporary password in the answer is shown once and never kept by the client. */
+    createUser: (body: UserCreateRequest): Promise<UserCreated> =>
+      call({ method: 'POST', path: '/api/v1/users', headers: csrf(), body }, isUserCreated, 201),
+    /** US-1.5: a new one-time temporary password; every session of that user is revoked. */
+    resetUserPassword: (userId: string): Promise<TemporaryPassword> =>
+      call({
+        method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/password-reset`, headers: csrf(),
+      }, isTemporaryPassword),
+    /** US-1.7: 409 `user_inactive` or `last_admin`. */
+    deactivateUser: (userId: string): Promise<UserDeactivated> =>
+      call({
+        method: 'PATCH', path: `/api/v1/users/${encodeURIComponent(userId)}`, headers: csrf(), body: { active: false },
+      }, isUserDeactivated),
     /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
     getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
       get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),

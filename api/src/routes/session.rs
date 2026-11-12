@@ -60,6 +60,15 @@ pub struct SessionView {
     user: UserView,
     banner: Option<&'static str>,
     uat_superadmin: bool,
+    /// US-1.4: the client shows only the change-password screen until this is false.
+    must_change_password: bool,
+    /// CP3b: the client shows the "Pengguna" admin page only when true (password mode only).
+    platform_admin: bool,
+    /// US-1.2: a confirmed TOTP factor exists (password mode only).
+    mfa_enrolled: bool,
+    /// US-1.2: MFA is mandatory for this user's grants; until this session passes it, only the
+    /// MFA enrolment paths are reachable (pre-MFA session).
+    mfa_required: bool,
 }
 
 #[derive(Serialize)]
@@ -110,6 +119,10 @@ pub async fn uat_enter(State(state): State<AppState>) -> Result<Response, AppErr
             },
             banner: Some(UAT_BANNER),
             uat_superadmin: true,
+            must_change_password: false,
+            platform_admin: false,
+            mfa_enrolled: false,
+            mfa_required: false,
         },
         csrf_token: issued.csrf_token,
     };
@@ -132,6 +145,14 @@ pub async fn current(
         .bind(s.user_id)
         .fetch_one(&state.pool)
         .await?;
+    let password_mode = state.config.access_mode == AccessMode::Password;
+    let platform_admin =
+        password_mode && super::users::is_platform_admin(&state.pool, s.user_id).await?;
+    let (mfa_enrolled, mfa_required) = if password_mode {
+        super::mfa::status(&mut *state.pool.acquire().await?, s.user_id).await?
+    } else {
+        (false, false)
+    };
     Ok(Json(SessionView {
         user: UserView {
             id: s.user_id,
@@ -139,11 +160,56 @@ pub async fn current(
         },
         banner: (state.config.access_mode == AccessMode::UatSuperadmin).then_some(UAT_BANNER),
         uat_superadmin: s.uat_superadmin,
+        must_change_password: s.must_change_password,
+        platform_admin,
+        mfa_enrolled,
+        mfa_required,
     }))
 }
 
+/// Ends this session only. In password mode the logout is audited (TM-15, found in CP3c E2E).
 pub async fn logout(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
-    session::revoke(&state.pool, s.id).await?;
+    let mut tx = state.pool.begin().await?;
+    let revoked = sqlx::query(
+        "UPDATE sessions SET revoked_at = now(), revoked_reason = 'logout' \
+         WHERE id = $1 AND revoked_at IS NULL",
+    )
+    .bind(s.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if revoked == 1 && state.config.access_mode == AccessMode::Password {
+        super::password::auth_event(&mut tx, Some(s.user_id), "", "logout", "success", None)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok((
+        StatusCode::NO_CONTENT,
+        [(
+            header::SET_COOKIE,
+            session::clear_cookie_value(state.config.cookie_secure),
+        )],
+    )
+        .into_response())
+}
+
+/// US-1.6: "Keluar dari semua perangkat". Revokes every session of the caller, this one included.
+pub async fn logout_all(State(state): State<AppState>, s: Session) -> Result<Response, AppError> {
+    let mut tx = state.pool.begin().await?;
+    sqlx::query(
+        "UPDATE sessions SET revoked_at = now(), revoked_reason = 'logout_all' \
+         WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(s.user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO auth_events (user_id, event, outcome) VALUES ($1, 'logout_all', 'success')",
+    )
+    .bind(s.user_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok((
         StatusCode::NO_CONTENT,
         [(

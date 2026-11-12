@@ -23,7 +23,7 @@ cargo run -p itsm-api -- migrate
 ITSM_SEED_CONFIRM_DB=itsm_uat_dummy cargo run -p itsm-api -- seed-uat   # menandai DB sebagai dummy
 cargo run -p itsm-api -- serve
 ```
-Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATABASE_URL`, `ITSM_BIND` (default 127.0.0.1:8080), `ITSM_COOKIE_SECURE` (default true).
+Env: `ITSM_ENV` (uat|production), `ITSM_ACCESS_MODE` (uat_superadmin|sso), `DATABASE_URL`, `ITSM_BIND` (default 127.0.0.1:8080), `ITSM_COOKIE_SECURE` (default true). MFA (mode password, wajib di production): `ITSM_KEYRING`, `ITSM_KEYRING_ACTIVE`, `ITSM_MFA_RECOVERY_PEPPER` (lihat `deploy/uat/env.example`, hanya nama).
 
 ## Gerbang QA
 `PG_BIN=/path/pg/bin scripts/ci.sh` menjalankan fmt, clippy `-D warnings`, dan test terhadap cluster PostgreSQL sekali pakai. Workflow GitHub di `.github/workflows/ci.yml` (belum pernah dijalankan; repo belum punya remote).

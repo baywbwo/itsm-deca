@@ -8,13 +8,8 @@ use std::io::{self, Read};
 use uuid::Uuid;
 
 pub async fn run(pool: &PgPool, cfg: &Config) -> Result<(), String> {
-    let username = std::env::var("ITSM_ADMIN_USERNAME")
-        .map_err(|_| "ITSM_ADMIN_USERNAME wajib diisi")?
-        .trim()
-        .to_lowercase();
-    if username.len() < 3 || username.len() > 254 {
-        return Err("username tidak valid".into());
-    }
+    let username =
+        std::env::var("ITSM_ADMIN_USERNAME").map_err(|_| "ITSM_ADMIN_USERNAME wajib diisi")?;
     let confirm =
         std::env::var("ITSM_INIT_CONFIRM_DB").map_err(|_| "ITSM_INIT_CONFIRM_DB wajib diisi")?;
     let mut password = String::new();
@@ -22,8 +17,34 @@ pub async fn run(pool: &PgPool, cfg: &Config) -> Result<(), String> {
         .take(1025)
         .read_to_string(&mut password)
         .map_err(|_| "password stdin gagal")?;
-    let hash = hash_password(password.trim_end_matches(['\r', '\n']))?;
+    let result = bootstrap(
+        pool,
+        cfg,
+        &username,
+        &confirm,
+        password.trim_end_matches(['\r', '\n']),
+    )
+    .await;
     drop(password);
+    result?;
+    println!("Initial password administrator configured; no tickets generated");
+    Ok(())
+}
+
+/// Creates the first local administrator: admin grants in every active workspace plus the
+/// `platform_admin` grant, so this account can create and manage the other users (US-1.3).
+pub async fn bootstrap(
+    pool: &PgPool,
+    cfg: &Config,
+    username: &str,
+    confirm: &str,
+    password: &str,
+) -> Result<(), String> {
+    let username = username.trim().to_lowercase();
+    if username.len() < 3 || username.len() > 254 {
+        return Err("username tidak valid".into());
+    }
+    let hash = hash_password(password)?;
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
     let current: String = sqlx::query_scalar("SELECT current_database()")
         .fetch_one(&mut *tx)
@@ -80,6 +101,11 @@ pub async fn run(pool: &PgPool, cfg: &Config) -> Result<(), String> {
         .bind(user)
         .bind(username)
         .bind(hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+    sqlx::query("INSERT INTO platform_grants(user_id,grant_code) VALUES($1,'platform_admin')")
+        .bind(user)
         .execute(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
@@ -159,6 +185,5 @@ pub async fn run(pool: &PgPool, cfg: &Config) -> Result<(), String> {
         }
     }
     tx.commit().await.map_err(|e| e.to_string())?;
-    println!("Initial password administrator configured; no tickets generated");
     Ok(())
 }

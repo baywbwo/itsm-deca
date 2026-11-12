@@ -17,6 +17,10 @@ const PATHS = {
   components: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
   board: 'M4 5h4v14H4zM10 5h4v9h-4zM16 5h4v6h-4z',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  bell: 'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4',
+  plus: 'M12 5v14M5 12h14',
+  logout: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
+  users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a7 7 0 0 1 14 0v1M16 3.5a4 4 0 0 1 0 7M18 14a6 6 0 0 1 4 6v1',
 } as const;
 export type IconName = keyof typeof PATHS;
 

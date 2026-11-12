@@ -26,9 +26,32 @@ export type Boot =
   | { status: 'loading' }
   | { status: 'ready'; meta: Meta; session: Session; workspaces: Workspace[] }
   | { status: 'no_access'; meta: Meta }
+  /** US-1.4: only the change-password screen (and logout) until the password is changed. */
+  | { status: 'must_change'; meta: Meta; session: Session }
   | { status: 'error'; error: unknown };
 
-/** Meta → existing session or (UAT only) direct Superadmin entry → workspace list. */
+/**
+ * Meta → existing session or (UAT only) direct Superadmin entry → workspace list. A session that
+ * must change its password stops before the workspace list (the server refuses it with 403).
+ */
+export async function loadBoot(api: Api, signal: AbortSignal): Promise<Boot> {
+  const meta = await api.getMeta(signal);
+  // No local login exists: outside UAT the app waits for office SSO (not configured).
+  if (meta.accessMode !== 'password' && meta.accessMode !== 'uat_superadmin') return { status: 'no_access', meta };
+  let session: Session;
+  try {
+    session = await api.getSession(signal);
+  } catch (e) {
+    if (!(e instanceof ApiError && e.status === 401)) throw e;
+    if (meta.accessMode === 'password') return { status: 'no_access', meta };
+    session = await api.enterUat(signal);
+  }
+  if (session.mustChangePassword) return { status: 'must_change', meta, session };
+  const workspaces = await api.listWorkspaces(signal);
+  return { status: 'ready', meta, session, workspaces };
+}
+
+/** `loadBoot` once per attempt; `retry` re-reads the session (after login, logout or a 401). */
 export function useBoot(api: Api) {
   const [boot, setBoot] = useState<Boot>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
@@ -36,21 +59,7 @@ export function useBoot(api: Api) {
   useEffect(() => {
     const ctl = new AbortController();
     setBoot({ status: 'loading' });
-    (async () => {
-      const meta = await api.getMeta(ctl.signal);
-      // No local login exists: outside UAT the app waits for office SSO (not configured).
-      if (meta.accessMode !== 'password' && meta.accessMode !== 'uat_superadmin') return setBoot({ status: 'no_access', meta });
-      let session: Session;
-      try {
-        session = await api.getSession(ctl.signal);
-      } catch (e) {
-        if (!(e instanceof ApiError && e.status === 401)) throw e;
-        if (meta.accessMode === 'password') return setBoot({ status: 'no_access', meta });
-        session = await api.enterUat(ctl.signal);
-      }
-      const workspaces = await api.listWorkspaces(ctl.signal);
-      setBoot({ status: 'ready', meta, session, workspaces });
-    })().catch((error: unknown) => {
+    loadBoot(api, ctl.signal).then((b) => { if (!ctl.signal.aborted) setBoot(b); }).catch((error: unknown) => {
       if (!isAbort(error)) setBoot({ status: 'error', error });
     });
     return () => ctl.abort();

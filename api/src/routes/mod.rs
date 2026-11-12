@@ -9,6 +9,7 @@ pub mod health;
 pub mod intake;
 pub mod integrations;
 pub mod members;
+pub mod mfa;
 pub mod password;
 pub mod reports;
 pub mod saved_views;
@@ -18,6 +19,7 @@ pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
 pub mod tickets;
+pub mod users;
 pub mod workspaces;
 
 use axum::Router;
@@ -51,11 +53,26 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "/api/v1/workspaces/{workspace_id}/ai-settings/mcp-servers/{server_id}/test",
     ),
     ("post", "/api/v1/login"),
+    ("post", "/api/v1/login/mfa"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
     ("delete", "/api/v1/session"),
     ("post", "/api/v1/session/csrf"),
+    ("post", "/api/v1/session/logout-all"),
+    ("post", "/api/v1/session/step-up"),
+    ("post", "/api/v1/account/password"),
+    ("get", "/api/v1/me/mfa"),
+    ("delete", "/api/v1/me/mfa"),
+    ("post", "/api/v1/me/mfa/enrollment"),
+    ("post", "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm"),
+    ("post", "/api/v1/me/mfa/recovery-codes"),
+    ("get", "/api/v1/users"),
+    ("post", "/api/v1/users"),
+    ("patch", "/api/v1/users/{user_id}"),
+    ("post", "/api/v1/users/{user_id}/password-reset"),
+    ("post", "/api/v1/users/{user_id}/mfa-reset"),
+    ("post", "/api/v1/users/{user_id}/unlock"),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -214,6 +231,7 @@ pub const API_ROUTES: &[(&str, &str)] = &[
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/login", post(password::login))
+        .route("/api/v1/login/mfa", post(mfa::login_mfa))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route(
             "/api/v1/workspaces/{workspace_id}/ai-settings",
@@ -246,6 +264,27 @@ pub fn api_router() -> Router<AppState> {
             get(session::current).merge(delete(session::logout)),
         )
         .route("/api/v1/session/csrf", post(session::refresh_csrf))
+        .route("/api/v1/session/logout-all", post(session::logout_all))
+        .route("/api/v1/session/step-up", post(mfa::step_up))
+        .route("/api/v1/account/password", post(password::change_password))
+        .route(
+            "/api/v1/me/mfa",
+            get(mfa::get_status).merge(delete(mfa::delete_mfa)),
+        )
+        .route("/api/v1/me/mfa/enrollment", post(mfa::start_enrollment))
+        .route(
+            "/api/v1/me/mfa/enrollment/{enrollment_id}/confirm",
+            post(mfa::confirm_enrollment),
+        )
+        .route(
+            "/api/v1/me/mfa/recovery-codes",
+            post(mfa::regenerate_recovery_codes),
+        )
+        .route("/api/v1/users", get(users::list).merge(post(users::create)))
+        .route("/api/v1/users/{user_id}", patch(users::update))
+        .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
+        .route("/api/v1/users/{user_id}/mfa-reset", post(users::mfa_reset))
+        .route("/api/v1/users/{user_id}/unlock", post(users::unlock))
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))

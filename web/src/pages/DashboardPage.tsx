@@ -1,31 +1,25 @@
-import { useRef, useState } from 'react';
-import { ApiError, type Api } from '../api/client';
-import type {
-  Dashboard,
-  DashboardAttentionTicket,
-  DashboardPeriodKey,
-  TicketFilter,
-  TicketStatus,
-  Workspace,
-} from '../api/types';
+import { useEffect, useRef, useState } from 'react';
+import { ApiError, isAbort, type Api } from '../api/client';
+import type { Dashboard, DashboardPeriodKey, TicketFilter, TicketListItem, Workspace } from '../api/types';
+import {
+  ATTENTION_LIMIT, attentionQuery, barPercent, channelSlices, dataQuality, donutGradient, resolvedKpiLabel,
+} from '../app/dashboardView';
 import { ageLabel, instantLabel, num, PERIOD_LABELS, rangeLabel, tzLabel } from '../app/format';
-import { useDashboard } from '../app/hooks';
-import { initials } from '../app/labels';
-import { navigate } from '../app/hooks';
+import { navigate, useDashboard } from '../app/hooks';
 import {
   dashboardQuery,
   drilldownHash,
   hasDashboardFilter,
+  NEW_TICKET_FLAG,
   parseDashboardQuery,
   toHash,
+  withDetail,
   type DashboardFilterKey,
   type DashboardParams,
 } from '../app/routes';
-import { Badge, type BadgeTone } from '../components/Badge';
-import { BarList, TrendChart } from '../components/Charts';
+import { Badge, statusTone } from '../components/Badge';
 import { Button } from '../components/Button';
-import { DataTable, type Column } from '../components/DataTable';
-import { Icon, type IconName } from '../components/Icon';
+import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
 
@@ -50,11 +44,12 @@ const FILTER_FIELDS: readonly {
  * filters live in the URL (`#/w/<ws>/dashboard?period=…&owner=…`), so reload, back and a shared
  * link give the same numbers; a workspace switch drops the query and so resets the filters.
  */
-export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
+export function DashboardPage({ api, workspace, canReports, canCreate = false, query = '' }: {
   api: Api;
   workspace: Workspace;
   canReports: boolean;
-  uat: boolean;
+  /** ticket.create: shows "Tiket baru" (same rule as the sidebar entry). */
+  canCreate?: boolean;
   query?: string;
 }) {
   const params = parseDashboardQuery(query);
@@ -78,13 +73,19 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
     go({ period: params.period, filters: { owner: null, channel: null, category: null, priority: null } });
   };
 
+  const scopeText = filtered ? `${workspace.name} (terfilter)` : workspace.name;
   return (
     <>
-      <PageHeader eyebrow="Service operations" title="Ringkasan operasional"
-        description={`Pantau antrean, beban tim, dan progres layanan ${workspace.name}.`}
-        action={canReports
-          ? <a className="btn" href={toHash({ workspaceId: workspace.id, page: 'reports' })}><Icon name="reports" size={16} /> Lihat laporan</a>
-          : undefined} />
+      <PageHeader title="Dashboard"
+        description={d
+          ? `Ringkasan beban kerja ${PERIOD_LABELS[d.period.key].toLowerCase()} · ${rangeLabel(d.period.startDate, d.period.endDate)} · ${scopeText}`
+          : `Ringkasan beban kerja ${scopeText}`}
+        action={(canReports || canCreate) ? (
+          <div className="ph-acts">
+            {canReports && <a className="btn" href={toHash({ workspaceId: workspace.id, page: 'reports' })}><Icon name="reports" size={16} /> Lihat laporan</a>}
+            {canCreate && <a className="btn btn-primary" href={toHash({ workspaceId: workspace.id, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` })}><Icon name="plus" size={16} /> Tiket baru</a>}
+          </div>
+        ) : undefined} />
       <details className="dashboard-filter-panel" open={filtered || undefined}>
         <summary ref={filterSummaryRef}><span className="filter-heading"><Icon name="filter" size={16} /> Periode &amp; filter</span><span className="filter-summary">{PERIOD_LABELS[params.period]}{filtered ? " · Filter aktif" : " · Semua tiket"}<Icon name="chevron" size={14} /></span></summary>
       <div className="toolbar row filterbar dash-filters" role="group" aria-label="Periode dan filter dashboard">
@@ -126,7 +127,7 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
       <p className="sr-only" role="status">
         {d ? `Dashboard ${PERIOD_LABELS[d.period.key]}${filtered ? ' dengan filter' : ''} dimuat.` : ''}
       </p>
-      {state.status === 'loading' && <DashboardSkeleton />}
+      {state.status === 'loading' && <DashboardSkeleton period={params.period} />}
       {state.status === 'error' && (
         <DashboardError error={state.error} onReset={filtered ? reset : null} onRetry={() => {
           // Retry removes the error button; the filter summary remains visible when collapsed.
@@ -134,17 +135,17 @@ export function DashboardPage({ api, workspace, canReports, uat, query = '' }: {
           setAttempt((n) => n + 1);
         }} />
       )}
-      {d && <DashboardBody d={d} uat={uat} filtered={filtered} canReports={canReports} />}
+      {d && <DashboardBody api={api} d={d} filtered={filtered} />}
     </>
   );
 }
 
-function DashboardSkeleton() {
+function DashboardSkeleton({ period }: { period: DashboardPeriodKey }) {
   return (
     <div role="status" aria-live="polite">
       <span className="sr-only">Memuat dashboard…</span>
       <div className="kpis" aria-hidden="true">
-        {['Tiket aktif', 'Belum ditugaskan', 'Menunggu pelanggan', 'Terselesaikan'].map((l) => (
+        {['Tiket aktif', 'Belum ditugaskan', 'Menunggu pelanggan', resolvedKpiLabel(period)].map((l) => (
           <div className="kpi" key={l}><span className="muted">{l}</span><strong>—</strong><div className="skeleton" /></div>
         ))}
       </div>
@@ -169,7 +170,7 @@ function DashboardError({ error, onRetry, onReset }: {
   if (error instanceof ApiError && error.status === 403) return <ForbiddenState />;
   if (error instanceof ApiError && error.status === 404) return <NotFoundState />;
   if (error instanceof ApiError && error.status === 401) {
-    return <ErrorState title="Sesi berakhir" body="Sesi uji tidak lagi aktif. Muat ulang halaman untuk masuk lagi."
+    return <ErrorState title="Sesi berakhir" body="Sesi Anda tidak lagi aktif. Muat ulang halaman untuk masuk lagi."
       requestId={error.requestId} />;
   }
   const body = error instanceof ApiError && error.code === 'network'
@@ -179,82 +180,38 @@ function DashboardError({ error, onRetry, onReset }: {
     requestId={error instanceof ApiError ? error.requestId : null} onRetry={onRetry} />;
 }
 
-export function statusTone(s: Pick<TicketStatus, 'code'>): BadgeTone {
-  switch (s.code) {
-    case 'new': return 'blue';
-    case 'pending_customer':
-    case 'pending_engineering': return 'waiting';
-    case 'resolved': return 'ok';
-    default: return 'neutral';
-  }
-}
-
-/** Shortcuts to screens the user can already open here (D16); no new route or filter. */
-function QuickActions({ workspaceId, canReports }: { workspaceId: string; canReports: boolean }) {
-  const items: { label: string; icon: IconName; href: string }[] = [
-    { label: 'Buka antrean tiket', icon: 'tickets', href: toHash({ workspaceId, page: 'tickets' }) },
-    { label: 'Board status tiket', icon: 'board', href: toHash({ workspaceId, page: 'tickets', query: 'view=board' }) },
-    ...(canReports ? [{ label: 'Laporan operasional', icon: 'reports' as const, href: toHash({ workspaceId, page: 'reports' }) }] : []),
-  ];
-  return (
-    <nav aria-label="Aksi cepat">
-      <ul className="quick">
-        {items.map((it) => (
-          <li key={it.label}>
-            <a href={it.href}>
-              <span className="quick-icon"><Icon name={it.icon} /></span>
-              {it.label}
-              <span className="quick-go" aria-hidden="true">↗</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
-function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: boolean; filtered: boolean; canReports: boolean }) {
+function DashboardBody({ api, d, filtered }: { api: Api; d: Dashboard; filtered: boolean }) {
   const ws = d.workspaceId;
   const t = d.totals;
   const periodText = PERIOD_LABELS[d.period.key];
   const drill = (f: TicketFilter | null) => (f ? drilldownHash(ws, f) : null);
   const scope = filtered ? `${d.workspaceCode} (terfilter)` : d.workspaceCode;
   const kpis = [
-    { label: 'Tiket aktif', icon: 'tickets' as const, value: t.active, hint: 'Saat ini · semua status nonterminal', href: drill(d.drilldown.active) },
-    { label: 'Belum ditugaskan', icon: 'user' as const, value: t.unassigned, hint: 'Saat ini · aktif tanpa PIC', href: drill(d.drilldown.unassigned) },
-    { label: 'Menunggu pelanggan', icon: 'clock' as const, value: t.pendingCustomer, hint: 'Saat ini · status menunggu pelanggan', href: drill(d.drilldown.pendingCustomer) },
+    { key: 'active', label: 'Tiket aktif', value: t.active, hint: 'Semua status berjalan saat ini', href: drill(d.drilldown.active) },
+    { key: 'unassigned', label: 'Belum ditugaskan', value: t.unassigned, hint: 'Aktif tanpa PIC · perlu diambil CS', href: drill(d.drilldown.unassigned) },
+    { key: 'customer', label: 'Menunggu pelanggan', value: t.pendingCustomer, hint: 'Bergantung balasan pelanggan', href: drill(d.drilldown.pendingCustomer) },
     {
-      label: 'Terselesaikan', icon: 'check' as const,
-      value: t.resolvedInPeriod,
-      hint: `Peristiwa penyelesaian ${periodText.toLowerCase()} · ${num(t.resolvedTicketsInPeriod)} tiket unik`,
+      key: 'resolved', label: resolvedKpiLabel(d.period.key), value: t.resolvedInPeriod,
+      hint: `Peristiwa penyelesaian · ${num(t.resolvedTicketsInPeriod)} tiket unik`,
       href: drill(d.drilldown.resolvedInPeriod),
     },
   ];
 
   return (
     <>
-      <section className="operations-brief" aria-label="Fokus operasional">
-        <div className="brief-symbol"><Icon name="dashboard" size={24} /></div>
-        <div className="brief-copy"><span className="eyebrow">Fokus layanan</span><h2>{t.unassigned > 0 ? `${num(t.unassigned)} tiket menunggu PIC` : t.active > 0 ? `${num(t.active)} tiket sedang ditangani` : 'Antrean layanan terkendali'}</h2><p>{t.unassigned > 0 ? 'Prioritaskan penugasan agar setiap tiket mendapat tindak lanjut.' : 'Pantau progres tim dan tindak lanjut tiket dari satu workspace.'}</p></div>
-        {d.drilldown.unassigned && t.unassigned > 0 && <a className="btn" href={drilldownHash(ws, d.drilldown.unassigned)}>Tinjau antrean <Icon name="arrow" size={16} /></a>}
-      </section>
-      <div className="section-heading"><h2>Ringkasan layanan</h2><span className="tiny muted">{scope} · {periodText}</span></div>
-      <div className="kpis">
-        {kpis.map((k, i) => k.href ? (
-          <a className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label} href={k.href}>
-            <div className="kpi-heading"><span>{k.label}</span><span className="kpi-icon"><Icon name={k.icon} size={18} /></span></div>
-            <strong>{num(k.value)}</strong>
-            <small>{k.hint} <span aria-hidden="true">↗</span></small>
-          </a>
-        ) : (
-          <div className={i === 0 ? 'kpi kpi-primary' : 'kpi'} key={k.label}>
-            <div className="kpi-heading"><span>{k.label}</span><span className="kpi-icon"><Icon name={k.icon} size={18} /></span></div>
-            <strong>{num(k.value)}</strong>
-            <small>{k.hint} · tidak berlaku untuk filter PIC</small>
-          </div>
-        ))}
+      <div className="g4 dash-kpis">
+        {kpis.map((k) => {
+          const cls = `kpi2 kpi-${k.key}${k.key === 'unassigned' && k.value > 0 ? ' alert' : ''}`;
+          const body = (<>
+            <span className="lbl">{k.label}</span>
+            <strong className="val">{num(k.value)}</strong>
+            <span className="hint">{k.href ? k.hint : `${k.hint} · tidak berlaku untuk filter PIC`}</span>
+          </>);
+          return k.href
+            ? <a className={cls} key={k.key} href={k.href}>{body}</a>
+            : <div className={cls} key={k.key}>{body}</div>;
+        })}
       </div>
-      <QuickActions workspaceId={ws} canReports={canReports} />
       {t.tickets === 0 ? (
         filtered ? (
           <EmptyState title="Tidak ada tiket yang cocok"
@@ -265,167 +222,177 @@ function DashboardBody({ d, uat, filtered, canReports }: { d: Dashboard; uat: bo
         )
       ) : (
         <>
-          <div className="grid2">
-            <section className="card" aria-labelledby="dash-status">
-              <h2 id="dash-status">Distribusi status</h2>
-              <p className="muted tiny">Status saat ini · seluruh {num(t.tickets)} tiket {scope} · tidak dibatasi periode</p>
-              <BarList label="Distribusi tiket menurut status" total={t.tickets}
-                items={d.statusDistribution.map((s) => ({ key: s.status.code, label: s.status.label, value: s.count }))} />
-              <details>
-                <summary>Tampilkan angka</summary>
-                <ul className="plain">
-                  {d.statusDistribution.map((s) => (
-                    <li key={s.status.code}><a href={drilldownHash(ws, s.filter)}>{s.status.label}: {num(s.count)}</a></li>
-                  ))}
-                </ul>
-              </details>
+          <div className="g2">
+            <section className="pcard" aria-labelledby="dash-status">
+              <header className="hd">
+                <h2 id="dash-status">Sebaran status</h2>
+                <span className="sub">seluruh {num(t.tickets)} tiket {scope}</span>
+                {!d.slaConfigured && <span className="r"><span className="chip-tag">tanpa SLA</span></span>}
+              </header>
+              <div className="bd">
+                <StatusBars d={d} />
+                <p className="foot-note">Status saat ini · tidak dibatasi periode. Klik status untuk membuka daftarnya.</p>
+              </div>
             </section>
-            <section className="card" aria-labelledby="dash-pic">
-              <h2 id="dash-pic">Beban PIC</h2>
-              <p className="muted tiny">Semua tiket aktif saat ini per PIC, apa pun tanggal diterimanya · tidak dibatasi periode</p>
-              <ul className="plain">
-                {d.picLoad.map((p) => {
-                  const name = p.displayName ?? 'Belum ditugaskan';
-                  return (
-                    <li className="row between activity" key={p.userId ?? 'unassigned'}>
-                      <a className="pic" href={drilldownHash(ws, p.filter)}>
-                        <span className="avatar" aria-hidden="true">{p.userId ? initials(name) : '—'}</span>
-                        {name}
-                      </a>
-                      <span className="row">
-                        {p.userId && !p.memberActive && <Badge>Nonaktif</Badge>}
-                        <b>{num(p.activeTickets)}</b>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
+            <section className="pcard" aria-labelledby="dash-channel">
+              <header className="hd">
+                <h2 id="dash-channel">Kanal masuk</h2>
+                <span className="sub">{num(t.receivedInPeriod)} tiket diterima {periodText.toLowerCase()}</span>
+              </header>
+              <div className="bd"><ChannelDonut d={d} /></div>
             </section>
           </div>
 
-          <section className="card spaced" aria-labelledby="dash-trend">
-            <h2 id="dash-trend">Tren penanganan tiket</h2>
-            <p className="tiny muted">
-              {periodText} · {rangeLabel(d.period.startDate, d.period.endDate)} · tiket diterima (per tanggal diterima)
-              dibandingkan peristiwa penyelesaian (per tanggal selesai)
-            </p>
-            {d.trend.length > 1 ? (
-              <TrendChart label="Tren harian tiket diterima dan terselesaikan" points={d.trend} />
-            ) : (
-              <BarList label="Tiket diterima dan terselesaikan" total={Math.max(t.receivedInPeriod, t.resolvedInPeriod)}
-                items={[
-                  { key: 'received', label: 'Diterima', value: t.receivedInPeriod },
-                  { key: 'resolved', label: 'Terselesaikan', value: t.resolvedInPeriod },
-                ]} />
-            )}
-            <p className="tiny muted">
-              Bukan penjumlahan dua kelompok. Terselesaikan = peristiwa penyelesaian per siklus, termasuk tiket yang
-              diterima sebelum periode; pembukaan ulang tidak menghapusnya. {num(t.resolvedInPeriod)} peristiwa dari{' '}
-              {num(t.resolvedTicketsInPeriod)} tiket unik.
-            </p>
-            <details>
-              <summary>Tampilkan angka</summary>
-              <TrendTable d={d} />
-            </details>
-          </section>
-
-          <div className="grid3 spaced">
-            <DimensionCard id="dash-channel" title="Kanal masuk" none="Tanpa kanal"
-              rows={d.channels} received={t.receivedInPeriod} periodText={periodText} ws={ws} />
-            <DimensionCard id="dash-category" title="Kategori tiket" none="Tanpa kategori"
-              rows={d.categories} received={t.receivedInPeriod} periodText={periodText} ws={ws} />
-            <section className="card" aria-labelledby="dash-age">
-              <h2 id="dash-age">Umur tiket aktif</h2>
-              <p className="tiny muted">Tiket aktif saat ini · usia sejak diterima · bukan pelanggaran SLA</p>
-              <ul className="plain">
-                {d.age.map((a) => (
-                  <li className="row between activity" key={a.key}><span>{a.label}</span><b>{num(a.count)}</b></li>
-                ))}
-              </ul>
+          <div className="g2">
+            <section className="pcard" aria-labelledby="dash-attention">
+              <header className="hd">
+                <h2 id="dash-attention">Perlu perhatian</h2>
+                <span className="sub">belum ada PIC, urut umur</span>
+                {d.drilldown.unassigned && (
+                  <span className="r"><a className="btn btn-small"
+                    href={toHash({ workspaceId: ws, page: 'tickets', query: attentionQuery(d.drilldown.unassigned) })}>Lihat semua</a></span>
+                )}
+              </header>
+              <AttentionTable api={api} d={d} />
+            </section>
+            <section className="pcard" aria-labelledby="dash-quality">
+              <header className="hd"><h2 id="dash-quality">Kualitas data</h2></header>
+              <div className="bd">
+                <QualityBars d={d} />
+                <p className="foot-note">Kendali mutu klasifikasi sebelum laporan dibuat; basis tiap baris tertulis di bawah labelnya.</p>
+                <h3 className="eyebrow-h" id="dash-activity">Aktivitas terakhir</h3>
+                <div className="empty-mini" aria-labelledby="dash-activity">
+                  <strong>Belum tersedia</strong>
+                  <span>Ringkasan aktivitas lintas tiket belum disediakan server. Riwayat per tiket ada di detail tiket.</span>
+                </div>
+              </div>
             </section>
           </div>
-
-          <section className="card spaced" aria-labelledby="dash-attention">
-            <div className="row between">
-              <h2 id="dash-attention">Perlu perhatian</h2>
-              {d.drilldown.attention && (
-                <a className="btn btn-ghost" href={drilldownHash(ws, d.drilldown.attention)}>Semua tiket →</a>
-              )}
-            </div>
-            <p className="tiny muted">
-              Aturan operasional, bukan SLA · tiket aktif prioritas Mendesak/Tinggi · {num(d.attention.items.length)} dari{' '}
-              {num(d.attention.total)} · Mendesak dulu, lalu yang paling lama diterima
-            </p>
-            <DataTable caption="Tiket perlu perhatian" columns={ATTENTION_COLUMNS} rows={d.attention.items}
-              rowKey={(r) => r.id}
-              empty={d.drilldown.attention
-                ? { title: 'Tidak ada tiket mendesak', body: 'Tidak ada tiket aktif berprioritas Mendesak atau Tinggi.' }
-                : { title: 'Di luar filter prioritas', body: 'Filter prioritas aktif tidak mencakup Mendesak atau Tinggi.' }} />
-          </section>
         </>
       )}
       <p className="tiny muted source">
         Sumber: API ITSM, agregat server seluruh {scope} · per {instantLabel(d.asOf, d.period.timezone)}{' '}
-        {tzLabel(d.period.timezone)}{uat ? ' · data dummy UAT' : ''}
+        {tzLabel(d.period.timezone)}
       </p>
     </>
   );
 }
 
-function DimensionCard({ id, title, none, rows, received, periodText, ws }: {
-  id: string;
-  title: string;
-  none: string;
-  rows: Dashboard['channels'];
-  received: number;
-  periodText: string;
-  ws: string;
-}) {
+function StatusBars({ d }: { d: Dashboard }) {
+  const max = Math.max(0, ...d.statusDistribution.map((s) => s.count));
   return (
-    <section className="card" aria-labelledby={id}>
-      <h2 id={id}>{title}</h2>
-      <p className="tiny muted">Tiket diterima {periodText.toLowerCase()}</p>
-      {received === 0 ? (
-        <p className="muted">Tidak ada tiket diterima pada periode ini.</p>
-      ) : (
-        <ul className="plain">
-          {rows.map((c) => (
-            <li className="row between activity" key={c.id ?? 'none'}>
-              <a href={drilldownHash(ws, c.filter)}>{c.label ?? none}</a><b>{num(c.count)}</b>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <ul className="sbars" aria-label="Sebaran tiket menurut status">
+      {d.statusDistribution.map((s) => (
+        <li className="sbar" key={s.status.code}>
+          <a href={drilldownHash(d.workspaceId, s.filter)}>{s.status.label}</a>
+          <span className="track" aria-hidden="true">
+            <span className={s.status.code === 'resolved' ? 'fill ok' : 'fill'} style={{ width: `${barPercent(s.count, max)}%` }} />
+          </span>
+          <b>{num(s.count)}</b>
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function TrendTable({ d }: { d: Dashboard }) {
+function ChannelDonut({ d }: { d: Dashboard }) {
+  const slices = channelSlices(d.channels);
+  const total = slices.reduce((n, s) => n + s.count, 0);
+  if (total === 0) return <p className="muted">Tidak ada tiket diterima pada periode ini.</p>;
+  const summary = slices.map((s) => `${s.label} ${num(s.count)}`).join(', ');
   return (
-    <div className="tablebox" role="region" aria-label="Angka tren harian" tabIndex={0}>
-      <table>
-        <caption>Tiket diterima dan terselesaikan per hari ({tzLabel(d.period.timezone)})</caption>
-        <thead><tr><th scope="col">Tanggal</th><th scope="col">Diterima</th><th scope="col">Terselesaikan</th></tr></thead>
+    <div className="donut">
+      <div className="ring" role="img" aria-label={`Kanal masuk: ${summary}`} style={{ background: donutGradient(slices) }}>
+        <span aria-hidden="true">{num(total)}</span>
+      </div>
+      <ul className="legend">
+        {slices.map((s) => {
+          const row = d.channels.find((c) => (c.id ?? 'none') === s.key);
+          return (
+            <li key={s.key}>
+              <i aria-hidden="true" style={{ background: s.color }} />
+              {row ? <a href={drilldownHash(d.workspaceId, row.filter)}>{s.label}</a> : s.label}
+              <b>{num(s.count)}</b>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function QualityBars({ d }: { d: Dashboard }) {
+  return (
+    <ul className="qbars">
+      {dataQuality(d).map((q) => (
+        <li key={q.key}>
+          <span className="q-lbl">{q.label}<small>{q.basis}</small></span>
+          <span className="track" aria-hidden="true">
+            <span className="fill warn" style={{ width: `${barPercent(q.value, q.of)}%` }} />
+          </span>
+          <b>{num(q.value)}</b>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type AttentionState =
+  | { key: string; status: 'loading' }
+  | { key: string; status: 'error' }
+  | { key: string; status: 'success'; items: TicketListItem[]; total: number };
+
+/**
+ * CP-UI2b: active tickets without a PIC, oldest received first (the List API's own sort), at most
+ * ATTENTION_LIMIT rows. The scope is the server's "Belum ditugaskan" drilldown, so it follows the
+ * dashboard filters; a PIC filter makes it not applicable (the server sends no drilldown then).
+ */
+function AttentionTable({ api, d }: { api: Api; d: Dashboard }) {
+  const query = d.drilldown.unassigned ? attentionQuery(d.drilldown.unassigned) : null;
+  const key = query === null ? '' : `${d.workspaceId}|${query}|${d.asOf}`;
+  const [state, setState] = useState<AttentionState | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (query === null) return;
+    const c = new AbortController();
+    setState({ key, status: 'loading' });
+    api.listTickets(d.workspaceId, `${query}&limit=${ATTENTION_LIMIT}`, null, c.signal).then(
+      (res) => setState({ key, status: 'success', items: res.items.slice(0, ATTENTION_LIMIT), total: res.total }),
+      (e) => { if (!isAbort(e)) setState({ key, status: 'error' }); },
+    );
+    return () => c.abort();
+  }, [api, d.workspaceId, query, key, attempt]);
+
+  if (query === null) {
+    return <div className="bd"><EmptyState title="Tidak berlaku untuk filter PIC" body="Daftar tiket tanpa PIC tidak relevan saat filter PIC aktif." /></div>;
+  }
+  // Never show rows that belong to another workspace, filter or refresh.
+  const s = state && state.key === key ? state : { key, status: 'loading' as const };
+  if (s.status === 'loading') {
+    return <div className="bd" role="status"><span className="sr-only">Memuat tiket tanpa PIC…</span><div className="skeleton" aria-hidden="true" /><div className="skeleton" aria-hidden="true" /></div>;
+  }
+  if (s.status === 'error') {
+    return <div className="bd"><ErrorState title="Daftar belum dapat dimuat" body="Tiket tanpa PIC tidak ditampilkan karena permintaan gagal." onRetry={() => setAttempt((n) => n + 1)} /></div>;
+  }
+  if (s.items.length === 0) {
+    return <div className="bd"><EmptyState title="Semua tiket aktif sudah ada PIC" body="Tidak ada tiket aktif yang belum ditugaskan." /></div>;
+  }
+  return (
+    <div className="ptable" role="region" aria-label="Tiket perlu perhatian" tabIndex={0}>
+      <table className="attn">
+        <caption className="sr-only">Tiket aktif tanpa PIC · paling lama diterima dulu · {num(s.items.length)} dari {num(s.total)}</caption>
+        <thead><tr><th scope="col">Nomor</th><th scope="col">Subjek</th><th scope="col">Status</th><th scope="col">Umur</th></tr></thead>
         <tbody>
-          {d.trend.map((p) => (
-            <tr key={p.date}><td>{rangeLabel(p.date, p.date)}</td><td>{num(p.received)}</td><td>{num(p.resolved)}</td></tr>
+          {s.items.map((r) => (
+            <tr key={r.id}>
+              <td><a className="tno" href={toHash({ workspaceId: d.workspaceId, page: 'tickets', query: withDetail('', r.id, true) })}>{r.displayNumber}</a></td>
+              <td><span className="tsub">{r.subject}</span><span className="tmeta">{r.priority?.label ?? 'Tanpa prioritas'} · {r.category?.label ?? 'Tanpa kategori'}</span></td>
+              <td><Badge tone={statusTone(r.status)}>{r.status.label}</Badge></td>
+              <td className="nowrap"><b>{ageLabel(r.ageSeconds)}</b></td>
+            </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
 }
-
-const ATTENTION_COLUMNS: readonly Column<DashboardAttentionTicket>[] = [
-  {
-    key: 'ticket',
-    header: 'Nomor / tiket',
-    cell: (r) => <><b>{r.displayNumber}</b><span className="subject muted" title={r.subject}>{r.subject}</span></>,
-  },
-  { key: 'status', header: 'Status', cell: (r) => <Badge tone={statusTone(r.status)}>{r.status.label}</Badge> },
-  { key: 'priority', header: 'Prioritas', cell: (r) => r.priority?.label ?? '—' },
-  { key: 'owner', header: 'PIC', cell: (r) => r.owner?.label ?? 'Belum ditugaskan' },
-  { key: 'channel', header: 'Kanal', cell: (r) => r.channel?.label ?? '—' },
-  { key: 'category', header: 'Kategori', cell: (r) => r.category?.label ?? '—' },
-  { key: 'age', header: 'Umur', cell: (r) => ageLabel(r.ageSeconds) },
-];

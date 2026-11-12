@@ -1,8 +1,7 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   ActivityItem,
-  ConversationPanel,
   Note,
   AssignmentEvent,
   Catalogs,
@@ -24,23 +23,16 @@ import {
   type PropertiesForm,
 } from '../app/detail';
 import { newKey } from '../app/drafts';
-import { instantLabel, num } from '../app/format';
+import { ageLabel, instantLabel, num } from '../app/format';
+import { initials } from '../app/labels';
+import { priorityDot } from '../app/ticketView';
+import { Icon } from '../components/Icon';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { WordingAssistant } from '../components/WordingAssistant';
 import { Dialog } from '../components/Dialog';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState } from '../components/States';
-import { statusTone } from './DashboardPage';
-
-// D13: attachments are out of scope (owner decision); the Lampiran tab is not offered. The backend
-// endpoints, data and fail-closed scanner controls stay as they are.
-type Tab = 'summary' | 'activity' | 'work' | 'history';
-const TABS: readonly { id: Tab; label: string }[] = [
-  { id: 'summary', label: 'Ringkasan' },
-  { id: 'activity', label: 'Aktivitas' },
-  { id: 'work', label: 'Pekerjaan Jira' },
-  { id: 'history', label: 'Histori' },
-];
+import { statusTone } from '../components/Badge';
 
 type Load = { status: 'loading' } | { status: 'error'; error: unknown } | { status: 'ok'; detail: TicketDetail };
 
@@ -48,6 +40,11 @@ type Load = { status: 'loading' } | { status: 'error'; error: unknown } | { stat
  * C13 ticket detail: side peek (native modal dialog, 640 px) or full page, same data and the
  * same server permissions. Every save goes UI → API → DB and the screen shows what the server
  * answered; `refresh` re-reads after a status/PIC change made in another dialog.
+ * CP-UI2: owner prototype layout (header card with actions, two columns, no tabs; one column in
+ * the peek and below 1080 px). D13: attachments stay out of scope (no Lampiran section).
+ * CP-UI2b (04-tiket-detail): left = Kronologi, Catatan internal, Riwayat siklus, then the audit
+ * trail folded in a closed <details>; right = Atribut (with transaction fields), PIC, related work.
+ * The customer conversation card is gone (no omnichannel adapter; one info line in Kronologi).
  */
 export function TicketDetailView({ api, workspace, ticketId, full, refresh, canAssign, onClose, onToggleFull, onChanged, onTransition, onAssign }: {
   api: Api;
@@ -64,7 +61,9 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
 }) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
-  const [tab, setTab] = useState<Tab>('summary');
+  const [audit, setAudit] = useState(0);
+  const [escalate, setEscalate] = useState(0);
+  const [auditOpen, setAuditOpen] = useState(false);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -83,47 +82,100 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
     onChanged(d.ticket);
   };
   const title = t ? `${t.displayNumber} · ${t.subject}` : 'Detail tiket';
+  const tz = workspace.timezone;
+  const reload = () => setAttempt((n) => n + 1);
 
   const body = (
     <>
       {load.status === 'loading' && <LoadingState label="Memuat detail tiket…" />}
-      {load.status === 'error' && <DetailError error={load.error} onRetry={() => setAttempt((n) => n + 1)} />}
-      {detail && t && (
-        <>
-          <p className="tiny muted">{t.displayNumber} · Perusahaan pelapor {workspace.code}</p>
-          <div className="row detail-actions">
-            <Badge tone={statusTone(t.status)}>{t.status.label}</Badge>
-            {t.priority && <Badge tone={t.priority.label.toLowerCase().includes('tinggi') ? 'error' : 'neutral'}>{t.priority.label}</Badge>}
-            {!t.status.archived && t.allowedActions.length > 0 && (
-              <Button onClick={() => onTransition(t)}>Ubah status</Button>
+      {load.status === 'error' && <DetailError error={load.error} onRetry={reload} />}
+      {detail && t && (() => {
+        const p = detail.properties;
+        const open = !t.status.archived;
+        const canEscalate = detail.can.manageRelatedWork && open && t.status.code !== 'resolved';
+        return (
+          <>
+            <header className="dhead">
+              <div className="dhead-main">
+                <p className="dhead-id">
+                  <span className="dno">{t.displayNumber}</span>
+                  <Badge tone={statusTone(t.status)}>{t.status.label}</Badge>
+                  {t.priority && <span className={`pri ${priorityDot(t.priority.code)}`}><b aria-hidden="true" />{t.priority.label}</span>}
+                </p>
+                {full ? <h2 className="dtitle">{t.subject}</h2> : <p className="dtitle">{t.subject}</p>}
+                <p className="meta">
+                  <span>Merchant <b>{p.merchant?.label ?? '—'}</b></span>
+                  <span>Kanal <b>{p.intakeChannel?.label ?? '—'}</b></span>
+                  <span>Diterima <b>{instantLabel(p.receivedAt, tz)}</b></span>
+                  <span>Umur <b>{ageLabel(t.ageSeconds)}</b></span>
+                  <span>Siklus <b>{t.cycleNo}</b></span>
+                </p>
+              </div>
+              <div className="acts">
+                {canAssign && open && <Button onClick={() => onAssign(t)}><Icon name="user" size={16} /> Penugasan</Button>}
+                {canEscalate && <Button onClick={() => setEscalate((n) => n + 1)}><Icon name="chevron" size={16} /> Eskalasi</Button>}
+                {open && t.allowedActions.length > 0 && (
+                  <Button variant="primary" onClick={() => onTransition(t)}><Icon name="check" size={16} /> Ubah status</Button>
+                )}
+                {!full && <Button variant="ghost" onClick={onToggleFull}>↗ Halaman penuh</Button>}
+              </div>
+            </header>
+            {detail.can.readOnly && (
+              <p className="banner" role="note">Tiket ditutup adalah arsip historis read-only. Tidak ada perubahan yang dapat disimpan.</p>
             )}
-            {canAssign && !t.status.archived && <Button onClick={() => onAssign(t)}>Ubah PIC</Button>}
-            <Button variant="ghost" onClick={onToggleFull}>{full ? '↙ Side peek' : '↗ Halaman penuh'}</Button>
-          </div>
-          {detail.can.readOnly && (
-            <p className="banner" role="note">Tiket ditutup adalah arsip historis read-only. Tidak ada perubahan yang dapat disimpan.</p>
-          )}
-          <dl className="props">
-            <Prop k="PIC operasional">{t.owner?.label ?? 'Belum ditugaskan'}</Prop>
-            <Prop k="Kanal penerimaan">{detail.properties.intakeChannel?.label ?? '—'}</Prop>
-            <Prop k="Kategori">{detail.properties.category?.label ?? '—'}</Prop>
-            <Prop k="Merchant">{detail.properties.merchant?.label ?? '—'} <Badge tone="waiting">CIF ditunda</Badge></Prop>
-            <Prop k="Produk/instrumen">{detail.properties.product?.label ?? '—'}</Prop>
-            <Prop k="Unit penerima">{detail.properties.receivingUnit?.label ?? '—'}</Prop>
-            <Prop k="Wilayah">{detail.properties.region?.label ?? 'Belum dipetakan'}</Prop>
-            <Prop k="Tanggal penerimaan">{instantLabel(detail.properties.receivedAt, workspace.timezone)}</Prop>
-            <Prop k="Siklus">{`ke-${t.cycleNo} · versi ${t.version}`}</Prop>
-          </dl>
-          <DetailTabs tab={tab} onChange={setTab} panelId={`detail-panel-${ticketId}`} />
-          <div id={`detail-panel-${ticketId}`} role="tabpanel" aria-labelledby={`detail-tab-${tab}`} className="detail-panel">
-            {tab === 'summary' && <Summary api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={() => setAttempt((n) => n + 1)} />}
-            {tab === 'summary' && <Conversations api={api} workspace={workspace} ticketId={t.id} />}
-            {tab === 'activity' && <FollowUp api={api} workspace={workspace} detail={detail} />}
-            {tab === 'work' && <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={() => setAttempt((n) => n + 1)} />}
-            {tab === 'history' && <History api={api} workspace={workspace} detail={detail} />}
-          </div>
-        </>
-      )}
+            <div className="detail2">
+              <div className="dcol">
+                <Card id={`kron-${t.id}`} title="Kronologi" sub="disimpan sebagai teks bebas">
+                  <Summary api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={reload} />
+                </Card>
+                <Card id={`note-${t.id}`} title="Catatan internal" sub="tidak dikirim ke pelapor" tag="append-only">
+                  <FollowUp api={api} workspace={workspace} detail={detail} onAdded={() => setAudit((n) => n + 1)} />
+                </Card>
+                <Card id={`cycle-${t.id}`} title="Riwayat siklus" sub="resolve & reopen">
+                  <CycleTimeline workspace={workspace} detail={detail} />
+                </Card>
+                <details className="pcard audit-fold" open={auditOpen}
+                  onToggle={(e) => setAuditOpen((e.currentTarget as HTMLDetailsElement).open)}>
+                  <summary className="hd">
+                    <h3>Jejak audit</h3>
+                    <span className="sub">terbaru di atas</span>
+                    <span className="r"><Icon name="chevron" size={14} /></span>
+                  </summary>
+                  {/* Read only when opened: a closed fold costs no request. */}
+                  {auditOpen && (
+                    <div className="bd">
+                      <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} refresh={audit} />
+                    </div>
+                  )}
+                </details>
+              </div>
+              <div className="dcol">
+                <Card id={`attr-${t.id}`} title="Atribut">
+                  <dl className="kv">
+                    <dt>Kategori</dt><dd>{p.category?.label ?? '—'}</dd>
+                    <dt>Produk</dt><dd>{p.product?.label ?? '—'}</dd>
+                    <dt>Unit</dt><dd>{p.receivingUnit?.label ?? '—'}</dd>
+                    <dt>Wilayah</dt><dd>{p.region?.label ?? 'Belum dipetakan'}</dd>
+                    <dt>Channel</dt><dd>{p.intakeChannel?.label ?? '—'}</dd>
+                    <dt>Transaksi</dt><dd className={p.transactionActivity ? 'prewrap kv-text' : undefined}>{p.transactionActivity ?? '—'}</dd>
+                    {p.foreignBranchReference && <><dt>Ref. cabang LN</dt><dd>{p.foreignBranchReference}</dd></>}
+                    <dt>Merchant</dt><dd>{p.merchant?.label ?? '—'} <Badge tone="waiting">CIF ditunda</Badge></dd>
+                    <dt>Diterima</dt><dd>{instantLabel(p.receivedAt, tz)}</dd>
+                    <dt>Diperbarui</dt><dd>{instantLabel(t.updatedAt, tz)}</dd>
+                    <dt>Versi</dt><dd>{t.version}</dd>
+                  </dl>
+                </Card>
+                <Card id={`pic-${t.id}`} title="Penanggung jawab">
+                  <Owner api={api} workspace={workspace} detail={detail} canAssign={canAssign && open} onAssign={() => onAssign(t)} />
+                </Card>
+                <Card id={`work-${t.id}`} title="Pekerjaan terkait" sub={`${num(detail.relatedWork.length)} item`}>
+                  <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={reload} openSignal={escalate} />
+                </Card>
+              </div>
+            </div>
+          </>
+        );
+      })()}
     </>
   );
 
@@ -133,7 +185,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
         <div className="row between">
           <Button variant="ghost" onClick={onClose}>← Kembali ke daftar</Button>
         </div>
-        <h1 id="detail-page-title" className="detail-title">{title}</h1>
+        <h1 id="detail-page-title" className="sr-only">{title}</h1>
         {body}
       </section>
     );
@@ -145,8 +197,18 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
   );
 }
 
-function Prop({ k, children }: { k: string; children: ReactNode }) {
-  return <div className="props-row"><dt>{k}</dt><dd>{children}</dd></div>;
+/** Prototype `.card` with `.hd` (title, muted sub, optional tag on the right) and `.bd`. */
+function Card({ id, title, sub, tag, children }: { id: string; title: string; sub?: string; tag?: string; children: ReactNode }) {
+  return (
+    <section className="pcard" aria-labelledby={id}>
+      <header className="hd">
+        <h3 id={id}>{title}</h3>
+        {sub && <span className="sub">{sub}</span>}
+        {tag && <span className="r"><span className="chip-tag">{tag}</span></span>}
+      </header>
+      <div className="bd">{children}</div>
+    </section>
+  );
 }
 
 function DetailError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
@@ -156,30 +218,6 @@ function DetailError({ error, onRetry }: { error: unknown; onRetry: () => void }
   if (error instanceof ApiError && error.status === 403) return <ForbiddenState />;
   return <ErrorState title="Detail belum dapat dimuat" body={`${message(error)} Tidak ada data lama yang dipakai.`}
     requestId={error instanceof ApiError ? error.requestId : null} onRetry={onRetry} />;
-}
-
-/** Tablist with roving focus (arrow keys, Home/End), as the List/Board tabs. */
-function DetailTabs({ tab, onChange, panelId }: { tab: Tab; onChange: (t: Tab) => void; panelId: string }) {
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const onKey = (e: KeyboardEvent, i: number) => {
-    const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    const next = delta ? (i + delta + TABS.length) % TABS.length : e.key === 'Home' ? 0 : e.key === 'End' ? TABS.length - 1 : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    refs.current[next]?.focus();
-    onChange(TABS[next]!.id);
-  };
-  return (
-    <div className="tabs detail-tabs" role="tablist" aria-label="Bagian detail tiket">
-      {TABS.map((t, i) => (
-        <button key={t.id} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`detail-tab-${t.id}`}
-          aria-selected={tab === t.id} aria-controls={panelId} tabIndex={tab === t.id ? 0 : -1}
-          className={tab === t.id ? 'active' : undefined} onClick={() => onChange(t.id)} onKeyDown={(e) => onKey(e, i)}>
-          {t.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 type SaveError = { title: string; body: string; conflict: boolean };
@@ -288,24 +326,9 @@ function Summary({ api, workspace, detail, onSaved, onReload }: {
     return (
       <div>
         {notice && <p className="notice" role="status">{notice}</p>}
-        <div className="row between">
-          <h3>Kronologi pengaduan</h3>
-          {detail.can.editProperties && <Button onClick={startEdit}>Edit properti</Button>}
-        </div>
         <p className="prewrap">{p.chronology}</p>
-        <div className="sectionline">
-          <h3>Transaksi dan produk</h3>
-          <p className={p.transactionActivity ? 'prewrap' : 'muted'}>{p.transactionActivity ?? 'Belum diisi.'}</p>
-          <p className="tiny muted">Referensi cabang luar negeri: {p.foreignBranchReference ?? '—'}</p>
-        </div>
-        <div className="sectionline">
-          <h3>Penyebab dan hasil penanganan</h3>
-          <p className={p.cause ? 'prewrap' : 'muted'}>{p.cause ?? 'Belum ada hasil investigasi. Root cause tidak dipaksa saat intake.'}</p>
-        </div>
-        <div className="banner">
-          <h3>Konteks pelanggan dan percakapan</h3>
-          <p className="tiny">Identitas dari API CIF dan percakapan omnichannel belum tersambung. Nomor identitas tidak ditampilkan dan tidak perlu diketik ulang. Tidak ada pesan yang dikirim dari aplikasi ini.</p>
-        </div>
+        <p className="tiny muted">Identitas CIF dan percakapan omnichannel belum tersambung; tidak ada pesan yang dikirim dari aplikasi ini.</p>
+        {detail.can.editProperties && <div className="row"><Button className="btn-small" onClick={startEdit}>Edit properti</Button></div>}
       </div>
     );
   }
@@ -415,12 +438,14 @@ function Activity({ api, workspace, ticketId, version, refresh }: { api: Api; wo
   );
 }
 
-function Work({ api, workspace, detail, onSaved, onReload }: {
+function Work({ api, workspace, detail, onSaved, onReload, openSignal }: {
   api: Api;
   workspace: Workspace;
   detail: TicketDetail;
   onSaved: (d: TicketDetail) => void;
   onReload: () => void;
+  /** CP-UI2 "Eskalasi": each increment opens the add form and moves focus to its title field. */
+  openSignal: number;
 }) {
   const id = useId();
   const t = detail.ticket;
@@ -435,6 +460,17 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
   // One key per opened form: a resend after a lost answer replays instead of creating twice.
   const key = useRef(newKey());
   const resolvedOrClosed = t.status.code === 'resolved' || t.status.archived;
+  useEffect(() => {
+    if (!openSignal || !detail.can.manageRelatedWork || resolvedOrClosed) return;
+    if (!adding) key.current = newKey();
+    setAdding(true);
+    setNotice(null);
+    window.setTimeout(() => {
+      const el = document.getElementById(`${id}-title`);
+      el?.scrollIntoView({ block: 'center' });
+      el?.focus();
+    }, 0);
+  }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function add() {
     if (busy) return;
@@ -463,17 +499,14 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
   return (
     <div>
       {notice && <p className="notice" role="status">{notice}</p>}
-      <div className="row between">
-        <h3>Pekerjaan terkait</h3>
-        {detail.can.manageRelatedWork && !resolvedOrClosed && !adding && (
-          <Button onClick={() => { key.current = newKey(); setAdding(true); setNotice(null); }}>＋ Tambah pekerjaan</Button>
-        )}
-      </div>
+      {detail.can.manageRelatedWork && !resolvedOrClosed && !adding && (
+        <div className="row"><Button className="btn-small" onClick={() => { key.current = newKey(); setAdding(true); setNotice(null); }}>＋ Tambah pekerjaan</Button></div>
+      )}
       <p className="tiny muted">
         {num(t.relatedWork.open)} terbuka · {num(t.relatedWork.blockingOpen)} memblokir penyelesaian. Status Jira selesai tidak otomatis menyelesaikan pekerjaan atau pengaduan; penyelesaian dicatat orang dengan ringkasan dan bukti.
       </p>
       {adding && (
-        <form className="formgrid card" aria-label="Tambah pekerjaan terkait" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+        <form className="formgrid composer" aria-label="Tambah pekerjaan terkait (eskalasi)" onSubmit={(e) => { e.preventDefault(); void add(); }}>
           {error && <div className="full state-error" role="alert"><h3>{error.title}</h3><p>{error.body}</p>
             {error.conflict && <Button onClick={onReload}>Muat ulang detail</Button>}</div>}
           <div className="field full">
@@ -498,7 +531,7 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
         </form>
       )}
       {detail.relatedWork.length === 0
-        ? <p className="muted">Belum ada pekerjaan terkait.</p>
+        ? <p className="muted tiny">Belum ada pekerjaan terkait.</p>
         : detail.relatedWork.map((w) => (
           <WorkCard key={w.id} api={api} workspace={workspace} ticket={t} work={w}
             canComplete={detail.can.manageRelatedWork} onSaved={onSaved} onReload={onReload} />
@@ -598,8 +631,8 @@ function WorkCard({ api, workspace, ticket, work: w, canComplete, onSaved, onRel
   );
 }
 
-/** Aktivitas tab: operational follow-up notes (a ticket record, not team chat) above the audit trail. */
-function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; detail: TicketDetail }) {
+/** Catatan internal: append-only follow-up notes (a ticket record, not team chat). */
+function FollowUp({ api, workspace, detail, onAdded }: { api: Api; workspace: Workspace; detail: TicketDetail; onAdded: () => void }) {
   const id = useId();
   const t = detail.ticket;
   const [notes, setNotes] = useState<Note[] | null>(null);
@@ -610,7 +643,8 @@ function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; 
   const [error, setError] = useState<SaveError | null>(null);
   const [fieldErr, setFieldErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [audit, setAudit] = useState(0);
+  // CP-UI2b: the GPT assistant panel opens only on "Bantu tulis" (prototype); closed by default.
+  const [assist, setAssist] = useState(false);
   // One key per draft: resending the same text after a lost answer replays (200) instead of duplicating.
   const key = useRef(newKey());
   const ctl = useRef<AbortController | null>(null);
@@ -639,7 +673,7 @@ function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; 
       key.current = newKey();
       setNotice(res.replayed ? 'Catatan ini sudah tersimpan sebelumnya; tidak dicatat dua kali.' : 'Catatan tersimpan dan tercatat di audit.');
       setNotes((old) => [res.note, ...(old ?? []).filter((n) => n.id !== res.note.id)]);
-      setAudit((n) => n + 1);
+      onAdded();
     } catch (e) {
       setBusy(false);
       if (e instanceof ApiError && e.field === 'body') setFieldErr(e.message);
@@ -650,92 +684,53 @@ function FollowUp({ api, workspace, detail }: { api: Api; workspace: Workspace; 
   const tz = workspace.timezone;
   return (
     <div>
-      <h3>Tindak lanjut operasional</h3>
-      <p className="tiny muted">Catatan penanganan tiket, bukan chat tim. Jangan menulis identitas atau data rahasia nasabah.</p>
       {notice && <p className="notice" role="status">{notice}</p>}
-      {detail.can.addNote ? (
-        <form className="formgrid" aria-label="Tambah catatan tindak lanjut" onSubmit={(e) => { e.preventDefault(); void add(); }}>
-          {error && <div className="full state-error" role="alert"><h3>{error.title}</h3><p>{error.body}</p></div>}
-          <div className="field full">
-            <label htmlFor={`${id}-note`}>Catatan tindak lanjut *</label>
-            <textarea id={`${id}-note`} className="field-control" value={text} maxLength={LIMITS.note} disabled={busy}
-              aria-invalid={fieldErr ? true : undefined} aria-describedby={fieldErr ? `${id}-note-err` : undefined}
-              onChange={(e) => { setText(e.target.value); setFieldErr(null); setNotice(null); }} />
-            {fieldErr && <span id={`${id}-note-err`} className="field-error">{fieldErr}</span>}
-          </div>
-          <div className="full"><WordingAssistant key={`${workspace.id}:${detail.ticket.id}`} api={api} workspaceId={workspace.id} text={text}
-            mode="reply" disabled={busy} onApply={setText} /></div>
-          <div className="full row">
-            <Button variant="primary" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
-          </div>
-        </form>
-      ) : (
-        <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: catatan baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat menambah catatan.'}</p>
-      )}
       {loadError && !notes ? <ErrorState title="Catatan belum dapat dimuat" body={message(loadError)} onRetry={() => page(null)} />
         : !notes ? <LoadingState label="Memuat catatan…" rows={2} />
-          : notes.length === 0 ? <p className="muted">Belum ada catatan tindak lanjut.</p> : (
-            <ol className="plain" aria-label="Catatan tindak lanjut">
+          : notes.length === 0 ? <p className="muted tiny">Belum ada catatan.</p> : (
+            <ol className="plain notes" aria-label="Catatan internal">
               {notes.map((n) => (
-                <li key={n.id} className="activity">
-                  <p className="prewrap">{n.body}</p>
-                  <span className="tiny muted">{instantLabel(n.createdAt, tz)} · oleh {n.author.label}</span>
+                <li key={n.id} className="note">
+                  <span className="cell-av" aria-hidden="true">{initials(n.author.label)}</span>
+                  <div>
+                    <p className="note-by"><b>{n.author.label}</b> <span className="tiny muted">{instantLabel(n.createdAt, tz)}</span></p>
+                    <p className="prewrap">{n.body}</p>
+                  </div>
                 </li>
               ))}
             </ol>
           )}
       {loadError && notes ? <p className="field-error" role="alert">{message(loadError)}</p> : null}
       {next && <Button onClick={() => page(next)}>Muat catatan lebih lama</Button>}
-      <h3 className="spaced">Jejak audit</h3>
-      <Activity api={api} workspace={workspace} ticketId={t.id} version={t.version} refresh={audit} />
+      {detail.can.addNote ? (
+        <form className="formgrid composer" aria-label="Tambah catatan internal" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+          {error && <div className="full state-error" role="alert"><h3>{error.title}</h3><p>{error.body}</p></div>}
+          <div className="field full">
+            <label htmlFor={`${id}-note`} className="sr-only">Catatan penanganan (wajib)</label>
+            <textarea id={`${id}-note`} className="field-control" value={text} maxLength={LIMITS.note} disabled={busy}
+              placeholder="Tulis catatan penanganan…"
+              aria-invalid={fieldErr ? true : undefined} aria-describedby={fieldErr ? `${id}-note-err` : undefined}
+              onChange={(e) => { setText(e.target.value); setFieldErr(null); setNotice(null); }} />
+            {fieldErr && <span id={`${id}-note-err`} className="field-error">{fieldErr}</span>}
+          </div>
+          <div className="full row between">
+            <span className="tiny muted">Maks. {num(LIMITS.note)} karakter · catatan tidak dapat diubah setelah disimpan · jangan menulis identitas atau data rahasia nasabah</span>
+            <span className="row">
+              <Button className="btn-small" aria-expanded={assist} aria-controls={`${id}-assist`} onClick={() => setAssist((v) => !v)}>
+                <span aria-hidden="true">✦</span> Bantu tulis
+              </Button>
+              <Button variant="primary" className="btn-small" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Menyimpan…' : 'Simpan catatan'}</Button>
+            </span>
+          </div>
+          <div className="full" id={`${id}-assist`} hidden={!assist}>
+            {assist && <WordingAssistant key={`${workspace.id}:${detail.ticket.id}`} api={api} workspaceId={workspace.id} text={text}
+              mode="reply" disabled={busy} onApply={setText} />}
+          </div>
+        </form>
+      ) : (
+        <p className="tiny muted">{detail.can.readOnly ? 'Tiket ditutup: catatan baru tidak dapat ditambahkan.' : 'Peran Anda tidak dapat menambah catatan.'}</p>
+      )}
     </div>
-  );
-}
-
-const DELIVERY_LABEL: Record<string, string> = {
-  received: 'Diterima', queued: 'Antre (belum terkirim)', sent: 'Terkirim ke provider', delivered: 'Sampai', failed: 'Gagal', unknown: 'Belum diketahui',
-};
-
-/** Customer conversation: read-only. No omnichannel adapter exists in this build, so nothing can be sent. */
-function Conversations({ api, workspace, ticketId }: { api: Api; workspace: Workspace; ticketId: string }) {
-  const [panel, setPanel] = useState<ConversationPanel | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    const c = new AbortController();
-    setError(null);
-    api.getTicketConversations(workspace.id, ticketId, c.signal).then(setPanel, (e: unknown) => { if (!isAbort(e)) setError(e); });
-    return () => c.abort();
-  }, [api, workspace.id, ticketId, attempt]);
-  const tz = workspace.timezone;
-  return (
-    <section className="spaced" aria-labelledby={`conv-${ticketId}`}>
-      <h3 id={`conv-${ticketId}`}>Percakapan pelanggan</h3>
-      {error ? <ErrorState title="Percakapan belum dapat dimuat" body={message(error)} onRetry={() => setAttempt((n) => n + 1)} />
-        : !panel ? <LoadingState label="Memuat percakapan…" rows={1} /> : (
-          <>
-            {!panel.adapterConfigured && (
-              <p className="banner" role="note">Kanal omnichannel belum tersambung. Percakapan hanya dapat dibaca; pesan tidak dapat dikirim dari sini.</p>
-            )}
-            {panel.conversations.length === 0 ? <p className="muted">Belum ada percakapan tercatat untuk tiket ini.</p>
-              : panel.conversations.map((cv) => (
-                <article key={cv.id} className="card" aria-label={`Percakapan ${cv.channelLabel}`}>
-                  <p className="tiny">{cv.channelLabel} · utas {cv.externalThreadId} <Badge tone="waiting">SIMULASI</Badge></p>
-                  <ol className="plain">
-                    {cv.messages.map((m) => (
-                      <li key={m.id} className="activity">
-                        <strong>{m.direction === 'inbound' ? 'Pelanggan' : 'Petugas'}</strong>
-                        <span className="tiny muted"> · {instantLabel(m.occurredAt, tz)} · {DELIVERY_LABEL[m.deliveryState] ?? m.deliveryState}</span>
-                        <p className="prewrap tiny">{m.body}</p>
-                      </li>
-                    ))}
-                  </ol>
-                </article>
-              ))}
-            {panel.truncated && <p className="tiny muted">Hanya percakapan terbaru yang ditampilkan.</p>}
-          </>
-        )}
-    </section>
   );
 }
 
@@ -745,7 +740,46 @@ const KIND_LABEL: Record<AssignmentEvent['kind'], string> = {
   reassign: 'Dialihkan',
 };
 
-function History({ api, workspace, detail }: { api: Api; workspace: Workspace; detail: TicketDetail }) {
+/**
+ * Riwayat siklus: creation, then every resolve/reopen recorded by the server (oldest first);
+ * CP-UI2b: the ticket's "Penyebab dan hasil penanganan" closes the list, only when it is filled.
+ */
+function CycleTimeline({ workspace, detail }: { workspace: Workspace; detail: TicketDetail }) {
+  const tz = workspace.timezone;
+  const p = detail.properties;
+  const start = [p.intakeChannel?.label, p.category?.label].filter(Boolean).join(' · ');
+  return (
+    <ol className="tl" aria-label="Riwayat siklus">
+      <li>
+        <b>Tiket dibuat · siklus ke-1</b>
+        <span className="tiny muted">{instantLabel(p.receivedAt, tz)}{start ? ` · ${start}` : ''}</span>
+      </li>
+      {detail.resolutions.map((r) => (
+        <li key={r.id} className={r.action === 'resolve' ? 'ok' : 'warn'}>
+          <b>{r.action === 'resolve' ? 'Diselesaikan' : 'Dibuka ulang'} · siklus ke-{r.cycleNo}</b>
+          <span className="tiny muted">{instantLabel(r.at, tz)}{r.actor ? ` · oleh ${r.actor.label}` : ''}</span>
+          {r.summary && <p className="tiny prewrap">{r.summary}</p>}
+        </li>
+      ))}
+      {detail.resolutions.length === 0 && <li className="empty-tl"><span className="tiny muted">Belum pernah diselesaikan.</span></li>}
+      {p.cause && (
+        <li className="ok">
+          <b>Penyebab &amp; hasil penanganan</b>
+          <p className="tiny prewrap">{p.cause}</p>
+        </li>
+      )}
+    </ol>
+  );
+}
+
+/** Penanggung jawab: current PIC, the existing assign dialog, and the PIC history from the API. */
+function Owner({ api, workspace, detail, canAssign, onAssign }: {
+  api: Api;
+  workspace: Workspace;
+  detail: TicketDetail;
+  canAssign: boolean;
+  onAssign: () => void;
+}) {
   const [assign, setAssign] = useState<AssignmentEvent[] | null | 'error'>(null);
   const t = detail.ticket;
   useEffect(() => {
@@ -758,27 +792,22 @@ function History({ api, workspace, detail }: { api: Api; workspace: Workspace; d
   const tz = workspace.timezone;
   return (
     <div>
-      <h3>Resolusi dan pembukaan ulang</h3>
-      {detail.resolutions.length === 0 ? <p className="muted">Belum pernah diselesaikan.</p> : (
-        <ol className="plain">
-          {detail.resolutions.map((r) => (
-            <li key={r.id} className="activity">
-              <strong>{r.action === 'resolve' ? 'Diselesaikan' : 'Dibuka ulang'} · siklus ke-{r.cycleNo}</strong>
-              <span className="tiny muted"> · {instantLabel(r.at, tz)}{r.actor ? ` · oleh ${r.actor.label}` : ''}</span>
-              <p className="tiny prewrap">{r.summary}</p>
-            </li>
-          ))}
-        </ol>
-      )}
-      <h3 className="spaced">Riwayat PIC</h3>
+      {t.owner ? (
+        <p className="cell-pic owner-now">
+          <span className="cell-av" aria-hidden="true">{initials(t.owner.label)}</span>
+          <span><b>{t.owner.label}</b><span className="tiny muted"> · PIC saat ini</span></span>
+        </p>
+      ) : <p className="muted tiny">Belum ditugaskan. Gunakan Penugasan untuk menetapkan PIC.</p>}
+      {canAssign && <div className="row"><Button className="btn-small" onClick={onAssign}>{t.owner ? 'Ubah PIC' : 'Tetapkan PIC'}</Button></div>}
+      <h4 className="eyebrow-h">Riwayat PIC</h4>
       {assign === null ? <p className="muted tiny" role="status">Memuat riwayat…</p>
         : assign === 'error' ? <p className="field-error" role="alert">Riwayat PIC belum dapat dimuat.</p>
           : assign.length === 0 ? <p className="muted tiny">Belum ada perubahan PIC tercatat.</p> : (
-            <ol className="plain">
+            <ol className="tl" aria-label="Riwayat PIC">
               {assign.map((h) => (
-                <li key={h.id} className="activity">
-                  <strong>{KIND_LABEL[h.kind]}</strong>
-                  <span className="tiny muted"> · {instantLabel(h.at, tz)}{h.actor ? ` · oleh ${h.actor.label}` : ''}</span>
+                <li key={h.id}>
+                  <b>{KIND_LABEL[h.kind]}</b>
+                  <span className="tiny muted">{instantLabel(h.at, tz)}{h.actor ? ` · oleh ${h.actor.label}` : ''}</span>
                   <p className="tiny">{h.from?.label ?? 'Belum ditugaskan'} → {h.to?.label ?? 'Belum ditugaskan'}</p>
                   {h.reason && <p className="tiny muted">Alasan: {h.reason}</p>}
                 </li>

@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { isWorkspace } from '../api/guards';
 import type { Workspace } from '../api/types';
-import { BRAND_PRESETS, CANVAS, INK, MUTED, NEUTRAL, activeBrand, contrast, pageTitle } from './brand';
+import { BRAND_PRESETS, THEME, activeBrand, contrast, pageTitle } from './brand';
 
 const ws: Workspace = {
   id: 'a1e8dd4a-a301-42f1-ac2a-58db5c57811b', code: 'DUMA', name: 'Workspace A (dummy)', timezone: 'Asia/Jakarta',
   companyId: 'c1', version: 3, myRole: 'cs', brandKey: 'deca', brandName: 'PT Dummy Alfa (uji)',
 };
+const css = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8').toLowerCase();
+const overrides = readFileSync(new URL('../styles/workspace.css', import.meta.url), 'utf8').toLowerCase();
 
 describe('D15 company branding', () => {
   it('resolves the preset of the listed workspace, neutral without one', () => {
@@ -30,43 +32,42 @@ describe('D15 company branding', () => {
       expect(isWorkspace({ ...ws, brandKey: bad })).toBe(false);
     }
     expect(isWorkspace({ ...ws, brandName: null })).toBe(false);
+    expect(Object.keys(BRAND_PRESETS).sort()).toEqual(['ajr', 'bmt', 'deca']);
+  });
+});
+
+describe('CP-UI1 owner prototype theme', () => {
+  it('keeps text, buttons, nav and chips readable (WCAG AA 4.5:1)', () => {
+    const t = THEME;
+    expect(contrast('#ffffff', t.sapphire)).toBeGreaterThanOrEqual(7); // primary button, sidebar
+    expect(contrast('#ffffff', t.sapphire800)).toBeGreaterThanOrEqual(7); // primary hover
+    expect(contrast(t.sapphire, t.green)).toBeGreaterThanOrEqual(4.5); // active nav item
+    expect(contrast(t.navIdle, t.sapphire)).toBeGreaterThanOrEqual(4.5); // idle nav item
+    expect(contrast(t.navCaption, t.sapphire)).toBeGreaterThanOrEqual(4.5); // group captions
+    for (const bg of ['#ffffff', t.canvas]) {
+      expect(contrast(t.ink, bg)).toBeGreaterThanOrEqual(7);
+      expect(contrast(t.ink2, bg)).toBeGreaterThanOrEqual(7);
+      expect(contrast(t.muted, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+    // Secondary text also sits on the sapphire-100 brief panel and the board columns (axe CP-UI1).
+    for (const bg of [t.sapphire100, '#eef2f6']) expect(contrast(t.muted, bg)).toBeGreaterThanOrEqual(4.5);
+    // Status chips: [text, background] as in app.css.
+    for (const [fg, bg] of [['#1b4ea8', '#e8f1fe'], [t.sapphire, t.sapphire100], ['#8a5b00', '#fef3d7'],
+      ['#5b21b6', '#efeafe'], ['#12693a', '#e6f7e9'], ['#516176', '#eef2f6'], ['#a22b2b', '#fdecec']] as const) {
+      expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 
-  it('keeps text and buttons readable in every theme (WCAG AA 4.5:1)', () => {
-    for (const t of [...Object.values(BRAND_PRESETS), NEUTRAL]) {
-      expect(contrast('#ffffff', t.accent)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast('#ffffff', t.accentHover)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(INK, t.soft)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(t.accent, t.soft)).toBeGreaterThanOrEqual(4.5);
-      // D16: active nav item and the primary KPI card (white text, hint at 86% opacity → test plain white).
-      expect(contrast(t.navInk, t.navCurrent)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast('#ffffff', t.kpi)).toBeGreaterThanOrEqual(7);
-    }
-    for (const bg of ['#ffffff', CANVAS, '#faf7f1']) {
-      expect(contrast(INK, bg)).toBeGreaterThanOrEqual(7);
-      expect(contrast(MUTED, bg)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast('#63726c', bg)).toBeGreaterThanOrEqual(4.5); // idle nav text
-    }
-  });
-
-  it('the stylesheet carries the same preset colours as the registry', () => {
-    const css = readFileSync(new URL('../styles/app.css', import.meta.url), 'utf8').toLowerCase();
-    const overrides = readFileSync(new URL('../styles/workspace.css', import.meta.url), 'utf8');
-    expect(overrides).not.toMatch(/--(?:accent|accent-hover|nav-current|nav-ink|kpi)\s*:/);
-    for (const p of Object.values(BRAND_PRESETS)) {
-      const block = css.slice(css.indexOf(`:root[data-brand='${p.key}']`));
-      const rule = block.slice(0, block.indexOf('}'));
-      expect(rule).toContain(`--accent: ${p.accent}`);
-      expect(rule).toContain(`--accent-hover: ${p.accentHover}`);
-      expect(rule).toContain(`--soft: ${p.soft}`);
-      expect(rule).toContain(`--nav-current: ${p.navCurrent}`);
-      expect(rule).toContain(`--nav-ink: ${p.navInk}`);
-      expect(rule).toContain(`--kpi: ${p.kpi}`);
-    }
-    expect(css).toContain(`--accent: ${NEUTRAL.accent}`);
-    for (const v of [`--nav-current: ${NEUTRAL.navCurrent}`, `--nav-ink: ${NEUTRAL.navInk}`, `--kpi: ${NEUTRAL.kpi}`,
-      `--ink: ${INK}`, `--muted: ${MUTED}`, `--canvas: ${CANVAS}`, '--nav-ink-idle: #63726c']) {
+  it('the stylesheet carries the theme tokens, one theme for every company', () => {
+    for (const v of [`--sapphire: ${THEME.sapphire}`, `--sapphire-800: ${THEME.sapphire800}`, `--sapphire-100: ${THEME.sapphire100}`,
+      `--green: ${THEME.green}`, `--eco: ${THEME.eco}`, `--canvas: ${THEME.canvas}`, `--ink: ${THEME.ink}`,
+      `--ink-2: ${THEME.ink2}`, `--muted: ${THEME.muted}`, `--nav-idle: ${THEME.navIdle}`, `--nav-caption: ${THEME.navCaption}`,
+      `--line: ${THEME.line}`, '--accent: var(--sapphire)', '--radius-control: 9px', '--radius-card: 14px']) {
       expect(css).toContain(v);
     }
+    // No per-company colour blocks, and the old operational blue is no longer the primary.
+    expect(css + overrides).not.toContain('[data-brand');
+    expect(css + overrides).not.toMatch(/--action-blue|#075bc7|#0057c8/);
+    expect(overrides).not.toMatch(/--(?:accent|sapphire|canvas|ink|muted)\s*:/);
   });
 });

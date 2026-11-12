@@ -478,6 +478,7 @@ pub async fn create_company(
     payload: Result<Json<CompanyCreate>, JsonRejection>,
 ) -> Result<(StatusCode, Json<CompanyResult>), AppError> {
     superadmin(&state, &s)?;
+    authz::require_step_up(&state, &s)?;
     let b = body(payload)?;
     let code = company_code(&b.code)?;
     let name = text(&b.name, 200, "name")?;
@@ -574,6 +575,7 @@ pub async fn set_company_active(
     payload: Result<Json<CompanyActivation>, JsonRejection>,
 ) -> Result<Json<CompanyResult>, AppError> {
     superadmin(&state, &s)?;
+    authz::require_step_up(&state, &s)?;
     let company = parse_id(&raw)?;
     let b = body(payload)?;
     let mut tx = state.pool.begin().await?;

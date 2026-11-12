@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { useEffect, useId, useRef, useState, type DragEvent } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
   CatalogItem,
@@ -24,6 +24,8 @@ import {
   toHash,
   canonicalColumns,
   COLUMN_LABELS,
+  DEFAULT_TICKET_COLUMNS,
+  isDefaultColumns,
   TICKET_COLUMNS,
   type TicketColumn,
   type TicketFilterKey,
@@ -31,15 +33,21 @@ import {
   type TicketSort,
   type TicketView,
   withDetail,
+  NEW_TICKET_FLAG,
 } from '../app/routes';
-import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { PageHeader } from '../components/PageHeader';
 import { Popover } from '../components/Popover';
 import { EmptyState, ErrorState, ForbiddenState, NotFoundState } from '../components/States';
+import { Badge, statusTone } from '../components/Badge';
+import { Icon } from '../components/Icon';
+import { initials } from '../app/labels';
 import { planDrop } from '../app/boardDnd';
-import { statusTone } from './DashboardPage';
+import {
+  activePreset, allStatusCount, applyPreset, pageRange, PRESET_LABELS, presetsFor, priorityDot, shortInstant,
+  urgentPriorityId, type TicketPreset,
+} from '../app/ticketView';
 import { AssignDialog } from './AssignDialog';
 import { IntakeDialog } from './IntakeDialog';
 import { SavedViews } from './SavedViews';
@@ -64,6 +72,9 @@ const SORT_LABELS: Record<TicketSort, string> = {
   number: 'Nomor tiket',
 };
 
+/** CP-UI2b: short labels for the compact sort control (its accessible name says "Urutkan"). */
+const SORT_SHORT: Record<TicketSort, string> = { updated_at: 'Diperbarui', received_at: 'Diterima', number: 'Nomor' };
+
 const SEARCH_DEBOUNCE_MS = 300;
 
 type DimKey = 'owner' | 'channel' | 'category' | 'priority';
@@ -73,6 +84,10 @@ const DIMENSIONS: readonly { key: DimKey; label: string; unset: { value: string;
   { key: 'category', label: 'Kategori', unset: { value: 'none', label: 'Tanpa kategori' } },
   { key: 'priority', label: 'Prioritas', unset: { value: 'none', label: 'Tanpa prioritas' } },
 ];
+
+/** CP-UI2: shown as selects in the toolbar row (prototype order); the rest stay in the Filter popover. */
+const INLINE_DIMS: readonly DimKey[] = ['priority', 'category', 'owner'];
+const INLINE_ALL: Record<DimKey, string> = { priority: 'Semua prioritas', category: 'Semua kategori', owner: 'Semua PIC', channel: 'Semua kanal' };
 
 function dimOptions(o: TicketOptions | null, k: DimKey): { id: string; label: string; active: boolean }[] {
   if (!o) return [];
@@ -103,7 +118,6 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   const [transition, setTransition] = useState<{ ticket: TicketListItem; to: TicketStatusCode | null } | null>(null);
   const dp = parseDetailQuery(query);
   const [detailRefresh, setDetailRefresh] = useState(0);
-  const [createOpen, setCreateOpen] = useState(false);
   const [assign, setAssign] = useState<TicketListItem | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
@@ -113,6 +127,18 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   const tz = workspace.timezone;
   const data = state.status === 'success' ? state.data : null;
   const canCreate = permissions.permissions.includes('ticket.create');
+  // CP-UI3: "Tiket baru" is its own page (06) at tickets?new=1, so Back and reload keep it.
+  // Without ticket.create the flag is only dropped (replace).
+  const wantsNew = new URLSearchParams(query).get(NEW_TICKET_FLAG) === '1';
+  useEffect(() => {
+    if (wantsNew && !canCreate) navigate(toHash({ workspaceId: workspace.id, page: 'tickets', query: ticketQuery(params) }), true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one shot per flag
+  }, [wantsNew, canCreate]);
+  const openCreate = () => {
+    const q = new URLSearchParams(ticketQuery(params));
+    q.set(NEW_TICKET_FLAG, '1');
+    navigate(toHash({ workspaceId: workspace.id, page: 'tickets', query: q.toString() }));
+  };
   const canAssign = permissions.permissions.includes('ticket.assign_any') || permissions.permissions.includes('ticket.assign_self');
 
   // Server labels seen so far (status select keeps working while the next answer loads).
@@ -185,17 +211,57 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
     );
   }
 
-  return (
-    <>
-      <PageHeader eyebrow="Case management" title="Tiket"
-        description={`Satu daftar pengaduan ${workspace.name}, dua cara melihat pekerjaan.`}
-        action={canCreate ? <Button variant="primary" onClick={() => setCreateOpen(true)}>＋ Buat tiket</Button> : undefined} />
-      <ViewTabs view={params.view} onChange={(view) => go({ ...params, view })} panelId="ticket-panel" />
+  if (wantsNew && canCreate) {
+    return (
+      <>
+        <PageHeader title="Tiket baru" description="Formulir internal CS — kanal dipilih eksplisit, kontak pelapor dicatat pada kronologi"
+          action={<Button onClick={() => go(params)}>Batal</Button>} />
+        <IntakeDialog asPage api={api} workspace={workspace} userId={userId} permissions={permissions}
+          onClose={() => go(params)}
+          onCreated={(r) => {
+            setNotice(`${r.ticket.displayNumber} ${r.replayed ? 'sudah tersimpan sebelumnya (kiriman ulang dikenali)' : 'tersimpan'}. Daftar dimuat ulang dari server.`);
+            reload();
+          }} />
+      </>
+    );
+  }
+
+  const total = data ? (data.view === 'list' ? data.list.total : data.board.total) : null;
+  const urgentId = options ? urgentPriorityId(options.priorities) : null;
+  const boardMode = params.view === 'board';
+  const newButton = canCreate ? <Button variant="primary" onClick={openCreate}><Icon name="plus" size={16} /> Tiket baru</Button> : null;
+  const toolbar = (
       <Toolbar api={api} workspaceId={workspace.id} params={params} options={options} tz={tz} statusLabel={statusLabel}
         searchRef={searchRef} onFilter={setFilter}
         onClear={(keys) => go({ ...params, filters: { ...params.filters, ...Object.fromEntries(keys.map((k) => [k, null])) } })}
         onSort={(sort, order) => go({ ...params, sort, order })}
         onApply={(p) => go(p)} activeCount={active.length} onReset={reset} />
+  );
+  return (
+    <>
+      {boardMode ? (
+        <PageHeader title="Board" description="Pandangan per status · kartu dapat diseret antar kolom"
+          action={(
+            <div className="ph-acts">
+              <Button onClick={() => go({ ...params, view: 'list' })}><Icon name="tickets" size={16} /> Tampilan daftar</Button>
+              {newButton}
+            </div>
+          )} />
+      ) : (
+        <PageHeader title="Tiket"
+          description={total === null
+            ? `Daftar pengaduan ${workspace.name}`
+            : `${num(total)} tiket · diurutkan berdasarkan ${SORT_LABELS[params.sort].toLowerCase()} ${params.order === 'asc' ? '(naik)' : '(turun)'}`}
+          action={newButton ?? undefined} />
+      )}
+      <section className={boardMode ? 'board-page' : 'pcard list-card'} aria-label={boardMode ? 'Board tiket' : 'Daftar dan filter tiket'}>
+      {boardMode ? (
+        <details className="dashboard-filter-panel board-filter-panel" open={active.length > 0 || undefined}>
+          <summary><span className="filter-heading"><Icon name="filter" size={16} /> Filter & urutan</span>
+            <span className="filter-summary">{active.length ? `${active.length} filter aktif` : 'Semua tiket'}<Icon name="chevron" size={14} /></span></summary>
+          {toolbar}
+        </details>
+      ) : toolbar}
       <p className="sr-only" role="status" aria-live="polite">
         {notice ?? (data ? `${num(data.view === 'list' ? data.list.total : data.board.total)} tiket dimuat.` : '')}
       </p>
@@ -205,7 +271,7 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
           <Button variant="ghost" onClick={() => setNotice(null)}>Tutup</Button>
         </div>
       )}
-      <div id="ticket-panel" role="tabpanel" aria-label={params.view === 'list' ? 'List tiket' : 'Board status'}>
+      <div id="ticket-panel">
         {state.status === 'loading' && <TicketSkeleton view={params.view} />}
         {state.status === 'error' && (
           <TicketError error={state.error} onRetry={() => { searchRef.current?.focus(); reload(); }}
@@ -214,18 +280,21 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
         {data?.view === 'list' && (
           <ListView key={state.status === "success" ? state.key : ""} api={api} workspace={workspace} list={data.list} params={params}
             apiQuery={apiQuery} filtered={active.length > 0} canCreate={canCreate}
+            presets={presetsFor(urgentId)} preset={activePreset(params.filters, userId, urgentId)}
+            onPreset={(p) => go({ ...params, filters: applyPreset(params.filters, p, userId, urgentId) })}
             onSort={(sort) => go({ ...params, sort, order: params.sort === sort && params.order === 'desc' ? 'asc' : 'desc' })}
-            onStatus={(code) => setFilter('status', params.filters.status === code ? null : code)}
+            onStatus={(code) => setFilter('status', code && params.filters.status !== code ? code : null)}
             onOpen={openDetail} onTransition={(t) => setTransition({ ticket: t, to: null })}
-            onReset={reset} onCreate={() => setCreateOpen(true)} />
+            onReset={reset} onCreate={openCreate} />
         )}
         {data?.view === 'board' && (
           <BoardView key={state.status === "success" ? state.key : ""} api={api} workspace={workspace} board={data.board} apiQuery={apiQuery}
             filtered={active.length > 0} canCreate={canCreate}
             onOpen={openDetail} onTransition={(t, to) => setTransition({ ticket: t, to })}
-            onRefused={setNotice} onReset={reset} onCreate={() => setCreateOpen(true)} />
+            onRefused={setNotice} onReset={reset} onCreate={openCreate} />
         )}
       </div>
+      </section>
       {transition && (
         <TransitionDialog api={api} workspace={workspace} ticket={transition.ticket} initialTo={transition.to}
           onClose={() => setTransition(null)} onDone={onDone} onReloadList={reload} />
@@ -241,53 +310,17 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
         <AssignDialog api={api} workspace={workspace} userId={userId} permissions={permissions} ticket={assign}
           onClose={() => setAssign(null)} onDone={onDone} onReloadList={reload} />
       )}
-      {createOpen && (
-        <IntakeDialog api={api} workspace={workspace} userId={userId} permissions={permissions}
-          onClose={() => setCreateOpen(false)}
-          onCreated={(r) => {
-            setNotice(`${r.ticket.displayNumber} ${r.replayed ? 'sudah tersimpan sebelumnya (kiriman ulang dikenali)' : 'tersimpan'}. Daftar dimuat ulang dari server.`);
-            reload();
-          }} />
-      )}
     </>
-  );
-}
-
-/** C04: tablist with roving focus; switching keeps every filter (only `view` changes in the URL). */
-function ViewTabs({ view, onChange, panelId }: { view: TicketView; onChange: (v: TicketView) => void; panelId: string }) {
-  const tabs: readonly { id: TicketView; label: string }[] = [
-    { id: 'list', label: 'List tiket' },
-    { id: 'board', label: 'Board status' },
-  ];
-  const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  const onKey = (e: KeyboardEvent, i: number) => {
-    const delta = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    const next = delta ? (i + delta + tabs.length) % tabs.length : e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : -1;
-    if (next < 0) return;
-    e.preventDefault();
-    refs.current[next]?.focus();
-    onChange(tabs[next]!.id);
-  };
-  return (
-    <div className="tabs" role="tablist" aria-label="Tampilan tiket">
-      {tabs.map((t, i) => (
-        <button key={t.id} ref={(el) => { refs.current[i] = el; }} type="button" role="tab" id={`tab-${t.id}`}
-          aria-selected={view === t.id} aria-controls={panelId} tabIndex={view === t.id ? 0 : -1}
-          className={view === t.id ? 'active' : undefined} onClick={() => onChange(t.id)} onKeyDown={(e) => onKey(e, i)}>
-          {t.label}
-        </button>
-      ))}
-    </div>
   );
 }
 
 /** Filters inside the Filter popover (everything except search and status). */
 const POPOVER_FILTERS: readonly TicketFilterKey[] = [
-  'owner', 'channel', 'category', 'priority', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore',
+  'channel', 'receivedFrom', 'receivedBefore', 'resolvedFrom', 'resolvedBefore',
 ];
 
 /**
- * C05 one-row toolbar (wraps): search (300 ms debounce, Enter applies now), status, Filter popover
+ * C05/CP-UI2b one-row toolbar like the prototype (wraps on narrow screens): search (300 ms debounce, Enter applies now), status, Filter popover
  * (PIC/kanal/kategori/prioritas/tanggal, with an active-count badge and its own reset), sort, C32
  * saved view and one reset for everything. Active popover filters stay visible as removable chips.
  */
@@ -332,7 +365,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
   const resolved = params.filters.resolvedFrom || params.filters.resolvedBefore;
   const popoverActive = POPOVER_FILTERS.filter((k) => params.filters[k]);
   // Range bounds count as one filter each (received, resolved).
-  const popoverCount = DIMENSIONS.filter((d) => params.filters[d.key]).length +
+  const popoverCount = DIMENSIONS.filter((d) => params.filters[d.key] && !INLINE_DIMS.includes(d.key)).length +
     (recvFrom || recvTo ? 1 : 0) + (resolved ? 1 : 0);
 
   const dimLabel = (k: DimKey, value: string) => {
@@ -341,8 +374,15 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
     const list = dimOptions(options, k);
     return value.split(',').map((id) => list.find((o) => o.id === id)?.label ?? (options ? 'tidak dikenal' : 'memuat…')).join(' + ');
   };
+  const list = params.view === 'list';
   const chips: { key: string; text: string; clear: readonly TicketFilterKey[] }[] = [
-    ...DIMENSIONS.filter((d) => params.filters[d.key]).map((d) => ({
+    // List shows status as chips with counts; a combined status (dashboard drilldown) gets its own chip.
+    ...(list && statusSet.length ? [{
+      key: 'status',
+      text: `Status: ${statusSet.map((c) => STATUS_ORDER.includes(c as TicketStatusCode) ? statusLabel(c as TicketStatusCode) : c).join(' + ')}`,
+      clear: ['status'] as const,
+    }] : []),
+    ...DIMENSIONS.filter((d) => params.filters[d.key] && !INLINE_DIMS.includes(d.key)).map((d) => ({
       key: d.key, text: `${d.label}: ${dimLabel(d.key, params.filters[d.key]!)}`, clear: [d.key] as const,
     })),
     ...(recvFrom || recvTo ? [{
@@ -363,7 +403,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
         <label className="toolbar-search">
           <span className="sr-only">Cari tiket</span>
           <input ref={searchRef} className="field-control" type="search" value={text} maxLength={100}
-            placeholder="Cari nomor (12, #12, DUMA-12) atau judul…"
+            placeholder="Cari nomor tiket atau subjek…"
             onChange={(e) => { typed.current = true; setText(e.target.value); }}
             onKeyDown={(e) => {
               if (e.key !== 'Enter') return;
@@ -371,7 +411,24 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
               onFilter('q', text.trim() || null);
             }} />
         </label>
-        <label className="toolbar-select">
+        {INLINE_DIMS.map((k) => {
+          const d = DIMENSIONS.find((x) => x.key === k)!;
+          const value = params.filters[k] ?? '';
+          const opts = dimOptions(options, k);
+          const known = value === '' || value === d.unset.value || opts.some((o) => o.id === value);
+          return (
+            <label className="toolbar-select" key={k}>
+              <span className="sr-only">{d.label}</span>
+              <select className="field-control" value={value} onChange={(e) => onFilter(k, e.target.value || null)}>
+                <option value="">{INLINE_ALL[k]}</option>
+                {opts.map((o) => <option key={o.id} value={o.id}>{o.label}{o.active ? '' : ' (nonaktif)'}</option>)}
+                <option value={d.unset.value}>{d.unset.label}</option>
+                {!known && <option value={value}>{dimLabel(k, value)}</option>}
+              </select>
+            </label>
+          );
+        })}
+        {!list && <label className="toolbar-select">
           <span className="sr-only">Status</span>
           <select className="field-control" value={status ?? ''} onChange={(e) => onFilter('status', e.target.value || null)}>
             <option value="">Semua status</option>
@@ -381,7 +438,8 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
                 ? statusLabel(c as TicketStatusCode) : c).join(' + ')}</option>
             )}
           </select>
-        </label>
+        </label>}
+        <div className="toolbar-tools">
         <Popover className="filter-popover" label="Filter lanjutan" title="Filter"
           trigger={<>
             <span aria-hidden="true">⚲</span> Filter
@@ -390,7 +448,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
           {(close) => (
             <>
               <div className="filter-grid">
-                {DIMENSIONS.map((d) => {
+                {DIMENSIONS.filter((d) => !INLINE_DIMS.includes(d.key)).map((d) => {
                   const value = params.filters[d.key] ?? '';
                   const list = dimOptions(options, d.key);
                   const known = value === '' || value === d.unset.value || list.some((o) => o.id === value);
@@ -420,7 +478,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
               <p className="muted tiny">Diterapkan langsung ke List dan Board · waktu {tzLabel(tz)}.
                 {resolved ? ' Rentang penyelesaian dari Dashboard tampil sebagai chip.' : ''}</p>
               <div className="popover-foot row between">
-                <Button variant="ghost" disabled={popoverActive.length === 0} onClick={() => onClear(POPOVER_FILTERS)}>
+                <Button variant="ghost" disabled={popoverActive.length === 0} onClick={() => onClear(popoverActive)}>
                   Reset filter ini
                 </Button>
                 <Button variant="primary" onClick={close}>Selesai</Button>
@@ -436,18 +494,19 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
               onSort(s as TicketSort, o === 'asc' ? 'asc' : 'desc');
             }}>
             {(Object.keys(SORT_LABELS) as TicketSort[]).flatMap((s) => [
-              <option key={`${s}:desc`} value={`${s}:desc`}>Urut: {SORT_LABELS[s]} ↓</option>,
-              <option key={`${s}:asc`} value={`${s}:asc`}>Urut: {SORT_LABELS[s]} ↑</option>,
+              <option key={`${s}:desc`} value={`${s}:desc`}>{SORT_SHORT[s]} ↓</option>,
+              <option key={`${s}:asc`} value={`${s}:asc`}>{SORT_SHORT[s]} ↑</option>,
             ])}
           </select>
         </label>
-        <ColumnChooser params={params} onApply={onApply} />
+        {list && <ColumnChooser params={params} onApply={onApply} />}
         <SavedViews api={api} workspaceId={workspaceId} params={params} onApply={onApply} />
         {activeCount > 0 && (
           <Button variant="ghost" onClick={onReset} aria-label={`Reset semua filter (${activeCount} aktif)`}>
             Reset ({activeCount})
           </Button>
         )}
+        </div>
       </div>
       {chips.length > 0 && (
         <ul className="chips" aria-label="Filter aktif">
@@ -485,7 +544,7 @@ function BasisNote({ basis, total, resolutionEvents, loaded }: {
   );
 }
 
-function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate, onSort, onStatus, onOpen, onTransition, onReset, onCreate }: {
+function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate, presets, preset, onPreset, onSort, onStatus, onOpen, onTransition, onReset, onCreate }: {
   api: Api;
   workspace: Workspace;
   list: TicketList;
@@ -493,34 +552,46 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
   apiQuery: string;
   filtered: boolean;
   canCreate: boolean;
+  presets: readonly TicketPreset[];
+  preset: TicketPreset | null;
+  onPreset: (p: TicketPreset) => void;
   onSort: (s: TicketSort) => void;
-  onStatus: (code: TicketStatusCode) => void;
+  onStatus: (code: TicketStatusCode | null) => void;
   onOpen: (t: TicketListItem) => void;
   onTransition: (t: TicketListItem) => void;
   onReset: () => void;
   onCreate: () => void;
 }) {
-  const [items, setItems] = useState(list.items);
-  const [cursor, setCursor] = useState(list.nextCursor);
+  // CP-UI2 pager: pages already fetched stay in memory, so "Sebelumnya" never refetches; "Berikutnya"
+  // follows the server cursor (bound to the same filters and sort). A reload starts at page 1.
+  const [pages, setPages] = useState<{ items: TicketListItem[]; next: string | null }[]>(
+    () => [{ items: list.items, next: list.nextCursor }]);
+  const [index, setIndex] = useState(0);
   const [more, setMore] = useState<{ status: 'idle' | 'loading' } | { status: 'error'; error: unknown }>({ status: 'idle' });
   const ctl = useRef<AbortController | null>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
   useEffect(() => () => ctl.current?.abort(), []);
   const tz = workspace.timezone;
+  const page = pages[index]!;
+  const items = page.items;
+  const range = pageRange(pages.map((p) => p.items.length), index);
 
-  async function loadMore() {
-    if (!cursor) return;
+  const show_ = (i: number) => {
+    setIndex(i);
+    tableRef.current?.focus();
+  };
+  async function next() {
+    if (pages[index + 1]) return show_(index + 1);
+    if (!page.next) return;
     ctl.current?.abort();
     const c = new AbortController();
     ctl.current = c;
     setMore({ status: 'loading' });
     try {
-      const page = await api.listTickets(workspace.id, apiQuery, cursor, c.signal);
-      setItems((old) => {
-        const seen = new Set(old.map((t) => t.id));
-        return [...old, ...page.items.filter((t) => !seen.has(t.id))];
-      });
-      setCursor(page.nextCursor);
+      const res = await api.listTickets(workspace.id, apiQuery, page.next, c.signal);
+      setPages((old) => [...old.slice(0, index + 1), { items: res.items, next: res.nextCursor }]);
       setMore({ status: 'idle' });
+      show_(index + 1);
     } catch (error) {
       if (!isAbort(error)) setMore({ status: 'error', error });
     }
@@ -539,61 +610,81 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
   };
   const num_ = sortHeader('number', 'Nomor');
   const recv = sortHeader('received_at', 'Umur');
+  const recvAt = sortHeader('received_at', 'Diterima');
   const upd = sortHeader('updated_at', 'Diperbarui');
   const status = params.filters.status;
   const show = (c: TicketColumn) => params.columns.includes(c);
 
   return (
     <>
-      <div className="status-chips" role="group" aria-label="Jumlah per status (filter lain tetap berlaku)">
-        {list.countsByStatus.map((c) => (
-          <button key={c.status.code} type="button" className="chip-btn" aria-pressed={status === c.status.code}
-            onClick={() => onStatus(c.status.code)}>
-            {c.status.label} <b>{num(c.count)}</b>
+      <div className="chip-rows">
+        <div className="pchips" role="group" aria-label="Status (jumlah tanpa filter status; filter lain tetap berlaku)">
+          <button type="button" className="pchip" aria-pressed={!status} onClick={() => onStatus(null)}>
+            Semua <span className="n">{num(allStatusCount(list.countsByStatus))}</span>
           </button>
-        ))}
+          {list.countsByStatus.map((c) => (
+            <button key={c.status.code} type="button" className="pchip" aria-pressed={status === c.status.code}
+              onClick={() => onStatus(c.status.code)}>
+              {c.status.label} <span className="n">{num(c.count)}</span>
+            </button>
+          ))}
+        </div>
+        <div className="pchips presets" role="group" aria-label="Tampilan cepat">
+          {presets.map((p) => (
+            <button key={p} type="button" className="pchip" aria-pressed={preset === p} onClick={() => onPreset(p)}>
+              {PRESET_LABELS[p]}
+            </button>
+          ))}
+        </div>
       </div>
-      <BasisNote basis={list.basis} total={list.total} resolutionEvents={list.resolutionEvents} loaded={items.length} />
       {list.total === 0 ? (
-        filtered
-          ? <EmptyState title="Tidak ada tiket sesuai filter" body="Ubah atau reset filter untuk melihat tiket lain."
-            action={<Button onClick={onReset}>Reset filter</Button>} />
-          : <EmptyState title="Belum ada tiket" body={`Belum ada tiket di ${workspace.code}.`}
-            action={canCreate ? <Button variant="primary" onClick={onCreate}>＋ Buat tiket</Button> : undefined} />
+        <div className="bd">
+          {filtered
+            ? <EmptyState title="Tidak ada tiket sesuai filter" body="Ubah atau reset filter untuk melihat tiket lain."
+              action={<Button onClick={onReset}>Reset filter</Button>} />
+            : <EmptyState title="Belum ada tiket" body={`Belum ada tiket di ${workspace.code}.`}
+              action={canCreate ? <Button variant="primary" onClick={onCreate}>＋ Buat tiket</Button> : undefined} />}
+        </div>
       ) : (
-        <div className="tablebox" role="region" aria-label="Daftar tiket" tabIndex={0}>
+        <div className="ptable" role="region" aria-label="Daftar tiket" tabIndex={0} ref={tableRef}>
           <table className="tickets">
-            <caption>Tiket {workspace.code} · urut {SORT_LABELS[params.sort].toLowerCase()} {params.order === 'asc' ? 'naik' : 'turun'} lalu ID</caption>
+            <caption className="sr-only">Tiket {workspace.code} · urut {SORT_LABELS[params.sort].toLowerCase()} {params.order === 'asc' ? 'naik' : 'turun'} lalu ID · baris {num(range.from)}–{num(range.to)}</caption>
             <thead>
               <tr>
                 <th scope="col" aria-sort={num_.ariaSort}>{num_.node}</th>
-                <th scope="col">Judul</th>
+                <th scope="col">Subjek</th>
                 {show('status') && <th scope="col">Status</th>}
                 {show('priority') && <th scope="col">Prioritas</th>}
+                {show('channel') && <th scope="col">Kategori</th>}
+                {show('channel') && <th scope="col">Channel</th>}
                 {show('owner') && <th scope="col">PIC</th>}
-                {show('channel') && <th scope="col">Kanal · kategori</th>}
-                {show('received') && <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>}
+                {show('received') && <th scope="col" aria-sort={recvAt.ariaSort}>{recvAt.node}</th>}
                 {show('updated') && <th scope="col" aria-sort={upd.ariaSort}>{upd.node}</th>}
-                <th scope="col"><span className="sr-only">Aksi</span></th>
+                <th scope="col" aria-sort={recv.ariaSort}>{recv.node}</th>
+                {params.rowActions && <th scope="col"><span className="sr-only">Aksi</span></th>}
               </tr>
             </thead>
             <tbody>
               {items.map((t) => (
                 <tr key={t.id}>
-                  <td><button type="button" className="linkish" data-open-ticket={t.id} onClick={() => onOpen(t)}>{t.displayNumber}</button></td>
-                  <td><span className="subject" title={t.subject}>{t.subject}</span></td>
+                  <td><button type="button" className="tno linkish" data-open-ticket={t.id} onClick={() => onOpen(t)}>{t.displayNumber}</button></td>
+                  <td className="subj">
+                    <span className="tsub" title={t.subject}>{t.subject}</span>
+                    <span className="tmeta">siklus {t.cycleNo}{t.relatedWork.open > 0 ? ` · ${num(t.relatedWork.open)} pekerjaan terkait` : ''}</span>
+                  </td>
                   {show('status') && <td><Badge tone={statusTone(t.status)}>{t.status.label}</Badge></td>}
-                  {show('priority') && <td>{t.priority ? t.priority.label : <span className="muted">—</span>}</td>}
-                  {show('owner') && <td>{t.owner ? t.owner.label : <span className="muted">Belum ditugaskan</span>}</td>}
-                  {show('channel') && (
-                    <td className="stack">
-                      <span>{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</span>
-                      <span className="tiny muted">{t.category?.label ?? 'Tanpa kategori'}</span>
-                    </td>
-                  )}
-                  {show('received') && <td>{ageLabel(t.ageSeconds)}</td>}
-                  {show('updated') && <td>{instantLabel(t.updatedAt, tz)}</td>}
-                  <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>
+                  {show('priority') && <td className="nowrap">{t.priority
+                    ? <span className={`pri ${priorityDot(t.priority.code)}`}><b aria-hidden="true" />{t.priority.label}</span>
+                    : <span className="muted">—</span>}</td>}
+                  {show('channel') && <td className="wrapcell">{t.category?.label ?? <span className="muted">Tanpa kategori</span>}</td>}
+                  {show('channel') && <td className="wrapcell muted-cell">{t.channel?.label ?? <span className="muted">Tanpa kanal</span>}</td>}
+                  {show('owner') && <td className="nowrap">{t.owner
+                    ? <span className="cell-pic"><span className="cell-av" aria-hidden="true">{initials(t.owner.label)}</span>{t.owner.label}</span>
+                    : <span className="chip-tag">Belum ada</span>}</td>}
+                  {show('received') && <td className="nowrap muted-cell" title={instantLabel(t.receivedAt, tz)}>{shortInstant(t.receivedAt, tz)}</td>}
+                  {show('updated') && <td className="nowrap muted-cell" title={instantLabel(t.updatedAt, tz)}>{shortInstant(t.updatedAt, tz)}</td>}
+                  <td className="nowrap"><b>{ageLabel(t.ageSeconds)}</b></td>
+                  {params.rowActions && <td><StatusButton ticket={t} onClick={() => onTransition(t)} compact /></td>}
                 </tr>
               ))}
             </tbody>
@@ -601,14 +692,21 @@ function ListView({ api, workspace, list, params, apiQuery, filtered, canCreate,
         </div>
       )}
       {list.total > 0 && (
-        <div className="row between pager">
-          <span className="tiny muted">Dimuat {num(items.length)} dari {num(list.total)} tiket</span>
+        <div className="ppager">
+          <span>Menampilkan {num(range.from)}–{num(range.to)} dari {num(list.total)} tiket</span>
           {more.status === 'error' && <span className="field-error tiny" role="alert">Halaman berikutnya gagal dimuat. {errorMessage(more.error)}</span>}
-          <Button onClick={loadMore} disabled={!cursor || more.status === 'loading'} aria-busy={more.status === 'loading'}>
-            {more.status === 'loading' ? 'Memuat…' : cursor ? 'Muat berikutnya' : 'Semua sudah dimuat'}
-          </Button>
+          <span className="r">
+            <Button className="btn-small" onClick={() => show_(index - 1)} disabled={index === 0}>Sebelumnya</Button>
+            <Button className="btn-small" onClick={next} disabled={(!pages[index + 1] && !page.next) || more.status === 'loading'}
+              aria-busy={more.status === 'loading'}>
+              {more.status === 'loading' ? 'Memuat…' : 'Berikutnya'}
+            </Button>
+          </span>
         </div>
       )}
+      <div className="bd basis-foot">
+        <BasisNote basis={list.basis} total={list.total} resolutionEvents={list.resolutionEvents} />
+      </div>
     </>
   );
 }
@@ -702,7 +800,10 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
   }
   return (
     <>
-      <BasisNote basis={board.basis} total={board.total} resolutionEvents={board.resolutionEvents} />
+      <p className="hintline board-hint">
+        {canDrag ? <>Seret kartu ke kolom lain, atau pakai tombol “Ubah status” (keyboard).</> : <>Pakai tombol “Ubah status” pada kartu.</>}
+        {' '}Keduanya membuka dialog yang sama; status baru tersimpan hanya setelah server menyetujui.
+      </p>
       <div className="board" role="region" aria-label="Board status" tabIndex={0}>
         {board.columns.map((c) => {
           const s = cols[c.status.code]!;
@@ -713,16 +814,18 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
               onDragLeave={canDrag ? () => setOver((o) => (o === c.status.code ? null : o)) : undefined}
               onDrop={canDrag ? (e) => drop(e, c.status.code) : undefined}>
               <h3 id={headingId}>
-                <Badge tone={statusTone(c.status)}>{c.status.label}</Badge>
-                <span aria-label={`${num(c.total)} tiket`}>{num(c.total)}</span>
+                <span className={`col-label tone-${statusTone(c.status)}`}>{c.status.label}</span>
+                <span className="n" aria-label={`${num(c.total)} tiket`}>{num(c.total)}</span>
               </h3>
               {c.status.archived && <p className="tiny muted">Arsip historis, read-only.</p>}
-              {s.items.length === 0 && <p className="tiny muted col-empty">Tidak ada tiket.</p>}
-              {s.items.map((t) => (
-                <TicketCard key={t.id} ticket={t} tz={workspace.timezone} draggable={canDrag && !t.status.archived && t.allowedActions.length > 0}
-                  onDragStart={() => setDragging(t)} onDragEnd={() => { setDragging(null); setOver(null); }}
-                  onOpen={() => onOpen(t)} onTransition={() => onTransition(t, null)} />
-              ))}
+              <div className="col-list">
+                {s.items.length === 0 && <p className="col-empty">Kosong</p>}
+                {s.items.map((t) => (
+                  <TicketCard key={t.id} ticket={t} tz={workspace.timezone} draggable={canDrag && !t.status.archived && t.allowedActions.length > 0}
+                    onDragStart={() => setDragging(t)} onDragEnd={() => { setDragging(null); setOver(null); }}
+                    onOpen={() => onOpen(t)} onTransition={() => onTransition(t, null)} />
+                ))}
+              </div>
               <div className="col-foot">
                 <span className="tiny muted">{num(s.items.length)} dari {num(c.total)}</span>
                 {s.status === 'error' && (
@@ -739,10 +842,7 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
           );
         })}
       </div>
-      <p className="tiny muted">
-        {canDrag ? 'Seret kartu ke kolom lain, atau pakai tombol “Ubah status” (keyboard).' : 'Pakai tombol “Ubah status” pada kartu.'}
-        {' '}Keduanya membuka dialog yang sama; status baru tersimpan hanya setelah server menyetujui.
-      </p>
+      <BasisNote basis={board.basis} total={board.total} resolutionEvents={board.resolutionEvents} />
     </>
   );
 }
@@ -771,24 +871,26 @@ function TicketCard({ ticket: t, tz, draggable, onDragStart, onDragEnd, onOpen, 
   onTransition: () => void;
 }) {
   return (
-    <article className="ticket" draggable={draggable} aria-label={`${t.displayNumber}: ${t.subject}`}
+    <article className="ticket tcard" draggable={draggable} aria-label={`${t.displayNumber}: ${t.subject}`}
       onDragStart={draggable ? (e) => { e.dataTransfer.setData('text/plain', t.id); e.dataTransfer.effectAllowed = 'move'; onDragStart(); } : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}>
       <button type="button" className="ticket-open" data-open-ticket={t.id} onClick={onOpen}>
-        <span className="tiny muted">{t.displayNumber}</span>
+        <span className="tc-no">
+          <span>{t.displayNumber}</span>
+          {t.priority && <span className={`pri ${priorityDot(t.priority.code)}`}><b aria-hidden="true" />{t.priority.label}</span>}
+        </span>
         <span className="ticket-title">{t.subject}</span>
       </button>
-      <div className="chips">
-        {t.priority && <Badge tone={t.priority.code === 'urgent' || t.priority.code === 'high' ? 'error' : 'neutral'}>{t.priority.label}</Badge>}
-        {t.relatedWork.open > 0 && (
+      {t.relatedWork.open > 0 && (
+        <div className="chips">
           <Badge tone={t.relatedWork.blockingOpen > 0 ? 'waiting' : 'neutral'}>
             {`${t.relatedWork.open} pekerjaan terkait${t.relatedWork.blockingOpen > 0 ? ` · ${t.relatedWork.blockingOpen} memblokir` : ''}`}
           </Badge>
-        )}
-      </div>
-      <div className="row between ticket-meta">
-        <span>{t.owner?.label ?? 'Belum ditugaskan'}</span>
-        <span title={instantLabel(t.receivedAt, tz)}>{ageLabel(t.ageSeconds)}</span>
+        </div>
+      )}
+      <div className="ticket-meta">
+        {t.owner ? <span>{t.owner.label}</span> : <span className="no-pic">belum ada PIC</span>}
+        {' · '}<span title={instantLabel(t.receivedAt, tz)}>{ageLabel(t.ageSeconds)}</span>
       </div>
       <StatusButton ticket={t} onClick={onTransition} compact />
     </article>
@@ -975,9 +1077,12 @@ function errorMessage(e: unknown): string {
   return 'Terjadi kesalahan tak terduga.';
 }
 
-/** C05 column chooser: allowlisted list columns; number, title and action always stay. */
+/**
+ * C05 column chooser: allowlisted list columns; number, subject and age always stay. CP-UI2b: the
+ * default is the prototype's set (Diperbarui off) and the per-row "Ubah status" button is opt-in.
+ */
 function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p: TicketParams) => void }) {
-  const hidden = TICKET_COLUMNS.length - params.columns.length;
+  const changed = !isDefaultColumns(params.columns) || params.rowActions;
   const toggle = (c: TicketColumn, on: boolean) => {
     const next = on ? [...params.columns, c] : params.columns.filter((x) => x !== c);
     if (next.length === 0) return;
@@ -985,11 +1090,11 @@ function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p:
   };
   return (
     <Popover label="Kolom daftar" title="Kolom daftar"
-      trigger={<>Kolom{hidden > 0 && <span className="count-badge" aria-label={`${hidden} kolom disembunyikan`}>−{hidden}</span>}</>}>
+      trigger={<>Kolom{changed && <span className="count-badge" aria-label="diubah dari bawaan">•</span>}</>}>
       {(close) => (
         <>
           <fieldset className="column-checks">
-            <legend className="tiny muted">Nomor, judul, dan aksi selalu tampil. Minimal satu kolom lain.</legend>
+            <legend className="tiny muted">Nomor, subjek, dan umur selalu tampil. Minimal satu kolom lain.</legend>
             {TICKET_COLUMNS.map((c) => {
               const on = params.columns.includes(c);
               const last = on && params.columns.length === 1;
@@ -1000,9 +1105,14 @@ function ColumnChooser({ params, onApply }: { params: TicketParams; onApply: (p:
                 </label>
               );
             })}
+            <label className="row check">
+              <input type="checkbox" checked={params.rowActions} onChange={(e) => onApply({ ...params, rowActions: e.target.checked })} />
+              Tombol ubah status per baris
+            </label>
           </fieldset>
           <div className="popover-foot row between">
-            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...TICKET_COLUMNS] })} disabled={hidden === 0}>Tampilkan semua</Button>
+            <Button variant="ghost" onClick={() => onApply({ ...params, columns: [...DEFAULT_TICKET_COLUMNS], rowActions: false })}
+              disabled={!changed}>Kembali ke bawaan</Button>
             <Button variant="primary" onClick={() => close()}>Selesai</Button>
           </div>
         </>

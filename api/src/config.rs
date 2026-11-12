@@ -92,6 +92,10 @@ pub struct Config {
     pub report_max_rows: i64,
     /// Per-process request rate limits (see `rate_limit`).
     pub rate_limit: RateLimitConfig,
+    /// US-1.2 MFA keys: `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
+    /// `ITSM_MFA_RECOVERY_PEPPER` (recovery-code HMAC). Required in production; absent in UAT
+    /// = MFA endpoints answer 503 and users who must use MFA cannot finish signing in.
+    pub mfa: Option<std::sync::Arc<crate::mfa::MfaKeys>>,
 }
 
 /// Token-bucket limits per minute. Each bucket holds up to one minute of requests and refills
@@ -278,6 +282,34 @@ impl Config {
             },
         };
 
+        let mfa = match (
+            optional("ITSM_KEYRING"),
+            optional("ITSM_KEYRING_ACTIVE"),
+            optional("ITSM_MFA_RECOVERY_PEPPER"),
+        ) {
+            (None, None, None) if environment == Environment::Uat => None,
+            (keyring, active, pepper) => {
+                let keyring = crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
+                    .map_err(|e| match e {
+                        crate::crypto::KeyringError::Missing => {
+                            ConfigError::Missing("ITSM_KEYRING")
+                        }
+                        crate::crypto::KeyringError::ActiveMissing => {
+                            ConfigError::Missing("ITSM_KEYRING_ACTIVE")
+                        }
+                        _ => ConfigError::Invalid {
+                            name: "ITSM_KEYRING",
+                        },
+                    })?;
+                let pepper = pepper.ok_or(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))?;
+                Some(std::sync::Arc::new(
+                    crate::mfa::MfaKeys::new(keyring, &pepper).ok_or(ConfigError::Invalid {
+                        name: "ITSM_MFA_RECOVERY_PEPPER",
+                    })?,
+                ))
+            }
+        };
+
         Ok(Config {
             environment,
             access_mode,
@@ -291,6 +323,7 @@ impl Config {
             outbox_poll_ms,
             report_max_rows,
             rate_limit,
+            mfa,
         })
     }
 }
@@ -374,6 +407,63 @@ mod tests {
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
             Some(ConfigError::Invalid { name: "ITSM_ENV" })
+        );
+    }
+
+    const KEY: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    const PEPPER: &str = "cGVwcGVyLXBlcHBlci1wZXBwZXItcGVwcGVyLXBlcHBlcg==";
+
+    #[test]
+    fn production_password_mode_requires_mfa_keys() {
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        assert_eq!(
+            Config::from_map(&vars(&prod)).err(),
+            Some(ConfigError::Missing("ITSM_KEYRING"))
+        );
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))
+        );
+        v.push(("ITSM_MFA_RECOVERY_PEPPER", "c2hvcnQ="));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_MFA_RECOVERY_PEPPER"
+            })
+        );
+        v.pop();
+        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.mfa.is_some()));
+        let printed = format!("{cfg:?}");
+        assert!(!printed.contains(PEPPER) && !printed.contains("AAAAAAAA"));
+    }
+
+    #[test]
+    fn uat_without_mfa_keys_starts_but_partial_keys_are_refused() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.mfa.is_none()));
+        let mut v = base();
+        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_KEYRING"))
+        );
+        let mut v = base();
+        v.push(("ITSM_KEYRING", "k1:bad"));
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_KEYRING"
+            })
         );
     }
 

@@ -1,26 +1,31 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type { ReportBreakdown, ReportFormat, ReportPreview, ReportRow, ReportRun, Workspace } from '../api/types';
 import { instantLabel, num, rangeLabel, tzLabel } from '../app/format';
 import { navigate } from '../app/hooks';
 import {
   DASHBOARD_FILTERS,
+  REPORT_PRESETS,
   REPORT_STATUSES,
   defaultReportPeriod,
+  reportPresetOf,
+  reportPresetPeriod,
   parseReportQuery,
   reportExportBody,
   reportQuery,
   toHash,
   type DashboardFilterKey,
   type ReportParams,
+  type ReportPreset,
   type ReportStatus,
 } from '../app/routes';
 import { Badge, type BadgeTone } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable, type Column } from '../components/DataTable';
 import { PageHeader } from '../components/PageHeader';
+import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, ForbiddenState, LoadingState, NotFoundState } from '../components/States';
-import { statusTone } from './DashboardPage';
+import { statusTone } from '../components/Badge';
 
 const FORMAT_LABELS: Record<ReportFormat, string> = { csv: 'CSV', xlsx: 'Excel' };
 
@@ -61,11 +66,12 @@ const newKey = () => (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math
  * C21/C22 operational report: company header from the server, Jakarta-time period, whole-scope
  * preview and a real CSV or Excel (.xlsx) export of exactly the previewed spec. The spec lives in the URL so reload
  * and shared links show the same numbers. Official BI export is held (no mapping is invented).
+ * CP-UI3b (prototype 07): period presets (30 days default); the preview loads in the background (it
+ * feeds the filter choices and the export check) but its numbers show only after "Pratinjau".
  */
-export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
+export function ReportsPage({ api, workspace, query = '', onNotice }: {
   api: Api;
   workspace: Workspace;
-  uat: boolean;
   query?: string;
   onNotice: (text: string) => void;
 }) {
@@ -84,6 +90,12 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
   const [end, setEnd] = useState(params.periodEnd);
   useEffect(() => { setStart(params.periodStart); setEnd(params.periodEnd); }, [params.periodStart, params.periodEnd]);
   const dateError = !start || !end ? 'Isi tanggal awal dan akhir.' : start > end ? 'Tanggal awal harus sebelum atau sama dengan tanggal akhir.' : null;
+  // "Rentang kustom" keeps the date inputs open even when the typed dates happen to equal a preset.
+  const [custom, setCustom] = useState(false);
+  const preset = custom ? 'custom' : reportPresetOf(params, workspace.timezone);
+  // Numbers appear only after the person asks for the preview (prototype 07); a new workspace starts empty.
+  const [shown, setShown] = useState(false);
+  useEffect(() => { setShown(false); setCustom(false); }, [workspace.id]);
 
   const go = (next: ReportParams) =>
     navigate(toHash({ workspaceId: workspace.id, page: 'reports', query: reportQuery(next) }));
@@ -133,118 +145,179 @@ export function ReportsPage({ api, workspace, uat, query = '', onNotice }: {
   const tz = p?.header.timezone ?? workspace.timezone;
   const filtered = params.status.length > 0 || DASHBOARD_FILTERS.some((k) => params.filters[k]);
   const bi = p?.reportTypes.find((t) => t.code === 'bi_regulator');
+  const morePicked = params.status.length > 0 || !!params.filters.owner || !!params.filters.priority;
+  const refresh = () => {
+    if (dateError) return;
+    const wasShown = shown;
+    setShown(true);
+    if (start !== params.periodStart || end !== params.periodEnd) applyPeriod();
+    // The first "Pratinjau" reveals the preview already loaded in the background; later clicks reload it.
+    else if (wasShown || preview.status !== 'success') setAttempt((n) => n + 1);
+  };
+  const pickPreset = (v: string) => {
+    if (v === 'custom') { setCustom(true); return; }
+    setCustom(false);
+    go({ ...params, ...reportPresetPeriod(v as ReportPreset, workspace.timezone) });
+  };
+  const blocking = p ? p.validation.filter((v) => v.level === 'blocking').length : 0;
+  const exportBlocked = exporting !== null || !p || !p.exportable || !!dateError;
+
+  const filterSelect = (f: (typeof FILTERS)[number]) => {
+    const value = params.filters[f.key] ?? '';
+    const list = options.current?.[f.list] ?? [];
+    const known = value === '' || value === f.unset[0] || list.some((o) => o.id === value);
+    return (
+      <label className="field" key={f.key}>
+        {f.label}
+        <select className="field-control" value={value} disabled={!options.current && value === ''}
+          onChange={(e) => go({ ...params, filters: { ...params.filters, [f.key]: e.target.value || null } })}>
+          <option value="">Semua {f.label === 'PIC' ? 'PIC' : f.label.toLowerCase()}</option>
+          {list.map((o) => <option key={o.id} value={o.id}>{o.label}{o.active ? '' : ' (nonaktif)'}</option>)}
+          <option value={f.unset[0]}>{f.unset[1]}</option>
+          {!known && <option value={value}>Nilai tidak dikenal</option>}
+        </select>
+      </label>
+    );
+  };
+  const byKey = (k: DashboardFilterKey) => FILTERS.find((f) => f.key === k)!;
 
   return (
     <>
-      <PageHeader eyebrow="Laporan operasional" title="Laporan"
-        description={`Rekap pengaduan ${workspace.name} untuk keperluan operasional internal. Bukan laporan regulator.`} />
-      <p className="banner spaced-bottom" role="note">
-        <strong>Ekspor resmi BI belum tersedia.</strong>{' '}
-        {bi?.reason ?? 'Pemetaan format regulator belum ditetapkan, jadi tidak ada kode BI yang dibuat atau ditebak.'}{' '}
-        Semua angka dan file di halaman ini berlabel OPERASIONAL / NON-REGULATOR.
-      </p>
+      <PageHeader title="Laporan" description="Rekap operasional per periode · bukan laporan regulator"
+        action={<Button variant="primary" onClick={refresh} disabled={!!dateError}><Icon name="reports" size={16} /> Pratinjau</Button>} />
 
-      <section className="card" aria-labelledby="rep-company">
-        <h2 id="rep-company">Perusahaan pelapor</h2>
-        {p ? (
-          <dl className="report-head">
-            <div><dt>Perusahaan</dt><dd>{p.header.companyName} ({p.header.companyCode})</dd></div>
-            <div><dt>Kode pelapor</dt><dd>{p.header.reporterCode ?? 'belum dikonfigurasi'}</dd></div>
-            <div><dt>Workspace</dt><dd>{p.header.workspaceCode}</dd></div>
-            <div><dt>Periode</dt><dd>{rangeLabel(p.header.periodStart, p.header.periodEnd)} · Waktu {tzLabel(tz)}</dd></div>
-          </dl>
-        ) : <p className="muted">Perusahaan dibaca dari server untuk workspace {workspace.code}; tidak dapat diubah di sini.</p>}
-      </section>
-
-      <form className="toolbar row filterbar report-filters" aria-label="Parameter laporan"
-        onSubmit={(e) => { e.preventDefault(); applyPeriod(); }}>
-        <label className="period">
-          Jenis laporan
-          <select className="field-control" value="operational" aria-describedby="rep-type-hint" onChange={() => undefined}>
-            <option value="operational">Rekap operasional</option>
-            <option value="bi_regulator" disabled>Persiapan laporan BI (belum tersedia)</option>
-          </select>
-        </label>
-        <label className="period">
-          Tanggal awal
-          <input type="date" className="field-control" value={start} max={end || undefined}
-            aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'rep-date-error' : undefined}
-            onChange={(e) => setStart(e.target.value)} onBlur={applyPeriod} />
-        </label>
-        <label className="period">
-          Tanggal akhir
-          <input type="date" className="field-control" value={end} min={start || undefined}
-            aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'rep-date-error' : undefined}
-            onChange={(e) => setEnd(e.target.value)} onBlur={applyPeriod} />
-        </label>
-        <label className="period">
-          Dasar tanggal
-          <select className="field-control" value={params.basis}
-            onChange={(e) => go({ ...params, basis: e.target.value === 'resolved' ? 'resolved' : 'received' })}>
-            <option value="received">Tanggal diterima</option>
-            <option value="resolved">Tanggal diselesaikan</option>
-          </select>
-        </label>
-        {FILTERS.map((f) => {
-          const value = params.filters[f.key] ?? '';
-          const list = options.current?.[f.list] ?? [];
-          const known = value === '' || value === f.unset[0] || list.some((o) => o.id === value);
-          return (
-            <label className="period" key={f.key}>
-              {f.label}
-              <select className="field-control" value={value} disabled={!options.current && value === ''}
-                onChange={(e) => go({ ...params, filters: { ...params.filters, [f.key]: e.target.value || null } })}>
-                <option value="">Semua</option>
-                {list.map((o) => <option key={o.id} value={o.id}>{o.label}{o.active ? '' : ' (nonaktif)'}</option>)}
-                <option value={f.unset[0]}>{f.unset[1]}</option>
-                {!known && <option value={value}>Nilai tidak dikenal</option>}
+      <section className="pcard rep-params" aria-label="Parameter laporan">
+        <form className="bd" onSubmit={(e) => { e.preventDefault(); refresh(); }}>
+          <div className="formgrid rep-grid">
+            <div className="field rep-period">
+              <label htmlFor="rep-preset">Periode</label>
+              <select id="rep-preset" className="field-control" value={preset} onChange={(e) => pickPreset(e.target.value)}
+                aria-describedby={preset === 'custom' ? undefined : 'rep-preset-range'}>
+                {REPORT_PRESETS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                <option value="custom">Rentang kustom</option>
+              </select>
+              {preset !== 'custom' && <span id="rep-preset-range" className="sr-only">{rangeLabel(params.periodStart, params.periodEnd)}</span>}
+              {preset === 'custom' && <div className="rep-dates">
+                <label>
+                  <span className="sr-only">Tanggal awal</span>
+                  <input type="date" className="field-control" value={start} max={end || undefined} aria-label="Tanggal awal"
+                    aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'rep-date-error' : undefined}
+                    onChange={(e) => setStart(e.target.value)} onBlur={applyPeriod} />
+                </label>
+                <span aria-hidden="true">–</span>
+                <label>
+                  <span className="sr-only">Tanggal akhir</span>
+                  <input type="date" className="field-control" value={end} min={start || undefined} aria-label="Tanggal akhir"
+                    aria-invalid={dateError ? true : undefined} aria-describedby={dateError ? 'rep-date-error' : undefined}
+                    onChange={(e) => setEnd(e.target.value)} onBlur={applyPeriod} />
+                </label>
+              </div>}
+              {preset === 'custom' && dateError && <span id="rep-date-error" className="field-error" role="alert">{dateError}</span>}
+            </div>
+            <label className="field">
+              Dasar waktu
+              <select className="field-control" value={params.basis}
+                onChange={(e) => go({ ...params, basis: e.target.value === 'resolved' ? 'resolved' : 'received' })}>
+                <option value="received">Tanggal diterima</option>
+                <option value="resolved">Tanggal diselesaikan</option>
               </select>
             </label>
-          );
-        })}
-        <button type="submit" className="sr-only">Terapkan periode</button>
-        {(filtered || params.basis !== 'received') && <Button variant="ghost" onClick={reset}>Reset</Button>}
-        <fieldset className="report-status">
-          <legend>Status (kosong = semua)</legend>
-          {REPORT_STATUSES.map((c) => (
-            <label key={c} className="check">
-              <input type="checkbox" checked={params.status.includes(c)} onChange={() => toggleStatus(c)} />
-              {p?.byStatus.find((s) => s.status.code === c)?.status.label ?? STATUS_LABELS[c]}
-            </label>
-          ))}
-        </fieldset>
-        <p id="rep-type-hint" className="muted tiny full">
-          Persiapan laporan BI dinonaktifkan: {(bi?.reason ?? 'pemetaan regulator belum tersedia').replace(/\.$/, '')}.
-        </p>
-        {dateError && <p id="rep-date-error" className="field-error full" role="alert">{dateError}</p>}
-      </form>
+            {filterSelect(byKey('channel'))}
+            {filterSelect(byKey('category'))}
+            <details className="full rep-more" open={morePicked || undefined}>
+              <summary>Filter lanjutan{morePicked ? ' · aktif' : ''}</summary>
+              <div className="formgrid">
+                <label className="field">
+                  Jenis laporan
+                  <select className="field-control" value="operational" aria-describedby="rep-type-hint" onChange={() => undefined}>
+                    <option value="operational">Rekap operasional</option>
+                    <option value="bi_regulator" disabled>Persiapan laporan BI (belum tersedia)</option>
+                  </select>
+                  <span id="rep-type-hint" className="field-hint">
+                    Persiapan laporan BI dinonaktifkan: {(bi?.reason ?? 'pemetaan regulator belum tersedia').replace(/\.$/, '')}.
+                  </span>
+                </label>
+                {filterSelect(byKey('owner'))}
+                {filterSelect(byKey('priority'))}
+                <fieldset className="report-status full">
+                  <legend>Status (kosong = semua)</legend>
+                  {REPORT_STATUSES.map((c) => (
+                    <label key={c} className="check">
+                      <input type="checkbox" checked={params.status.includes(c)} onChange={() => toggleStatus(c)} />
+                      {p?.byStatus.find((s) => s.status.code === c)?.status.label ?? STATUS_LABELS[c]}
+                    </label>
+                  ))}
+                </fieldset>
+              </div>
+            </details>
+          </div>
+          <div className="rep-actions">
+            <Button type="submit" disabled={!!dateError}>Tampilkan pratinjau</Button>
+            <Button variant="primary" onClick={() => exportFile('xlsx')} disabled={exportBlocked} aria-describedby="rep-export-state">
+              {exporting === 'xlsx' ? 'Menyiapkan Excel…' : 'Buat ekspor (XLSX)'}
+            </Button>
+            <Button onClick={() => exportFile('csv')} disabled={exportBlocked} aria-describedby="rep-export-state">
+              {exporting === 'csv' ? 'Menyiapkan CSV…' : 'Ekspor CSV'}
+            </Button>
+            {(filtered || params.basis !== 'received') && <Button variant="ghost" onClick={reset}>Reset</Button>}
+            <span className="hintline rep-limit">
+              Batas {p ? num(p.exportMaxRows) : '—'} baris per ekspor · berkas kedaluwarsa setelah masa berlaku
+            </span>
+          </div>
+          <p id="rep-export-state" ref={exportStatus} tabIndex={-1} className="hintline rep-export-state" role="status" aria-live="polite">
+            {exporting ? 'Status: membangun file…'
+              : p && !p.exportable ? 'Ekspor tidak tersedia: perbaiki item validasi yang menghambat.'
+                : lastRun ? runSummary(lastRun, tz)
+                  : ''}
+            {!exporting && lastRun?.downloadable && <> · <a href={api.reportContentUrl(workspace.id, lastRun.id)} download={lastRun.fileName ?? undefined}>Unduh {lastRun.fileName}</a></>}
+          </p>
+          {exportError && <ErrorState title={exportError.title} body={exportError.body} requestId={exportError.requestId} />}
+        </form>
+      </section>
 
-      <p className="sr-only" role="status">{p ? `Pratinjau laporan ${rangeLabel(p.header.periodStart, p.header.periodEnd)} dimuat.` : ''}</p>
-      {preview.status === 'loading' && <LoadingState label="Memuat pratinjau laporan…" />}
+      <p className="sr-only" role="status">{shown && p ? `Pratinjau laporan ${rangeLabel(p.header.periodStart, p.header.periodEnd)} dimuat.` : ''}</p>
       {preview.status === 'error' && (
         <PreviewError error={preview.error} onRetry={() => setAttempt((n) => n + 1)} onReset={reset} />
       )}
-      {p && (
-        <PreviewBody p={p} uat={uat} filtered={filtered} exporting={exporting} onExport={exportFile}
-          exportError={exportError} lastRun={lastRun} statusRef={exportStatus} contentUrl={(id) => api.reportContentUrl(workspace.id, id)} />
+      {!shown && preview.status !== 'error' && (
+        <section className="pcard rep-block rep-empty" aria-label="Pratinjau laporan">
+          <p>Belum ada pratinjau. Pilih periode lalu tekan “Pratinjau”.</p>
+        </section>
       )}
+      {shown && preview.status === 'loading' && <LoadingState label="Memuat pratinjau laporan…" />}
+      {shown && p && <PreviewBody p={p} filtered={filtered} blocking={blocking} />}
 
-      <section className="card spaced" aria-labelledby="rep-runs">
-        <div className="row between">
-          <h2 id="rep-runs">Riwayat ekspor</h2>
-          <Button variant="ghost" onClick={() => setRunsAttempt((n) => n + 1)}>Muat ulang</Button>
+      <section className="pcard rep-runs" aria-labelledby="rep-runs">
+        <div className="hd">
+          <h2 id="rep-runs">Ekspor terakhir</h2>
+          <div className="r"><Button variant="ghost" className="btn-small" onClick={() => setRunsAttempt((n) => n + 1)}>Muat ulang</Button></div>
         </div>
-        <p className="tiny muted">Ekspor terbaru di workspace ini · file tersedia 24 jam · setiap unduhan dicek ulang izin, masa berlaku dan hash-nya.</p>
-        {runs.status === 'loading' && <LoadingState label="Memuat riwayat ekspor…" rows={2} />}
+        {runs.status === 'loading' && <div className="bd"><LoadingState label="Memuat riwayat ekspor…" rows={2} /></div>}
         {runs.status === 'error' && (
-          <ErrorState title="Riwayat ekspor belum dapat dimuat" body={exportErrorText(runs.error).body}
-            requestId={runs.error instanceof ApiError ? runs.error.requestId : null} onRetry={() => setRunsAttempt((n) => n + 1)} />
+          <div className="bd">
+            <ErrorState title="Riwayat ekspor belum dapat dimuat" body={exportErrorText(runs.error).body}
+              requestId={runs.error instanceof ApiError ? runs.error.requestId : null} onRetry={() => setRunsAttempt((n) => n + 1)} />
+          </div>
         )}
-        {runs.status === 'success' && (
-          <DataTable caption="Riwayat ekspor laporan" columns={runColumns(tz, (id) => api.reportContentUrl(workspace.id, id))}
-            rows={runs.data.items} rowKey={(r) => r.id}
-            empty={{ title: 'Belum ada ekspor', body: 'Ekspor operasional Excel / CSV yang dibuat di workspace ini muncul di sini.' }} />
-        )}
+        {runs.status === 'success' && (runs.data.items.length === 0
+          ? <div className="bd"><p className="empty-mini"><b>Belum ada ekspor</b>Ekspor operasional Excel / CSV yang dibuat di workspace ini muncul di sini.</p></div>
+          : (
+            <div className="ptable">
+              <DataTable caption="Riwayat ekspor laporan" columns={runColumns(tz, (id) => api.reportContentUrl(workspace.id, id))}
+                rows={runs.data.items} rowKey={(r) => r.id} empty={{ title: 'Belum ada ekspor', body: '' }} />
+            </div>
+          ))}
+      </section>
+
+      <section className="pcard callout-amber" aria-labelledby="rep-bi">
+        <div className="bd">
+          <h2 id="rep-bi">Laporan pengaduan untuk regulator (BI) belum tersedia</h2>
+          <p className="hintline">
+            {bi?.reason ?? 'Pemetaan format regulator belum ditetapkan, jadi tidak ada kode BI yang dibuat atau ditebak.'}{' '}
+            Ekspor di halaman ini hanya rekap operasional, berlabel OPERASIONAL / NON-REGULATOR.
+            {p && <> Perusahaan: {p.header.companyName} ({p.header.companyCode}) · kode pelapor {p.header.reporterCode ?? 'belum dikonfigurasi'}.</>}
+          </p>
+        </div>
       </section>
     </>
   );
@@ -284,33 +357,40 @@ function PreviewError({ error, onRetry, onReset }: { error: unknown; onRetry: ()
 const LEVEL_TONE: Record<string, BadgeTone> = { info: 'blue', warning: 'waiting', blocking: 'error' };
 const LEVEL_LABEL: Record<string, string> = { info: 'Info', warning: 'Perlu dicek', blocking: 'Menghambat' };
 
-function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastRun, statusRef, contentUrl }: {
-  p: ReportPreview;
-  uat: boolean;
-  filtered: boolean;
-  exporting: ReportFormat | null;
-  onExport: (format: ReportFormat) => void;
-  exportError: { title: string; body: string; requestId: string | null } | null;
-  lastRun: ReportRun | null;
-  statusRef: RefObject<HTMLParagraphElement | null>;
-  contentUrl: (runId: string) => string;
-}) {
+/** Tickets without a category, only when the category breakdown covers every ticket; otherwise null ("Belum tersedia"). */
+function uncategorized(p: ReportPreview): number | null {
+  const sum = p.byCategory.reduce((n, r) => n + r.count, 0);
+  if (sum !== p.totals.tickets) return null;
+  return p.byCategory.find((r) => r.id === null)?.count ?? 0;
+}
+
+const pct = (n: number, total: number) => (total > 0 ? `${Math.round((n / total) * 100)}%` : '—');
+
+function PreviewBody({ p, filtered, blocking }: { p: ReportPreview; filtered: boolean; blocking: number }) {
   const t = p.totals;
   const tz = p.header.timezone;
   const basisText = p.header.basis === 'resolved' ? 'diselesaikan pada periode' : 'diterima pada periode';
+  const range = rangeLabel(p.header.periodStart, p.header.periodEnd);
+  const noCat = uncategorized(p);
   return (
     <>
-      <div className="kpis">
-        <div className="kpi kpi-primary"><span className="muted">Tiket unik</span><strong>{num(t.tickets)}</strong><small>{p.header.basisLabel} · = baris ekspor</small></div>
-        <div className="kpi"><span className="muted">Siklus penyelesaian</span><strong>{num(t.resolutionCycles)}</strong><small>Peristiwa selesai dalam periode · bukan jumlah tiket</small></div>
-        <div className="kpi"><span className="muted">Tiket terselesaikan</span><strong>{num(t.resolvedTickets)}</strong><small>Tiket unik dengan ≥1 penyelesaian dalam periode</small></div>
-        <div className="kpi"><span className="muted">Belum ditugaskan</span><strong>{num(t.unassigned)}</strong><small>Tanpa PIC saat ini</small></div>
+      <div className="g4 rep-kpis">
+        <div className="kpi2 kpi-active"><span className="lbl">Tiket dalam periode</span><strong className="val">{num(t.tickets)}</strong><span className="hint">{range} · {p.header.basisLabel.toLowerCase()} · = baris ekspor</span></div>
+        <div className="kpi2 kpi-resolved"><span className="lbl">Pernah diselesaikan</span><strong className="val">{num(t.resolvedTickets)}</strong><span className="hint">Tiket unik · {num(t.resolutionCycles)} siklus penyelesaian dalam periode</span></div>
+        <div className={`kpi2${t.unassigned > 0 ? ' alert' : ''}`}><span className="lbl">Tanpa PIC</span><strong className="val">{num(t.unassigned)}</strong><span className="hint">Belum ditugaskan saat ini</span></div>
+        <div className="kpi2 kpi-nocat"><span className="lbl">Tanpa kategori</span>
+          {noCat === null ? <strong className="val na">Belum tersedia</strong> : <strong className="val">{num(noCat)}</strong>}
+          <span className="hint">Kualitas klasifikasi</span></div>
       </div>
 
       {p.validation.length > 0 && (
-        <section className="card" aria-labelledby="rep-validation">
-          <h2 id="rep-validation">Validasi sebelum ekspor</h2>
-          <ul className="plain">
+        <details className="pcard rep-block rep-rows rep-validation">
+          <summary className="hd">
+            <h2 id="rep-validation">{num(p.validation.length)} catatan validasi</h2>
+            <span className="sub">{blocking > 0 ? `${num(blocking)} menghambat ekspor` : 'tidak menghambat ekspor'} · dicek sebelum ekspor</span>
+            <span className="r rep-toggle" aria-hidden="true"><Icon name="chevron" size={16} /></span>
+          </summary>
+          <ul className="plain bd">
             {p.validation.map((v) => (
               <li className="row activity" key={v.code}>
                 <Badge tone={LEVEL_TONE[v.level] ?? 'neutral'}>{LEVEL_LABEL[v.level] ?? v.level}</Badge>
@@ -318,89 +398,80 @@ function PreviewBody({ p, uat, filtered, exporting, onExport, exportError, lastR
               </li>
             ))}
           </ul>
-        </section>
+        </details>
       )}
 
-      <section className="card spaced" aria-labelledby="rep-export">
-        <h2 id="rep-export">Ekspor</h2>
-        <p className="tiny muted">
-          File memuat seluruh {num(t.tickets)} tiket sesuai parameter di atas (bukan hanya pratinjau), berlabel OPERASIONAL / NON-REGULATOR.
-          Excel (.xlsx): sheet Data dengan tanggal dan angka bertipe, sheet Ringkasan berisi filter dan total; teks tidak pernah dijalankan
-          sebagai rumus. CSV: sel diawali =, +, -, @ dinetralkan. Maksimal {num(p.exportMaxRows)} baris; melebihi batas = gagal, tidak dipotong.
-        </p>
-        <div className="row">
-          <Button variant="primary" onClick={() => onExport('xlsx')} disabled={exporting !== null || !p.exportable} aria-describedby="rep-export-state">
-            {exporting === 'xlsx' ? 'Menyiapkan Excel…' : 'Ekspor Excel (.xlsx)'}
-          </Button>
-          <Button onClick={() => onExport('csv')} disabled={exporting !== null || !p.exportable} aria-describedby="rep-export-state">
-            {exporting === 'csv' ? 'Menyiapkan CSV…' : 'Ekspor CSV'}
-          </Button>
-          <Button disabled title="Pemetaan regulator belum tersedia">Kirim ke BI (belum tersedia)</Button>
-        </div>
-        <p id="rep-export-state" ref={statusRef} tabIndex={-1} className="tiny" role="status" aria-live="polite">
-          {exporting ? 'Status: membangun file…'
-            : !p.exportable ? 'Ekspor tidak tersedia: perbaiki item validasi yang menghambat.'
-              : lastRun ? runSummary(lastRun, tz) : ''}
-          {!exporting && lastRun?.downloadable && <> · <a href={contentUrl(lastRun.id)} download={lastRun.fileName ?? undefined}>Unduh {lastRun.fileName}</a></>}
-        </p>
-        {exportError && <ErrorState title={exportError.title} body={exportError.body} requestId={exportError.requestId} />}
-      </section>
-
       {t.tickets === 0 ? (
-        <EmptyState title="Tidak ada tiket pada periode ini"
-          body={filtered ? 'Tidak ada tiket yang cocok dengan kombinasi filter dan periode ini.' : `Tidak ada tiket ${basisText} di ${p.header.workspaceCode}.`} />
+        <section className="pcard rep-block"><div className="bd">
+          <EmptyState title="Tidak ada tiket pada periode ini"
+            body={filtered ? 'Tidak ada tiket yang cocok dengan kombinasi filter dan periode ini.' : `Tidak ada tiket ${basisText} di ${p.header.workspaceCode}.`} />
+        </div></section>
       ) : (
         <>
-          <section className="card spaced" aria-labelledby="rep-status">
-            <h2 id="rep-status">Rekap berdasarkan status</h2>
-            <p className="tiny muted">Status saat ini dari {num(t.tickets)} tiket unik pada laporan</p>
-            <div className="tablebox" role="region" aria-label="Rekap berdasarkan status" tabIndex={0}>
+          <section className="pcard rep-block" aria-labelledby="rep-status">
+            <div className="hd">
+              <h2 id="rep-status">Rekap per status</h2>
+              <span className="sub">{range} · dasar waktu {p.header.basisLabel.toLowerCase()} · status saat ini</span>
+            </div>
+            <div className="ptable" role="region" aria-label="Rekap per status" tabIndex={0}>
               <table>
-                <caption className="sr-only">Rekap berdasarkan status</caption>
-                <thead><tr><th scope="col">Status</th><th scope="col">Tiket</th></tr></thead>
+                <caption className="sr-only">Rekap per status</caption>
+                <thead><tr><th scope="col">Status</th><th scope="col">Jumlah</th><th scope="col">Porsi</th></tr></thead>
                 <tbody>
                   {p.byStatus.map((s) => (
-                    <tr key={s.status.code}><td><Badge tone={statusTone(s.status)}>{s.status.label}</Badge></td><td>{num(s.count)}</td></tr>
+                    <tr key={s.status.code}>
+                      <td><Badge tone={statusTone(s.status)}>{s.status.label}</Badge></td>
+                      <td><b>{num(s.count)}</b></td><td>{pct(s.count, t.tickets)}</td>
+                    </tr>
                   ))}
                 </tbody>
-                <tfoot><tr><th scope="row">Total</th><td>{num(t.tickets)}</td></tr></tfoot>
+                <tfoot><tr><th scope="row">Total</th><td><b>{num(t.tickets)}</b></td><td>100%</td></tr></tfoot>
               </table>
             </div>
           </section>
-          <div className="grid2 spaced report-breakdowns">
-            <Breakdown id="rep-priority" title="Per prioritas" rows={p.byPriority} none="Tanpa prioritas" />
-            <Breakdown id="rep-channel" title="Per kanal" rows={p.byChannel} none="Tanpa kanal" />
-            <Breakdown id="rep-category" title="Per kategori" rows={p.byCategory} none="Tanpa kategori" />
-            <Breakdown id="rep-owner" title="Per PIC" rows={p.byOwner} none="Belum ditugaskan" />
+          <div className="g2 rep-breakdowns">
+            <Breakdown id="rep-priority" title="Per prioritas" rows={p.byPriority} none="Tanpa prioritas" total={t.tickets} />
+            <Breakdown id="rep-channel" title="Per kanal" rows={p.byChannel} none="Tanpa kanal" total={t.tickets} />
+            <Breakdown id="rep-category" title="Per kategori" rows={p.byCategory} none="Tanpa kategori" total={t.tickets} />
+            <Breakdown id="rep-owner" title="Per PIC" rows={p.byOwner} none="Belum ditugaskan" total={t.tickets} />
           </div>
-          <section className="card spaced" aria-labelledby="rep-rows">
-            <h2 id="rep-rows">Pratinjau baris</h2>
-            <p className="tiny muted">
-              {num(p.rows.length)} dari {num(t.tickets)} baris pertama dalam urutan file (diterima, lalu nomor). Total di atas dihitung
-              server dari seluruh baris, bukan dari halaman ini.
-            </p>
-            <DataTable caption="Pratinjau baris laporan" columns={ROW_COLUMNS} rows={p.rows} rowKey={(r) => r.ticketId}
-              empty={{ title: 'Tidak ada baris', body: 'Tidak ada tiket pada laporan ini.' }} />
-          </section>
+          <details className="pcard rep-block rep-rows">
+            <summary className="hd">
+              <h2 id="rep-rows">Pratinjau baris</h2>
+              <span className="sub">{num(p.rows.length)} dari {num(t.tickets)} baris pertama (diterima, lalu nomor) · total dihitung server dari seluruh baris</span>
+              <span className="r rep-toggle" aria-hidden="true"><Icon name="chevron" size={16} /></span>
+            </summary>
+            <div className="ptable">
+              <DataTable caption="Pratinjau baris laporan" columns={ROW_COLUMNS} rows={p.rows} rowKey={(r) => r.ticketId}
+                empty={{ title: 'Tidak ada baris', body: 'Tidak ada tiket pada laporan ini.' }} />
+            </div>
+          </details>
         </>
       )}
-      <p className="tiny muted source">
+      <p className="hintline rep-source">
         {p.notice} · per {instantLabel(p.asOf, tz)} {tzLabel(tz)} · rentang UTC {p.header.startAt} s.d. sebelum {p.header.endAt}
-        {uat ? ' · data dummy UAT' : ''}
       </p>
     </>
   );
 }
 
-function Breakdown({ id, title, rows, none }: { id: string; title: string; rows: readonly ReportBreakdown[]; none: string }) {
+function Breakdown({ id, title, rows, none, total }: { id: string; title: string; rows: readonly ReportBreakdown[]; none: string; total: number }) {
   return (
-    <section className="card" aria-labelledby={id}>
-      <h2 id={id}>{title}</h2>
-      <ul className="plain">
-        {rows.map((r) => (
-          <li className="row between activity" key={r.id ?? 'none'}><span>{r.label ?? none}</span><b>{num(r.count)}</b></li>
-        ))}
-      </ul>
+    <section className="pcard" aria-labelledby={id}>
+      <div className="hd"><h2 id={id}>{title}</h2></div>
+      <div className="bd">
+        {rows.length === 0 ? <p className="empty-mini">Belum tersedia</p> : (
+          <ul className="sbars">
+            {rows.map((r) => (
+              <li className="sbar" key={r.id ?? 'none'}>
+                <span>{r.label ?? none}</span>
+                <span className="track" aria-hidden="true"><span className="fill" style={{ width: total > 0 ? `${(r.count / total) * 100}%` : 0 }} /></span>
+                <b>{num(r.count)}</b>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
@@ -421,7 +492,7 @@ function runState(r: ReportRun): { label: string; tone: BadgeTone } {
   if (r.state === 'queued') return { label: 'Antre', tone: 'neutral' };
   if (r.state === 'running') return { label: 'Dibangun', tone: 'blue' };
   if (r.expired) return { label: 'Kedaluwarsa', tone: 'neutral' };
-  return r.downloadable ? { label: 'Siap', tone: 'ok' } : { label: 'Selesai · tanpa file', tone: 'neutral' };
+  return r.downloadable ? { label: 'Tersedia', tone: 'ok' } : { label: 'Selesai · tanpa file', tone: 'neutral' };
 }
 
 function runSummary(r: ReportRun, tz: string): string {
@@ -432,20 +503,20 @@ function runSummary(r: ReportRun, tz: string): string {
 
 function runColumns(tz: string, url: (id: string) => string): readonly Column<ReportRun>[] {
   return [
-    { key: 'created', header: 'Dibuat', cell: (r) => `${instantLabel(r.createdAt, tz)} · ${r.requestedBy.label}` },
-    { key: 'period', header: 'Periode', cell: (r) => `${rangeLabel(r.periodStart, r.periodEnd)} · ${r.basis === 'resolved' ? 'diselesaikan' : 'diterima'}` },
-    { key: 'state', header: 'Status', cell: (r) => { const s = runState(r); return <Badge tone={s.tone}>{s.label}</Badge>; } },
-    { key: 'format', header: 'Format', cell: (r) => FORMAT_LABELS[r.format] },
-    { key: 'rows', header: 'Baris', cell: (r) => (r.rowCount === null ? '—' : num(r.rowCount)) },
+    // CP-UI3b: the columns of prototype 07; requester, SHA-256 and expiry stay readable as a hover title.
     {
-      key: 'sha', header: 'SHA-256',
-      cell: (r) => (r.artifactSha256 ? <code title={r.artifactSha256}>{r.artifactSha256.slice(0, 12)}…</code> : '—'),
+      key: 'name', header: 'Nama',
+      cell: (r) => <b title={[`Diminta ${r.requestedBy.label}`, r.artifactSha256 ? `SHA-256 ${r.artifactSha256}` : '', r.expiresAt ? `Berlaku s.d. ${instantLabel(r.expiresAt, tz)}` : ''].filter(Boolean).join(' · ')}>Operasional · {rangeLabel(r.periodStart, r.periodEnd)}</b>,
     },
-    { key: 'expires', header: 'Berlaku s.d.', cell: (r) => (r.expiresAt ? instantLabel(r.expiresAt, tz) : '—') },
+    { key: 'basis', header: 'Dasar', cell: (r) => (r.basis === 'resolved' ? 'diselesaikan' : 'diterima') },
+    { key: 'format', header: 'Format', cell: (r) => (r.format === 'xlsx' ? 'XLSX' : 'CSV') },
+    { key: 'rows', header: 'Baris', cell: (r) => (r.rowCount === null ? '—' : num(r.rowCount)) },
+    { key: 'state', header: 'Status', cell: (r) => { const s = runState(r); return <Badge tone={s.tone}>{s.label}</Badge>; } },
+    { key: 'created', header: 'Dibuat', cell: (r) => instantLabel(r.createdAt, tz) },
     {
-      key: 'download', header: 'File',
+      key: 'download', header: 'Unduh',
       cell: (r) => (r.downloadable
-        ? <a href={url(r.id)} download={r.fileName ?? undefined} aria-label={`Unduh ${r.fileName ?? FORMAT_LABELS[r.format]}`}>Unduh {FORMAT_LABELS[r.format]}</a>
+        ? <a className="btn btn-small" href={url(r.id)} download={r.fileName ?? undefined} aria-label={`Unduh ${r.fileName ?? FORMAT_LABELS[r.format]}`}>Unduh</a>
         : <span className="muted">{r.expired ? 'Kedaluwarsa' : 'Tidak tersedia'}</span>),
     },
   ];

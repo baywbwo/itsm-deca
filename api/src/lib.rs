@@ -3,10 +3,12 @@
 pub mod authz;
 pub mod clamd;
 pub mod config;
+pub mod crypto;
 pub mod db;
 pub mod denied_audit;
 pub mod domain;
 pub mod error;
+pub mod mfa;
 pub mod outbox;
 pub mod password_bootstrap;
 pub mod rate_limit;

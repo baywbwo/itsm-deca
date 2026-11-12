@@ -1,6 +1,6 @@
 import type { DashboardPeriodKey, PermissionCode, TicketFilter } from '../api/types';
 
-export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations';
+export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'users';
 
 export interface PageDef {
   id: PageId;
@@ -9,6 +9,10 @@ export interface PageDef {
   anyOf: readonly PermissionCode[];
   /** Only in UAT mode (design/engineering aid, not a product screen). */
   uatOnly?: boolean;
+  /** CP3b: platform-wide page, shown only when the session holds platform_admin (not a workspace permission). */
+  platformAdmin?: boolean;
+  /** In the "Administrasi" nav section (the caption sits before the first one shown). */
+  admin?: boolean;
   /** Delivery step that builds the real screen. */
   milestone: string;
 }
@@ -20,23 +24,26 @@ export const PAGES: readonly PageDef[] = [
   {
     id: 'settings',
     label: 'Pengaturan',
+    admin: true,
     anyOf: ['admin.settings', 'admin.members', 'member.read', 'catalog.read'],
     milestone: 'D09',
   },
   {
     id: 'integrations',
     label: 'Integrasi',
+    admin: true,
     anyOf: ['integration.manage', 'integration.credentials', 'integration.recovery'],
     milestone: 'D09–D10',
   },
+  { id: 'users', label: 'Pengguna', anyOf: [], platformAdmin: true, admin: true, milestone: 'CP3b' },
 ];
 
 export const pageDef = (id: PageId): PageDef => PAGES.find((p) => p.id === id) ?? PAGES[0]!;
 
-export function allowedPages(permissions: readonly PermissionCode[], uat: boolean): PageDef[] {
-  return PAGES.filter(
-    (p) => (!p.uatOnly || uat) && (p.anyOf.length === 0 || p.anyOf.some((c) => permissions.includes(c))),
-  );
+export function allowedPages(permissions: readonly PermissionCode[], uat: boolean, platformAdmin = false): PageDef[] {
+  return PAGES.filter((p) => (p.platformAdmin
+    ? platformAdmin
+    : (!p.uatOnly || uat) && (p.anyOf.length === 0 || p.anyOf.some((c) => permissions.includes(c)))));
 }
 
 export interface Route {
@@ -93,11 +100,14 @@ export interface DashboardParams {
 
 const PERIOD_KEYS: readonly string[] = ['today', 'last_7_days', 'this_month'];
 
-/** Unknown period → today; empty filter values are dropped (no filter). */
+/** CP-UI2b: the owner prototype opens on "bulan ini". */
+export const DEFAULT_DASHBOARD_PERIOD: DashboardPeriodKey = 'this_month';
+
+/** Unknown period → this month; empty filter values are dropped (no filter). */
 export function parseDashboardQuery(query: string): DashboardParams {
   const q = new URLSearchParams(query);
   const p = q.get('period');
-  const period = (p && PERIOD_KEYS.includes(p) ? p : 'today') as DashboardPeriodKey;
+  const period = (p && PERIOD_KEYS.includes(p) ? p : DEFAULT_DASHBOARD_PERIOD) as DashboardPeriodKey;
   const filters = Object.fromEntries(DASHBOARD_FILTERS.map((k) => [k, q.get(k) || null])) as DashboardParams['filters'];
   return { period, filters };
 }
@@ -137,22 +147,30 @@ export interface TicketParams {
   order: TicketOrder;
   /** Optional List columns shown (canonical order, never empty). Display only; not sent to the API. */
   columns: TicketColumn[];
+  /**
+   * CP-UI2b: per-row "Ubah status" button in the List (`acts=1`, default off as in the prototype).
+   * Display only: not sent to the API and not part of a saved view (the server allowlists columns).
+   */
+  rowActions: boolean;
 }
 
 /** C32 properties: optional List columns in display order (number and title are always shown). */
 export const TICKET_COLUMNS = ['status', 'priority', 'owner', 'channel', 'received', 'updated'] as const;
 export type TicketColumn = (typeof TICKET_COLUMNS)[number];
 export const COLUMN_LABELS: Record<TicketColumn, string> = {
-  status: 'Status', priority: 'Prioritas', owner: 'PIC', channel: 'Kanal · kategori',
+  status: 'Status', priority: 'Prioritas', owner: 'PIC', channel: 'Kategori · channel',
   received: 'Diterima', updated: 'Diperbarui',
 };
+/** CP-UI2b: the prototype's default List columns (Diperbarui is opt-in through Kolom). */
+export const DEFAULT_TICKET_COLUMNS: readonly TicketColumn[] = ['status', 'priority', 'owner', 'channel', 'received'];
 
 /** Allowlisted, deduplicated, canonical order; unknown names are dropped, nothing left = all. */
 export function canonicalColumns(raw: readonly string[]): TicketColumn[] {
   const picked = TICKET_COLUMNS.filter((c) => raw.includes(c));
   return picked.length ? picked : [...TICKET_COLUMNS];
 }
-const allColumns = (c: readonly TicketColumn[]) => c.length === TICKET_COLUMNS.length;
+export const isDefaultColumns = (c: readonly TicketColumn[]) =>
+  c.length === DEFAULT_TICKET_COLUMNS.length && DEFAULT_TICKET_COLUMNS.every((x) => c.includes(x));
 
 const SORTS: readonly string[] = ['updated_at', 'received_at', 'number'];
 
@@ -165,8 +183,10 @@ export function parseTicketQuery(query: string): TicketParams {
   const s = q.get('sort');
   const sort = (s && SORTS.includes(s) ? s : 'updated_at') as TicketSort;
   const order = q.get('order') === 'asc' ? 'asc' : 'desc';
-  const columns = canonicalColumns((q.get('cols') ?? '').split(','));
-  return { view, filters, sort, order, columns };
+  // No (valid) `cols` = the prototype default; an explicit list is kept as given.
+  const raw = (q.get('cols') ?? '').split(',');
+  const columns = TICKET_COLUMNS.some((c) => raw.includes(c)) ? canonicalColumns(raw) : [...DEFAULT_TICKET_COLUMNS];
+  return { view, filters, sort, order, columns, rowActions: q.get('acts') === '1' };
 }
 
 /** Canonical API query (no `view`): the same scope always gives the same string and cache key. */
@@ -181,10 +201,11 @@ export function ticketApiQuery(p: TicketParams): string {
   return q.toString();
 }
 
-/** URL query: view first (default list omitted), then the API query, then non-default columns. */
+/** URL query: view first (default list omitted), then the API query, then non-default display options. */
 export function ticketQuery(p: TicketParams): string {
   const parts = [p.view === 'board' ? 'view=board' : '', ticketApiQuery(p),
-    allColumns(p.columns) ? '' : `cols=${canonicalColumns(p.columns).join(',')}`];
+    isDefaultColumns(p.columns) ? '' : `cols=${canonicalColumns(p.columns).join(',')}`,
+    p.rowActions ? 'acts=1' : ''];
   return parts.filter(Boolean).join('&');
 }
 
@@ -221,12 +242,14 @@ export function paramsFromSavedView(v: {
     const value = v.query[k];
     if (value) q.set(k, value);
   }
-  return { ...parseTicketQuery(q.toString()), columns: canonicalColumns(v.columns ?? []) };
+  const cols = v.columns ?? [];
+  const columns = TICKET_COLUMNS.some((c) => cols.includes(c)) ? canonicalColumns(cols) : [...DEFAULT_TICKET_COLUMNS];
+  return { ...parseTicketQuery(q.toString()), columns };
 }
 
 /** Same view, filters, sort and columns (search ignored): the saved view that matches the screen. */
 export function sameSavedScope(a: TicketParams, b: TicketParams): boolean {
-  const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null } });
+  const strip = (p: TicketParams) => ticketQuery({ ...p, filters: { ...p.filters, q: null }, rowActions: false });
   return strip(a) === strip(b);
 }
 
@@ -280,10 +303,48 @@ export interface ReportParams {
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
-/** First day of the current month to today, in the workspace time zone. */
-export function defaultReportPeriod(timeZone: string, now = Date.now()): { periodStart: string; periodEnd: string } {
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
-  return { periodStart: `${today.slice(0, 8)}01`, periodEnd: today };
+/** CP-UI3b period presets of the report filter (owner prototype 07); anything else is "Rentang kustom". */
+export const REPORT_PRESETS = [
+  { id: '7d', label: '7 hari terakhir' },
+  { id: '30d', label: '30 hari terakhir' },
+  { id: 'month', label: 'Bulan ini' },
+  { id: 'prev-month', label: 'Bulan lalu' },
+] as const;
+export type ReportPreset = (typeof REPORT_PRESETS)[number]['id'];
+type Period = { periodStart: string; periodEnd: string };
+
+const todayIn = (timeZone: string, now: number) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+/** Calendar arithmetic on YYYY-MM-DD (UTC noon avoids any DST edge). */
+const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+/** Inclusive dates of a preset, counted in the workspace time zone. */
+export function reportPresetPeriod(preset: ReportPreset, timeZone: string, now = Date.now()): Period {
+  const today = todayIn(timeZone, now);
+  const monthStart = `${today.slice(0, 8)}01`;
+  switch (preset) {
+    case '7d': return { periodStart: addDays(today, -6), periodEnd: today };
+    case '30d': return { periodStart: addDays(today, -29), periodEnd: today };
+    case 'month': return { periodStart: monthStart, periodEnd: today };
+    case 'prev-month': {
+      const end = addDays(monthStart, -1);
+      return { periodStart: `${end.slice(0, 8)}01`, periodEnd: end };
+    }
+  }
+}
+
+/** The preset that yields exactly these dates today, else 'custom'. 30 days wins a tie (the default). */
+export function reportPresetOf(p: Period, timeZone: string, now = Date.now()): ReportPreset | 'custom' {
+  const order: ReportPreset[] = ['30d', '7d', 'month', 'prev-month'];
+  return order.find((id) => {
+    const r = reportPresetPeriod(id, timeZone, now);
+    return r.periodStart === p.periodStart && r.periodEnd === p.periodEnd;
+  }) ?? 'custom';
+}
+
+/** Default report period: the last 30 days up to today, in the workspace time zone (prototype 07). */
+export function defaultReportPeriod(timeZone: string, now = Date.now()): Period {
+  return reportPresetPeriod('30d', timeZone, now);
 }
 
 /** Missing or malformed dates fall back to the default period; the server still validates the rest. */
@@ -327,4 +388,60 @@ export function reportExportBody(p: ReportParams, format: 'csv' | 'xlsx' = 'csv'
     ...(p.status.length ? { status: REPORT_STATUSES.filter((c) => p.status.includes(c)) } : {}),
     ...Object.fromEntries(DASHBOARD_FILTERS.flatMap((k) => (p.filters[k] ? [[k, p.filters[k]]] : []))),
   };
+}
+
+/** CP-UI2b breadcrumb: "Detail tiket" on the full-page detail, "Board" on the board view; CP-UI3 "Tiket baru". */
+export function crumbLabel(route: Route): string {
+  if (route.page === 'tickets') {
+    if (isNewTicket(route)) return 'Tiket baru';
+    if (parseDetailQuery(route.query).full) return 'Detail tiket';
+    if (parseTicketQuery(route.query).view === 'board') return 'Board';
+  }
+  return pageDef(route.page).label;
+}
+
+/** CP-UI1 sidebar entry (owner prototype groups Operasional / Analitik / Administrasi). */
+export interface NavItem {
+  key: PageId | 'board' | 'new';
+  label: string;
+  href: string;
+  current: boolean;
+}
+export interface NavGroup { label: string; items: NavItem[] }
+
+/** Query flag of the "Tiket baru" page (CP-UI3): the Tiket page renders the intake form as a page. */
+export const NEW_TICKET_FLAG = 'new';
+export const isNewTicket = (route: Route): boolean =>
+  route.page === 'tickets' && new URLSearchParams(route.query).get(NEW_TICKET_FLAG) === '1';
+
+/**
+ * Sidebar groups from the pages the server allows here (default deny, same as before). Board is
+ * the Tiket page in board view and "Tiket baru" its intake form, so neither adds a route or a
+ * permission: both need Tiket, and "Tiket baru" also `ticket.create`. Empty groups are left out.
+ */
+export function navGroups(pages: readonly PageDef[], route: Route, canCreate: boolean): NavGroup[] {
+  const ws = route.workspaceId;
+  if (!ws) return [];
+  const has = (id: PageId) => pages.some((p) => p.id === id);
+  const fresh = canCreate && isNewTicket(route);
+  const board = !fresh && route.page === 'tickets' && parseTicketQuery(route.query).view === 'board';
+  const item = (id: PageId): NavItem => ({
+    key: id, label: pageDef(id).label, href: toHash({ workspaceId: ws, page: id }),
+    current: route.page === id && !(id === 'tickets' && (board || fresh)),
+  });
+  const ops: NavItem[] = [];
+  if (has('dashboard')) ops.push(item('dashboard'));
+  if (has('tickets')) {
+    ops.push(item('tickets'));
+    ops.push({ key: 'board', label: 'Board', href: toHash({ workspaceId: ws, page: 'tickets', query: 'view=board' }), current: board });
+    if (canCreate) {
+      ops.push({ key: 'new', label: 'Tiket baru', href: toHash({ workspaceId: ws, page: 'tickets', query: `${NEW_TICKET_FLAG}=1` }), current: fresh });
+    }
+  }
+  const groups: NavGroup[] = [
+    { label: 'Operasional', items: ops },
+    { label: 'Analitik', items: has('reports') ? [item('reports')] : [] },
+    { label: 'Administrasi', items: pages.filter((p) => p.admin).map((p) => item(p.id)) },
+  ];
+  return groups.filter((g) => g.items.length > 0);
 }
