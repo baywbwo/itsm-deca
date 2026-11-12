@@ -63,6 +63,8 @@ pub struct SyncView {
     updated_at: String,
     /// Mode of the connection: `live` | `simulation`.
     mode: String,
+    /// CP6a `jira_transition_issue`: the ITSM status the Jira issue is moved for.
+    target_status: Option<String>,
 }
 
 const VIEW_SQL: &str = concat!(
@@ -72,7 +74,7 @@ const VIEW_SQL: &str = concat!(
     "to_char(o.next_attempt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS next_attempt_at, ",
     "o.auto_attempts, (o.claim_token IS NOT NULL) AS in_flight, ",
     "to_char(o.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, ",
-    "c.mode ",
+    "c.mode, o.target_ticket_status AS target_status ",
     "FROM integration_outbox o ",
     "JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id ",
     "LEFT JOIN lark_destinations d ON d.workspace_id = o.workspace_id AND d.id = o.lark_destination_id ",

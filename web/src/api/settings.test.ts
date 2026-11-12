@@ -31,6 +31,7 @@ const connection = {
   id: 'i1', provider: 'jira', displayName: 'DUMA Jira', mode: 'simulation', state: 'tested', testedAt: '2026-11-02T01:00:00Z',
   lastTestNote: 'Uji simulasi', simulatedOutcome: 'success', version: 4, directoryCount: 2,
   lastTestOk: true, credential: { state: 'missing', updatedAt: null },
+  webhook: { state: 'missing', updatedAt: null, path: '/api/v1/integrations/jira/i1/webhook', url: null },
   settings: { baseUrl: null, email: null, projectKey: null, issueTypeId: null, appId: null, priorityMap: {}, statusMap: {} },
   recent: [{ action: 'integration.test', outcome: 'success', occurredAt: '2026-11-02T01:00:00Z', actor: 'Superadmin' }],
 };

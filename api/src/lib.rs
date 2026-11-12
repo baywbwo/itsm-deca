@@ -75,9 +75,13 @@ pub fn app(state: AppState) -> Router {
             UPLOAD_TIMEOUT,
         ));
 
+    // CP6a: Jira webhook: no session/CSRF (signed body), own limits (routes::jira_webhook).
+    let webhook = routes::jira_webhook::router();
+
     Router::new()
         .merge(bounded)
         .merge(upload)
+        .merge(webhook)
         .with_state(state)
         .layer(SetResponseHeaderLayer::overriding(
             header::CACHE_CONTROL,
@@ -94,6 +98,7 @@ pub fn app(state: AppState) -> Router {
             header::SET_COOKIE,
             header::AUTHORIZATION,
             HeaderName::from_static(session::CSRF_HEADER),
+            HeaderName::from_static("x-hub-signature"),
         ]))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
 }

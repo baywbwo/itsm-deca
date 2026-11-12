@@ -8,6 +8,7 @@ pub mod followup;
 pub mod health;
 pub mod intake;
 pub mod integrations;
+pub mod jira_webhook;
 pub mod members;
 pub mod mfa;
 pub mod oidc;
@@ -32,6 +33,7 @@ use crate::AppState;
 /// All `/api/v1` routes, declared with full paths so the session layer sees them as-is.
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
+    ("post", jira_webhook::PATH),
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("get", "/api/v1/workspaces/{workspace_id}/ai-settings"),
     (
@@ -256,6 +258,14 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     (
         "put",
         "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
+    ),
+    (
+        "delete",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
     ),
     (
         "delete",
@@ -545,6 +555,11 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
             put(integrations::put_credential).merge(delete(integrations::delete_credential)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
+            post(integrations::rotate_webhook_secret)
+                .merge(delete(integrations::delete_webhook_secret)),
         )
         .route(
             "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options",

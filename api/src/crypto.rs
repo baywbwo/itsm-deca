@@ -58,6 +58,8 @@ pub enum Purpose {
     LarkAppSecret,
     /// CP5c: OIDC client secret of a company IdP (client_secret_basic at the token endpoint).
     OidcClientSecret,
+    /// CP6a: shared secret of the inbound Jira webhook (HMAC-SHA256 of the raw body).
+    JiraWebhookSecret,
 }
 
 impl Purpose {
@@ -71,6 +73,7 @@ impl Purpose {
             Self::JiraApiToken => "jira_api_token",
             Self::LarkAppSecret => "lark_app_secret",
             Self::OidcClientSecret => "oidc_client_secret",
+            Self::JiraWebhookSecret => "jira_webhook_secret",
         }
     }
 }
@@ -298,6 +301,7 @@ fn purpose_from_db(s: &str) -> Option<Purpose> {
         "jira_api_token" => Purpose::JiraApiToken,
         "lark_app_secret" => Purpose::LarkAppSecret,
         "oidc_client_secret" => Purpose::OidcClientSecret,
+        "jira_webhook_secret" => Purpose::JiraWebhookSecret,
         _ => return None,
     })
 }

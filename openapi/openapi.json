@@ -2978,7 +2978,8 @@
             "enum": [
               "jira_create_issue",
               "jira_link_issue",
-              "lark_ticket_created"
+              "lark_ticket_created",
+              "jira_transition_issue"
             ]
           },
           "state": {
@@ -3050,6 +3051,13 @@
               "null"
             ],
             "description": "https link to the Jira issue (live only)."
+          },
+          "targetStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "jira_transition_issue: the ITSM status the Jira issue is moved for. Superseded when the ticket has moved on."
           }
         }
       },
@@ -4156,8 +4164,10 @@
         "type": "object",
         "required": [
           "id",
+          "kind",
           "body",
           "author",
+          "externalAuthor",
           "createdAt"
         ],
         "properties": {
@@ -4165,11 +4175,36 @@
             "type": "string",
             "format": "uuid"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "note",
+              "jira_comment",
+              "jira_status",
+              "jira_assignee"
+            ],
+            "description": "note = ITSM officer note; jira_* = written by the inbound Jira webhook (CP6a)."
+          },
           "body": {
             "type": "string"
           },
           "author": {
-            "$ref": "#/components/schemas/PersonRef"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ITSM author; null for Jira entries."
+          },
+          "externalAuthor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Jira display name as sent by Jira (not an ITSM account)."
           },
           "createdAt": {
             "type": "string",
@@ -5001,7 +5036,8 @@
           "directoryCount",
           "settings",
           "credential",
-          "recent"
+          "recent",
+          "webhook"
         ],
         "properties": {
           "id": {
@@ -5072,6 +5108,17 @@
           },
           "settings": {
             "$ref": "#/components/schemas/IntegrationSettings"
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IntegrationWebhook"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Jira only; null for Lark."
           }
         },
         "additionalProperties": false
@@ -6750,6 +6797,80 @@
             "type": "integer"
           }
         }
+      },
+      "IntegrationWebhook": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "updatedAt",
+          "path",
+          "url"
+        ],
+        "description": "Inbound Jira webhook. The secret itself is never returned here.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "stored"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path on this server Jira must POST to."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full address when ITSM_PUBLIC_URL is configured."
+          }
+        }
+      },
+      "WebhookSecretResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "auditEventId",
+          "secret",
+          "path",
+          "url"
+        ],
+        "description": "Returned once. The secret is not stored in readable form anywhere the API can show again.",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationConnection"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "64 hex characters; paste into the Jira webhook Secret field now."
+          },
+          "path": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "responses": {
@@ -6964,6 +7085,26 @@
       },
       "IntegrationConflict": {
         "description": "Stale version (version_conflict), connection not configured or without credential (integration_not_configured), configured for the other server mode (integration_mode_mismatch), or server not in live mode (integration_not_live)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "WebhookUnauthorized": {
+        "description": "Unknown, inactive or other-mode connection, no secret configured, or signature missing/invalid (unauthenticated). Deliberately the same response for every case.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "WebhookUnavailable": {
+        "description": "Overloaded, timed out or keyring/database not available (dependency_unavailable). Jira retries.",
         "content": {
           "application/json": {
             "schema": {
@@ -13638,6 +13779,201 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret": {
+      "post": {
+        "operationId": "rotateIntegrationWebhookSecret",
+        "summary": "Generate or rotate the inbound Jira webhook secret (shown once; the old one stops working)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New secret, returned only in this response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSecretResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIntegrationWebhookSecret",
+        "summary": "Remove the inbound Jira webhook secret (every delivery is refused until a new one is made)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/jira/{connection_id}/webhook": {
+      "post": {
+        "operationId": "receiveJiraWebhook",
+        "summary": "Inbound Jira webhook (CP6a): HMAC-SHA256 signed, idempotent per delivery, applied in Jira timestamp order",
+        "description": "No session. Verified with X-Hub-Signature: sha256=<hex HMAC of the raw body> using the connection's webhook secret. A replayed delivery (same X-Atlassian-Webhook-Identifier, or same body hash) returns 204 without effect. Events older than the stored issue timestamp, or outside -72h..+5min, are recorded as stale. Only jira:issue_updated (status/assignee) and comment_created are applied; ticket status is never changed. Body limit 1 MB, 16 concurrent deliveries, 10 s timeout.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          },
+          {
+            "name": "X-Hub-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256=[0-9a-fA-F]{64}$"
+            }
+          },
+          {
+            "name": "X-Atlassian-Webhook-Identifier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "webhookEvent"
+                ],
+                "properties": {
+                  "webhookEvent": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted (applied, ignored, stale, unknown issue or replay)"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/WebhookUnauthorized"
+          },
+          "413": {
+            "description": "Body larger than 1 MB"
+          },
+          "503": {
+            "$ref": "#/components/responses/WebhookUnavailable"
           }
         }
       }

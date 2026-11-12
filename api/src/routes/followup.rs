@@ -49,9 +49,13 @@ pub struct NoteRow {
     id: Uuid,
     body: String,
     #[serde(skip)]
-    author_id: Uuid,
+    activity_type: String,
     #[serde(skip)]
-    author_name: String,
+    author_id: Option<Uuid>,
+    #[serde(skip)]
+    author_name: Option<String>,
+    #[serde(skip)]
+    external_author: Option<String>,
     created_at: String,
 }
 
@@ -59,8 +63,13 @@ pub struct NoteRow {
 #[serde(rename_all = "camelCase")]
 pub struct NoteView {
     id: Uuid,
+    /// `note` (ITSM officer) | `jira_comment` | `jira_status` | `jira_assignee` (CP6a webhook).
+    kind: String,
     body: String,
-    author: Person,
+    /// ITSM author; `null` for entries written by the Jira webhook.
+    author: Option<Person>,
+    /// Jira display name for Jira entries (as sent by Jira; not an ITSM account).
+    external_author: Option<String>,
     created_at: String,
 }
 
@@ -68,11 +77,13 @@ impl From<NoteRow> for NoteView {
     fn from(r: NoteRow) -> Self {
         NoteView {
             id: r.id,
+            kind: r.activity_type,
             body: r.body,
-            author: Person {
-                id: r.author_id,
-                label: r.author_name,
-            },
+            author: r
+                .author_id
+                .zip(r.author_name)
+                .map(|(id, label)| Person { id, label }),
+            external_author: r.external_author,
             created_at: r.created_at,
         }
     }
@@ -107,9 +118,10 @@ pub struct NoteBody {
 }
 
 const NOTE_SELECT: &str = concat!(
-    "SELECT n.id, n.body, n.actor_id AS author_id, u.display_name AS author_name, ",
+    "SELECT n.id, n.body, n.activity_type, n.actor_id AS author_id, u.display_name AS author_name, ",
+    "n.external_author, ",
     utc!("n.created_at"),
-    " AS created_at FROM ticket_activities n JOIN users u ON u.id = n.actor_id "
+    " AS created_at FROM ticket_activities n LEFT JOIN users u ON u.id = n.actor_id "
 );
 
 async fn ticket_exists(

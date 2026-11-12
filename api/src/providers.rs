@@ -33,6 +33,8 @@ const MAX_BODY: usize = 1024 * 1024;
 const MAX_CHAT_PAGES: usize = 10;
 /// Lark business code for "too many requests".
 const LARK_RATE_LIMITED: i64 = 99_991_400;
+/// Lark business codes for a missing, invalid or expired tenant access token.
+const LARK_TOKEN_CODES: [i64; 3] = [99_991_661, 99_991_663, 99_991_668];
 
 /// Why a provider call did not produce a usable answer. Carries no provider text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +69,11 @@ impl CallError {
     /// The provider certainly did not accept the request and asks to come back later.
     pub fn is_throttle(self) -> bool {
         matches!(self, CallError::Status(429 | 503)) || self == CallError::Api(LARK_RATE_LIMITED)
+    }
+
+    /// Lark refused the tenant access token (a cached token must be dropped).
+    pub fn is_lark_token(self) -> bool {
+        matches!(self, CallError::Api(code) if LARK_TOKEN_CODES.contains(&code))
     }
 
     /// Fixed Indonesian sentence for notes and outbox errors (never provider text).
@@ -476,6 +483,13 @@ struct IssueFields {
     status: Option<IdName>,
 }
 
+/// One workflow transition offered for an issue: its id and the status it leads to.
+#[derive(Debug, Clone, Deserialize)]
+pub struct JiraTransition {
+    pub id: String,
+    pub to: IdName,
+}
+
 /// What a new Jira issue gets. No ticket chronology or customer data is sent.
 pub struct NewIssue<'a> {
     pub project_key: &'a str,
@@ -581,6 +595,42 @@ impl Jira {
         Ok(self.issue_ref(b))
     }
 
+    /// Current workflow status (id and name) of an issue.
+    pub async fn issue_status(&self, key: &str) -> Result<Option<IdName>, CallError> {
+        let b: IssueBody = parse(
+            self.get(&format!("/rest/api/3/issue/{}?fields=status", enc(key)))
+                .await?,
+        )?;
+        Ok(b.fields.and_then(|f| f.status))
+    }
+
+    /// Transitions the workflow allows from the issue's current status.
+    pub async fn transitions(&self, key: &str) -> Result<Vec<JiraTransition>, CallError> {
+        #[derive(Deserialize)]
+        struct List {
+            #[serde(default)]
+            transitions: Vec<JiraTransition>,
+        }
+        let l: List = parse(
+            self.get(&format!("/rest/api/3/issue/{}/transitions", enc(key)))
+                .await?,
+        )?;
+        Ok(l.transitions)
+    }
+
+    /// Performs one transition (Jira answers 204 without a body).
+    pub async fn transition(&self, key: &str, transition_id: &str) -> Result<(), CallError> {
+        self.target
+            .call(
+                Method::POST,
+                &format!("/rest/api/3/issue/{}/transitions", enc(key)),
+                Some(&self.auth),
+                Some(&json!({ "transition": { "id": transition_id } })),
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Finds an issue already created for this label (a previous attempt that did reach Jira).
     pub async fn find_by_label(&self, label: &str) -> Result<Option<IssueRef>, CallError> {
         #[derive(Deserialize)]
@@ -658,6 +708,29 @@ struct LarkEnvelope {
     bot: Option<Value>,
     #[serde(default)]
     tenant_access_token: Option<String>,
+    /// Seconds the tenant access token stays valid.
+    #[serde(default)]
+    expire: Option<u64>,
+}
+
+/// A tenant access token and how long Lark says it stays valid. Never printed.
+pub struct LarkToken {
+    pub value: String,
+    pub expires_in: Duration,
+}
+
+impl std::fmt::Debug for LarkToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LarkToken")
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for LarkToken {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.value);
+    }
 }
 
 fn lark_ok(v: Value) -> Result<LarkEnvelope, CallError> {
@@ -676,12 +749,12 @@ pub struct LarkChat {
 }
 
 impl Lark {
-    /// Exchanges the app credentials for a tenant access token (valid ~2 h; fetched per operation).
-    pub async fn connect(
-        target: Target,
+    /// Exchanges the app credentials for a tenant access token (valid ~2 h).
+    pub async fn token(
+        target: &Target,
         app_id: &str,
         app_secret: &[u8],
-    ) -> Result<Self, CallError> {
+    ) -> Result<LarkToken, CallError> {
         let secret = std::str::from_utf8(app_secret).map_err(|_| CallError::Protocol)?;
         let env = lark_ok(
             target
@@ -693,9 +766,27 @@ impl Lark {
                 )
                 .await?,
         )?;
-        let token = env.tenant_access_token.ok_or(CallError::Protocol)?;
+        let value = env.tenant_access_token.ok_or(CallError::Protocol)?;
+        Ok(LarkToken {
+            value,
+            expires_in: Duration::from_secs(env.expire.unwrap_or(0)),
+        })
+    }
+
+    /// A client that uses an already obtained tenant access token.
+    pub fn with_token(target: Target, token: &str) -> Result<Self, CallError> {
         let auth = sensitive(format!("Bearer {token}"))?;
         Ok(Self { target, auth })
+    }
+
+    /// Exchanges the app credentials for a fresh token (connection test: no cache).
+    pub async fn connect(
+        target: Target,
+        app_id: &str,
+        app_secret: &[u8],
+    ) -> Result<Self, CallError> {
+        let token = Self::token(&target, app_id, app_secret).await?;
+        Self::with_token(target, &token.value)
     }
 
     /// Bot name of the app (proves the bot capability is enabled).

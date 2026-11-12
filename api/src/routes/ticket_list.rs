@@ -1305,6 +1305,28 @@ pub async fn transition(
     .bind(b.version + 1)
     .execute(&mut *tx)
     .await?;
+    // CP6a: move every linked Jira issue whose connection maps the new status, in the same
+    // transaction (the outbox worker delivers; Jira never changes the ticket status back).
+    let jira_intents = sqlx::query_scalar::<_, i64>(
+        "WITH q AS (INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, \
+           operation, related_work_id, idempotency_key, correlation_id, target_ticket_status) \
+         SELECT r.workspace_id, r.ticket_id, ji.connection_id, 'jira', 'jira_transition_issue', r.id, \
+           r.ticket_id::text || ':jira_transition:' || r.id::text || ':' || gen_random_uuid()::text, \
+           $4, $3 \
+         FROM related_work r \
+         JOIN jira_issues ji ON ji.workspace_id = r.workspace_id AND ji.id = r.jira_issue_id \
+         JOIN integration_connections c ON c.workspace_id = ji.workspace_id AND c.id = ji.connection_id \
+         WHERE r.workspace_id = $1 AND r.ticket_id = $2 AND c.state = 'active' AND c.mode = $5 \
+           AND length(c.config -> 'statusMap' ->> $3) > 0 \
+         RETURNING 1) SELECT count(*) FROM q",
+    )
+    .bind(access.workspace_id)
+    .bind(ticket_id)
+    .bind(to.code())
+    .bind(correlation(&headers))
+    .bind(state.config.integrations.mode.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
     let audit_id = audit(
         &mut tx,
         &access,
@@ -1317,6 +1339,7 @@ pub async fn transition(
             "cycleNo": cycle,
             "version": b.version + 1,
             "resolutionEventId": event_id,
+            "jiraTransitions": jira_intents,
         }),
         correlation(&headers),
     )

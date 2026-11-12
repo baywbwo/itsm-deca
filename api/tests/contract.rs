@@ -173,7 +173,9 @@ async fn every_documented_operation_is_routed(pool: PgPool) {
 fn every_api_operation_documents_the_rate_limit_response() {
     let doc = spec();
     for (method, path) in documented_operations(&doc) {
-        if !path.starts_with("/api/v1") {
+        // The Jira webhook (CP6a) is not behind the per-user limiter by design: it sheds
+        // load with 503 instead, so it documents no 429.
+        if !path.starts_with("/api/v1") || path == itsm_api::routes::jira_webhook::PATH {
             continue;
         }
         assert_eq!(

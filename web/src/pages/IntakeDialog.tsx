@@ -47,6 +47,11 @@ const OPERATION_LABEL: Record<IntegrationSync['operation'], string> = {
   jira_create_issue: 'Jira · buat issue',
   jira_link_issue: 'Jira · tautkan issue',
   lark_ticket_created: 'Lark · notifikasi tiket dibuat',
+  jira_transition_issue: 'Jira · ubah status issue',
+};
+const TARGET_STATUS_LABEL: Record<string, string> = {
+  new: 'Baru', open: 'Dibuka', pending_customer: 'Menunggu nasabah', pending_engineering: 'Menunggu engineering',
+  resolved: 'Selesai', closed: 'Ditutup',
 };
 const OUTCOME_LABEL = { success: 'berhasil', failed: 'gagal', unknown: 'tidak pasti', transient: 'gangguan sementara (dicoba ulang otomatis)' } as const;
 /** Mirrors the server's bounded automatic retry budget (api/src/outbox.rs MAX_AUTO_ATTEMPTS). */
@@ -652,7 +657,7 @@ export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial
               <Badge tone={SYNC_TONE[it.state]}>{it.mode === 'simulation' ? `${SYNC_LABEL[it.state]} · simulasi` : SYNC_LABEL[it.state]}</Badge>
             </div>
             <p className="tiny muted">
-              {[it.targetLabel, it.issueKey && `Issue ${it.issueKey}`, `percobaan ${it.attempt}`, it.reconciled && 'direkonsiliasi'].filter(Boolean).join(' · ')}
+              {[it.targetLabel, it.targetStatus && `ikut tiket: ${TARGET_STATUS_LABEL[it.targetStatus] ?? it.targetStatus}`, it.issueKey && `Issue ${it.issueKey}`, `percobaan ${it.attempt}`, it.reconciled && 'direkonsiliasi'].filter(Boolean).join(' · ')}
             </p>
             {it.issueUrl && <p className="tiny"><a href={it.issueUrl} target="_blank" rel="noopener noreferrer">Buka {it.issueKey ?? 'issue'} di Jira</a></p>}
             {it.safeError && <p className="tiny">{it.safeError}</p>}

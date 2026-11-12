@@ -1685,6 +1685,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Generate or rotate the inbound Jira webhook secret (shown once; the old one stops working) */
+        post: operations["rotateIntegrationWebhookSecret"];
+        /** Remove the inbound Jira webhook secret (every delivery is refused until a new one is made) */
+        delete: operations["deleteIntegrationWebhookSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/jira/{connection_id}/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inbound Jira webhook (CP6a): HMAC-SHA256 signed, idempotent per delivery, applied in Jira timestamp order
+         * @description No session. Verified with X-Hub-Signature: sha256=<hex HMAC of the raw body> using the connection's webhook secret. A replayed delivery (same X-Atlassian-Webhook-Identifier, or same body hash) returns 204 without effect. Events older than the stored issue timestamp, or outside -72h..+5min, are recorded as stale. Only jira:issue_updated (status/assignee) and comment_created are applied; ticket status is never changed. Body limit 1 MB, 16 concurrent deliveries, 10 s timeout.
+         */
+        post: operations["receiveJiraWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2483,7 +2521,7 @@ export interface components {
             /** @enum {string} */
             provider: "jira" | "lark";
             /** @enum {string} */
-            operation: "jira_create_issue" | "jira_link_issue" | "lark_ticket_created";
+            operation: "jira_create_issue" | "jira_link_issue" | "lark_ticket_created" | "jira_transition_issue";
             /**
              * @description pending = not settled yet; failed = definite failure (retry allowed); unknown = outcome cannot be known (reconcile with evidence, never blind retry). A pending row with nextAttemptAt had a transient failure (not delivered) and is retried automatically with backoff.
              * @enum {string}
@@ -2509,6 +2547,8 @@ export interface components {
             inFlight: boolean;
             /** @description https link to the Jira issue (live only). */
             issueUrl?: string | null;
+            /** @description jira_transition_issue: the ITSM status the Jira issue is moved for. Superseded when the ticket has moved on. */
+            targetStatus?: string | null;
         };
         TicketCreateResult: {
             ticket: components["schemas"]["TicketListItem"];
@@ -2779,8 +2819,16 @@ export interface components {
         Note: {
             /** Format: uuid */
             id: string;
+            /**
+             * @description note = ITSM officer note; jira_* = written by the inbound Jira webhook (CP6a).
+             * @enum {string}
+             */
+            kind: "note" | "jira_comment" | "jira_status" | "jira_assignee";
             body: string;
-            author: components["schemas"]["PersonRef"];
+            /** @description ITSM author; null for Jira entries. */
+            author: components["schemas"]["PersonRef"] | null;
+            /** @description Jira display name as sent by Jira (not an ITSM account). */
+            externalAuthor: string | null;
             /** Format: date-time */
             createdAt: string;
         };
@@ -3014,6 +3062,8 @@ export interface components {
             recent: components["schemas"]["IntegrationLogEntry"][];
             lastTestOk: boolean | null;
             settings: components["schemas"]["IntegrationSettings"];
+            /** @description Jira only; null for Lark. */
+            webhook: components["schemas"]["IntegrationWebhook"] | null;
         };
         IntegrationList: {
             /** Format: uuid */
@@ -3448,6 +3498,27 @@ export interface components {
         SsoVersion: {
             version: number;
         };
+        /** @description Inbound Jira webhook. The secret itself is never returned here. */
+        IntegrationWebhook: {
+            /** @enum {string} */
+            state: "missing" | "stored";
+            /** Format: date-time */
+            updatedAt: string | null;
+            /** @description Path on this server Jira must POST to. */
+            path: string;
+            /** @description Full address when ITSM_PUBLIC_URL is configured. */
+            url: string | null;
+        };
+        /** @description Returned once. The secret is not stored in readable form anywhere the API can show again. */
+        WebhookSecretResult: {
+            item: components["schemas"]["IntegrationConnection"];
+            /** Format: uuid */
+            auditEventId: string;
+            /** @description 64 hex characters; paste into the Jira webhook Secret field now. */
+            secret: string;
+            path: string;
+            url: string | null;
+        };
     };
     responses: {
         /** @description Optimistic version is stale (version_conflict) */
@@ -3634,6 +3705,24 @@ export interface components {
         };
         /** @description Stale version (version_conflict), connection not configured or without credential (integration_not_configured), configured for the other server mode (integration_mode_mismatch), or server not in live mode (integration_not_live) */
         IntegrationConflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Unknown, inactive or other-mode connection, no secret configured, or signature missing/invalid (unauthenticated). Deliberately the same response for every case. */
+        WebhookUnauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Overloaded, timed out or keyring/database not available (dependency_unavailable). Jira retries. */
+        WebhookUnavailable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -7475,6 +7564,119 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
+        };
+    };
+    rotateIntegrationWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description New secret, returned only in this response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSecretResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["VersionConflict"];
+            422: components["responses"]["RuleViolation"];
+            429: components["responses"]["RateLimited"];
+            503: components["responses"]["KeyringMissing"];
+        };
+    };
+    deleteIntegrationWebhookSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionRequest"];
+            };
+        };
+        responses: {
+            /** @description Removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationResult"];
+                };
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["IntegrationConflict"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    receiveJiraWebhook: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Hub-Signature": string;
+                "X-Atlassian-Webhook-Identifier"?: string;
+            };
+            path: {
+                connection_id: components["parameters"]["ConnectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    webhookEvent: string;
+                    /** Format: int64 */
+                    timestamp?: number;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted (applied, ignored, stale, unknown issue or replay) */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidRequest"];
+            401: components["responses"]["WebhookUnauthorized"];
+            /** @description Body larger than 1 MB */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["WebhookUnavailable"];
         };
     };
 }

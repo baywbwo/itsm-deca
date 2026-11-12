@@ -13,10 +13,11 @@ import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { ConfirmDialog, useLoad, WriteAlert, writeError, type WriteError } from './adminKit';
+import { JiraWebhookSection } from './JiraWebhook';
 
 const PROVIDER_LABEL: Record<ProviderCode, string> = { jira: 'Jira', lark: 'Lark' };
 const PROVIDER_ROLE: Record<ProviderCode, string> = {
-  jira: 'Pekerjaan terkait (issue) untuk tiket; status Jira Done tidak otomatis menyelesaikan tiket.',
+  jira: 'Pekerjaan terkait (issue) untuk tiket. Status tiket yang dipetakan ikut diteruskan ke Jira; perubahan di Jira hanya dicatat di timeline, tidak menyelesaikan tiket.',
   lark: 'Notifikasi tim ke grup Lark (nomor tiket dan prioritas saja); tidak mengubah status tiket.',
 };
 const SECRET_LABEL: Record<ProviderCode, string> = { jira: 'API token Jira', lark: 'App secret Lark' };
@@ -37,6 +38,9 @@ const ACTION: Record<string, string> = {
   'integration.simulation': 'Hasil simulasi diubah',
   'integration.activate': 'Diaktifkan',
   'integration.disable': 'Dinonaktifkan',
+  'integration.webhook_secret.rotate': 'Secret webhook dibuat',
+  'integration.webhook_secret.delete': 'Secret webhook dihapus',
+  'integration.webhook': 'Kiriman webhook Jira diterapkan',
 };
 const OUTCOME: Record<string, string> = { success: 'berhasil', denied: 'ditolak', failed: 'gagal' };
 const STATUS_LABEL: Record<string, string> = {
@@ -563,6 +567,11 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
             <p className="tiny muted">Anda tidak memegang hak kelola kredensial integrasi; minta admin perusahaan.</p>
           )}
         </section>
+
+        {c.provider === 'jira' && (
+          <JiraWebhookSection api={api} workspace={workspace} list={list} connection={c}
+            onChanged={onChanged} onNotice={onNotice} toError={integrationError} />
+        )}
 
         <dl className="props spaced-bottom">
           <div className="props-row">

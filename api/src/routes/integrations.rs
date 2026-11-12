@@ -14,6 +14,9 @@
 //! keyring, never returned, never logged, never put in an audit row. Every change needs the
 //! explicit `integration.manage` grant (credentials also `integration.credentials`), checks the
 //! connection version (409) and writes its audit row in the same transaction.
+//!
+//! CP6a: a Jira connection also has an inbound webhook secret (HMAC-SHA256 of each delivery).
+//! The server generates it; it is shown once in the rotate response and never again.
 
 use std::collections::BTreeMap;
 
@@ -68,6 +71,7 @@ struct ConnectionRow {
     last_test_ok: Option<bool>,
     config: Value,
     credential_updated_at: Option<String>,
+    webhook_updated_at: Option<String>,
     simulated_outcome: String,
     version: i32,
     directory_count: i64,
@@ -85,7 +89,7 @@ pub struct SettingsView {
     app_id: Option<String>,
     /// ITSM priority code → Jira priority id.
     priority_map: BTreeMap<String, String>,
-    /// ITSM ticket status → Jira status id (stored for the office; no automatic transition).
+    /// ITSM ticket status → Jira status id (CP6a: a ticket transition moves linked issues).
     status_map: BTreeMap<String, String>,
 }
 
@@ -129,6 +133,32 @@ pub struct CredentialView {
     updated_at: Option<String>,
 }
 
+/// Inbound webhook of a Jira connection: whether a secret exists and where Jira must send.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookView {
+    /// `missing` | `stored`.
+    state: &'static str,
+    updated_at: Option<String>,
+    /// Path on this server (`/api/v1/integrations/jira/{id}/webhook`).
+    path: String,
+    /// Full address when `ITSM_PUBLIC_URL` is set.
+    url: Option<String>,
+}
+
+fn webhook_path(id: Uuid) -> String {
+    crate::routes::jira_webhook::PATH.replace("{connection_id}", &id.to_string())
+}
+
+fn webhook_url(state: &AppState, id: Uuid) -> Option<String> {
+    state
+        .config
+        .auth
+        .public_url
+        .as_deref()
+        .map(|origin| format!("{origin}{}", webhook_path(id)))
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionView {
@@ -149,6 +179,8 @@ pub struct ConnectionView {
     directory_count: i64,
     settings: SettingsView,
     credential: CredentialView,
+    /// CP6a inbound Jira webhook (Jira only; `null` for Lark). The secret is never returned here.
+    webhook: Option<WebhookView>,
     /// Safe audit trail of this connection (no secrets, no ticket content).
     recent: Vec<LogEntry>,
 }
@@ -157,6 +189,7 @@ const CONNECTION_SQL: &str = "SELECT c.id, c.provider, c.display_name, c.mode, c
         to_char(c.tested_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS tested_at, \
         c.last_test_note, c.last_test_ok, c.config, \
         to_char(c.credential_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS credential_updated_at, \
+        to_char(c.webhook_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS webhook_updated_at, \
         COALESCE(c.config->>'simulatedOutcome', 'success') AS simulated_outcome, \
         c.version, \
         CASE c.provider \
@@ -171,6 +204,7 @@ const CONNECTION_SQL: &str = "SELECT c.id, c.provider, c.display_name, c.mode, c
 
 async fn view(
     conn: &mut PgConnection,
+    state: &AppState,
     ws: Uuid,
     row: ConnectionRow,
 ) -> Result<ConnectionView, AppError> {
@@ -197,6 +231,16 @@ async fn view(
             },
             updated_at: row.credential_updated_at,
         },
+        webhook: (row.provider == "jira").then(|| WebhookView {
+            state: if row.webhook_updated_at.is_some() {
+                "stored"
+            } else {
+                "missing"
+            },
+            updated_at: row.webhook_updated_at,
+            path: webhook_path(row.id),
+            url: webhook_url(state, row.id),
+        }),
         id: row.id,
         provider: row.provider,
         display_name: row.display_name,
@@ -212,14 +256,19 @@ async fn view(
     })
 }
 
-async fn one(conn: &mut PgConnection, ws: Uuid, id: Uuid) -> Result<ConnectionView, AppError> {
+async fn one(
+    conn: &mut PgConnection,
+    state: &AppState,
+    ws: Uuid,
+    id: Uuid,
+) -> Result<ConnectionView, AppError> {
     let row = sqlx::query_as::<_, ConnectionRow>(&format!("{CONNECTION_SQL} AND c.id = $2"))
         .bind(ws)
         .bind(id)
         .fetch_optional(&mut *conn)
         .await?
         .ok_or(AppError::NotFound)?;
-    view(conn, ws, row).await
+    view(conn, state, ws, row).await
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -287,7 +336,7 @@ pub async fn list(
     let present: Vec<String> = rows.iter().map(|r| r.provider.clone()).collect();
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
-        items.push(view(&mut conn, ws, row).await?);
+        items.push(view(&mut conn, &state, ws, row).await?);
     }
     let priorities = sqlx::query_as::<_, PriorityOption>(
         "SELECT code, label FROM priorities WHERE workspace_id = $1 AND active \
@@ -326,7 +375,7 @@ async fn result(
 ) -> Result<Json<ConnectionResult>, AppError> {
     let mut conn = state.pool.acquire().await?;
     Ok(Json(ConnectionResult {
-        item: one(&mut conn, ws, id).await?,
+        item: one(&mut conn, state, ws, id).await?,
         audit_event_id,
     }))
 }
@@ -891,6 +940,171 @@ pub async fn delete_credential(
         serde_json::json!({
             "provider": cur.provider, "from": cur.state, "to": to, "version": b.version + 1
         }),
+        &correlation(&headers),
+    )
+    .await?;
+    tx.commit().await?;
+    result(&state, ws, id, audit_event_id).await
+}
+
+/// A newly generated webhook secret: returned once with the connection, never again.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookSecretResult {
+    item: ConnectionView,
+    audit_event_id: Uuid,
+    /// 64 hex characters (32 random bytes). Paste into the Jira webhook "Secret" field now.
+    secret: String,
+    path: String,
+    url: Option<String>,
+}
+
+impl std::fmt::Debug for WebhookSecretResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebhookSecretResult")
+            .field("audit_event_id", &self.audit_event_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for WebhookSecretResult {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
+/// 32 bytes from the OS CSPRNG as lowercase hex (what Jira signs with: the text as typed).
+fn new_webhook_secret() -> Result<String, AppError> {
+    let mut raw = zeroize::Zeroizing::new([0u8; 32]);
+    getrandom::fill(raw.as_mut()).map_err(|_| AppError::Unavailable)?;
+    Ok(crate::routes::reports::hex(raw.as_ref()))
+}
+
+/// CP6a: generates (or rotates) the inbound webhook secret of a Jira connection. The previous
+/// secret stops working at once. The value is in this response only (`no-store`), never logged
+/// or audited; the connection state is unchanged (outbound delivery does not use it).
+pub async fn rotate_webhook_secret(
+    State(state): State<AppState>,
+    s: Session,
+    headers: HeaderMap,
+    Path((raw_ws, raw_id)): Path<(String, String)>,
+    payload: Result<Json<VersionBody>, JsonRejection>,
+) -> Result<Json<WebhookSecretResult>, AppError> {
+    let access = credential_access(&state, &s, &raw_ws).await?;
+    let id = parse_id(&raw_id)?;
+    let b = body(payload)?;
+    let keyring = state
+        .config
+        .keyring
+        .clone()
+        .ok_or(AppError::KeyringMissing)?;
+    let ws = access.workspace_id;
+    let mut tx = state.pool.begin().await?;
+    let cur = lock(&mut tx, ws, id, b.version).await?;
+    if cur.provider != "jira" {
+        return Err(AppError::RuleViolation);
+    }
+    let old: Option<Uuid> = sqlx::query_scalar(
+        "SELECT webhook_secret_id FROM integration_connections WHERE workspace_id = $1 AND id = $2",
+    )
+    .bind(ws)
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let secret = zeroize::Zeroizing::new(new_webhook_secret()?);
+    let new_id = crypto::store_secret(
+        &mut tx,
+        &keyring,
+        Some(ws),
+        crypto::Purpose::JiraWebhookSecret,
+        secret.as_bytes(),
+        Some(access.user_id),
+    )
+    .await
+    .map_err(|e| AppError::Internal(Box::new(e)))?;
+    sqlx::query(
+        "UPDATE integration_connections SET webhook_secret_id = $3, webhook_updated_at = now(), \
+         version = version + 1 WHERE workspace_id = $1 AND id = $2",
+    )
+    .bind(ws)
+    .bind(id)
+    .bind(new_id)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(old) = old {
+        sqlx::query("DELETE FROM encrypted_secrets WHERE workspace_id = $1 AND id = $2")
+            .bind(ws)
+            .bind(old)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let audit_event_id = audit_entity(
+        &mut tx,
+        ws,
+        Some(access.user_id),
+        "integration.webhook_secret.rotate",
+        "integration_connection",
+        id,
+        serde_json::json!({
+            "provider": cur.provider, "replaced": old.is_some(), "version": b.version + 1
+        }),
+        &correlation(&headers),
+    )
+    .await?;
+    tx.commit().await?;
+    let mut conn = state.pool.acquire().await?;
+    Ok(Json(WebhookSecretResult {
+        item: one(&mut conn, &state, ws, id).await?,
+        audit_event_id,
+        secret: secret.to_string(),
+        path: webhook_path(id),
+        url: webhook_url(&state, id),
+    }))
+}
+
+/// CP6a: removes the webhook secret; every delivery is refused (401) until a new one is made.
+pub async fn delete_webhook_secret(
+    State(state): State<AppState>,
+    s: Session,
+    headers: HeaderMap,
+    Path((raw_ws, raw_id)): Path<(String, String)>,
+    payload: Result<Json<VersionBody>, JsonRejection>,
+) -> Result<Json<ConnectionResult>, AppError> {
+    let access = credential_access(&state, &s, &raw_ws).await?;
+    let id = parse_id(&raw_id)?;
+    let b = body(payload)?;
+    let ws = access.workspace_id;
+    let mut tx = state.pool.begin().await?;
+    let cur = lock(&mut tx, ws, id, b.version).await?;
+    let old: Option<Uuid> = sqlx::query_scalar(
+        "SELECT webhook_secret_id FROM integration_connections WHERE workspace_id = $1 AND id = $2",
+    )
+    .bind(ws)
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let old = old.ok_or(AppError::Conflict("integration_not_configured"))?;
+    sqlx::query(
+        "UPDATE integration_connections SET webhook_secret_id = NULL, webhook_updated_at = NULL, \
+         version = version + 1 WHERE workspace_id = $1 AND id = $2",
+    )
+    .bind(ws)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM encrypted_secrets WHERE workspace_id = $1 AND id = $2")
+        .bind(ws)
+        .bind(old)
+        .execute(&mut *tx)
+        .await?;
+    let audit_event_id = audit_entity(
+        &mut tx,
+        ws,
+        Some(access.user_id),
+        "integration.webhook_secret.delete",
+        "integration_connection",
+        id,
+        serde_json::json!({ "provider": cur.provider, "version": b.version + 1 }),
         &correlation(&headers),
     )
     .await?;

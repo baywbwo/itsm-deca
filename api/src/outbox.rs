@@ -351,9 +351,29 @@ pub struct Tick {
     pub settled: usize,
 }
 
-/// One worker tick: sweep expired leases, claim due intents, settle each.
+/// CP6a: how long a received Jira webhook delivery is remembered for replay detection.
+pub const WEBHOOK_EVENT_RETENTION_DAYS: i32 = 30;
+
+/// Forgets Jira webhook deliveries older than the retention (a replay that old is already
+/// refused as `stale` by its timestamp). Bounded per tick so a backlog never blocks delivery.
+pub async fn prune_webhook_events(state: &AppState) -> Result<u64, AppError> {
+    Ok(sqlx::query(
+        "DELETE FROM jira_webhook_events WHERE id IN (SELECT id FROM jira_webhook_events \
+           WHERE received_at < now() - make_interval(days => $1) LIMIT 1000)",
+    )
+    .bind(WEBHOOK_EVENT_RETENTION_DAYS)
+    .execute(&state.pool)
+    .await?
+    .rows_affected())
+}
+
+/// One worker tick: sweep expired leases, prune old webhook deliveries, claim due intents,
+/// settle each.
 pub async fn run_once(state: &AppState) -> Result<Tick, AppError> {
     let expired = sweep_expired(state).await?;
+    if let Err(e) = prune_webhook_events(state).await {
+        tracing::warn!(error = ?e, "webhook event prune failed");
+    }
     let claims = {
         let mut conn = state.pool.acquire().await?;
         claim_due(&mut conn, BATCH).await?

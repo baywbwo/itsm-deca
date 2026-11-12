@@ -47,6 +47,7 @@ import type {
   AiProviderView,
   McpServerView,
   IntegrationResult,
+  WebhookSecretResult,
   Meta,
   PermissionCode,
   SavedView,
@@ -286,7 +287,7 @@ export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
   SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
   isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
   isStr(v.updatedAt) && isMode(v.mode) && isStrOrNull(v.nextAttemptAt ?? null) &&
-  isStrOrNull(v.issueUrl ?? null) &&
+  isStrOrNull(v.issueUrl ?? null) && isStrOrNull(v.targetStatus ?? null) &&
   isNum(v.autoAttempts) && typeof v.inFlight === 'boolean';
 
 export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
@@ -346,8 +347,12 @@ export const isActivityPage = (v: unknown): v is ActivityPage =>
   isArr(v.items, (i) => isObj(i) && isStr(i.id) && isStr(i.at) && isStr(i.action) && isStr(i.label) && isRefOrNull(i.actor));
 
 // D08b follow-up: notes, read-only conversation panel, attachment upload, idempotent related work.
+const NOTE_KINDS = ['note', 'jira_comment', 'jira_status', 'jira_assignee'];
+/** An officer note has an ITSM author; a Jira entry (CP6a) has only the name Jira sent. */
 const isNote = (n: unknown) =>
-  isObj(n) && isStr(n.id) && isStr(n.body) && isRefOrNull(n.author) && n.author !== null && isStr(n.createdAt);
+  isObj(n) && isStr(n.id) && isStr(n.body) && isStr(n.createdAt) && NOTE_KINDS.includes(n.kind as string) &&
+  isRefOrNull(n.author) && isStrOrNull(n.externalAuthor ?? null) &&
+  (n.kind === 'note' ? n.author !== null : n.author === null && isStr(n.externalAuthor));
 export const isNotePage = (v: unknown): v is NotePage =>
   isObj(v) && isStrOrNull(v.nextCursor) && isArr(v.items, isNote);
 export const isNoteCreated = (v: unknown): v is NoteCreated =>
@@ -397,12 +402,15 @@ const isStrMap = (v: unknown) => isObj(v) && Object.values(v).every(isStr);
 const isSettings = (v: unknown) => isObj(v) &&
   ['baseUrl', 'email', 'projectKey', 'issueTypeId', 'appId'].every((k) => isStrOrNull(v[k] ?? null)) &&
   isStrMap(v.priorityMap) && isStrMap(v.statusMap);
+const isWebhook = (v: unknown) => isObj(v) && (v.state === 'missing' || v.state === 'stored') &&
+  isStrOrNull(v.updatedAt) && isStr(v.path) && isStrOrNull(v.url);
 const isConnection = (v: unknown): v is IntegrationConnection =>
   isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && isMode(v.mode) &&
   isStr(v.state) && CONNECTION_STATES.includes(v.state) && isStrOrNull(v.testedAt) && isStrOrNull(v.lastTestNote) &&
   (v.lastTestOk === null || typeof v.lastTestOk === 'boolean') &&
   isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) && isSettings(v.settings) &&
   isObj(v.credential) && (v.credential.state === 'missing' || v.credential.state === 'stored') && isStrOrNull(v.credential.updatedAt) &&
+  (v.webhook === null || isWebhook(v.webhook)) &&
   isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -433,6 +441,9 @@ export const isDirectorySyncResult = (v: unknown): v is DirectorySyncResult =>
 export const isJiraUserList = (v: unknown): v is JiraUserList => isObj(v) && isArr(v.items, isEntry);
 export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
   isObj(v) && isConnection(v.item) && isStr(v.auditEventId);
+export const isWebhookSecretResult = (v: unknown): v is WebhookSecretResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId) && isStr(v.secret) && /^[0-9a-f]{64}$/.test(v.secret) &&
+  isStr(v.path) && isStrOrNull(v.url);
 
 // --- D10 reports -------------------------------------------------------------
 const isReportBasis = (v: unknown) => v === 'received' || v === 'resolved';

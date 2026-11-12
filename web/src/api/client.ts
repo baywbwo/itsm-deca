@@ -21,6 +21,7 @@ import {
   isCatalogEntryResult,
   isIntegrationList,
   isIntegrationResult,
+  isWebhookSecretResult,
   isJiraOptions,
   isDirectorySyncResult,
   isJiraUserList,
@@ -120,6 +121,7 @@ import type {
   IntegrationCreateRequest,
   IntegrationPatchRequest,
   IntegrationResult,
+  WebhookSecretResult,
   IntegrationConfigRequest,
   IntegrationCredentialRequest,
   JiraOptions,
@@ -709,6 +711,15 @@ export function createApi(transport: Transport) {
     deleteIntegrationCredential: (id: string, connectionId: string, body: VersionRequest): Promise<IntegrationResult> =>
       call({
         method: 'DELETE', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/credential`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** CP6a: new inbound Jira webhook secret; the value is in this response only, never again. */
+    rotateWebhookSecret: (id: string, connectionId: string, body: VersionRequest): Promise<WebhookSecretResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/webhook-secret`, headers: csrf(), body,
+      }, isWebhookSecretResult),
+    deleteWebhookSecret: (id: string, connectionId: string, body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'DELETE', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/webhook-secret`, headers: csrf(), body,
       }, isIntegrationResult),
     /** Jira issue types, priorities and statuses read from Jira (live only). */
     getJiraOptions: (id: string, connectionId: string, signal?: AbortSignal): Promise<JiraOptions> =>
