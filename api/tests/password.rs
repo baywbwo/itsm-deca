@@ -46,10 +46,18 @@ async fn request(
     if let Some(cookie) = cookie {
         r = r.header("cookie", cookie);
     }
-    let response = app(state(pool, mode))
-        .oneshot(r.body(Body::from(body.to_string())).expect("request"))
-        .await
-        .expect("response");
+    let req = r.body(Body::from(body.to_string())).expect("request");
+    let (parts, body_bytes) = req.into_parts();
+    let body_bytes = body_bytes.collect().await.expect("body").to_bytes();
+    // Login hashing is bounded by a process-wide semaphore; parallel tests may see 429.
+    let response = loop {
+        let req = Request::from_parts(parts.clone(), Body::from(body_bytes.clone()));
+        let response = app(state(pool, mode)).oneshot(req).await.expect("response");
+        if response.status() != StatusCode::TOO_MANY_REQUESTS {
+            break response;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
     let status = response.status();
     let cookie = response.headers().get("set-cookie").map(|v| {
         v.to_str()
@@ -234,4 +242,198 @@ fn password_mode_rejects_insecure_cookie_config() {
     .map(|(k, v)| (k.into(), v.into()))
     .collect();
     assert!(Config::from_map(&vars).is_err());
+}
+async fn login_ok(pool: &PgPool) -> String {
+    let (status, _, cookie) = request(
+        pool,
+        "password",
+        "/api/v1/login",
+        "POST",
+        json!({"username":"admin@example.test","password":"synthetic-password-123"}),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    cookie.expect("session cookie")
+}
+async fn workspaces(pool: &PgPool, cookie: &str) -> StatusCode {
+    request(
+        pool,
+        "password",
+        "/api/v1/workspaces",
+        "GET",
+        Value::Null,
+        false,
+        Some(cookie),
+    )
+    .await
+    .0
+}
+async fn events(pool: &PgPool, event: &str, outcome: &str) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE event=$1 AND outcome=$2")
+        .bind(event)
+        .bind(outcome)
+        .fetch_one(pool)
+        .await
+        .expect("events")
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_1_lockout_after_five_failures_is_audited_and_expires_after_15_minutes(pool: PgPool) {
+    let user = fixture(&pool).await;
+    for _ in 0..5 {
+        request(
+            &pool,
+            "password",
+            "/api/v1/login",
+            "POST",
+            json!({"username":"admin@example.test","password":"wrong-password-x"}),
+            true,
+            None,
+        )
+        .await;
+    }
+    assert_eq!(events(&pool, "login", "failed").await, 5);
+    assert_eq!(events(&pool, "lockout", "success").await, 1);
+    let mins: f64 = sqlx::query_scalar(
+        "SELECT (extract(epoch FROM locked_until-now())/60)::float8 FROM local_credentials WHERE user_id=$1",
+    )
+    .bind(user)
+    .fetch_one(&pool)
+    .await
+    .expect("locked");
+    assert!(mins > 14.0 && mins <= 15.0);
+    let (status, _, _) = request(
+        &pool,
+        "password",
+        "/api/v1/login",
+        "POST",
+        json!({"username":"admin@example.test","password":"synthetic-password-123"}),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(events(&pool, "login", "denied").await, 1);
+    // Simulate 15 minutes passing; a successful login resets the counter.
+    sqlx::query(
+        "UPDATE local_credentials SET locked_until=now()-interval '1 second' WHERE user_id=$1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("unlock");
+    login_ok(&pool).await;
+    let failed: i32 =
+        sqlx::query_scalar("SELECT failed_attempts FROM local_credentials WHERE user_id=$1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .expect("attempts");
+    assert_eq!(failed, 0);
+    assert_eq!(events(&pool, "login", "success").await, 1);
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_1_unknown_username_is_audited_as_digest_only(pool: PgPool) {
+    fixture(&pool).await;
+    request(
+        &pool,
+        "password",
+        "/api/v1/login",
+        "POST",
+        json!({"username":"nobody@example.test","password":"wrong-password-x"}),
+        true,
+        None,
+    )
+    .await;
+    let (uid, hash_len): (Option<Uuid>, i32) = sqlx::query_as("SELECT user_id, octet_length(username_hash) FROM auth_events WHERE failure_code='unknown_user'")
+        .fetch_one(&pool).await.expect("event");
+    assert!(uid.is_none());
+    assert_eq!(hash_len, 32);
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_6_session_expires_after_30_minutes_idle_and_is_revoked_and_audited(pool: PgPool) {
+    fixture(&pool).await;
+    let cookie = login_ok(&pool).await;
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::OK);
+    let idle_mins: f64 = sqlx::query_scalar(
+        "SELECT (extract(epoch FROM idle_expires_at-now())/60)::float8 FROM sessions",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("idle");
+    assert!(idle_mins > 29.0 && idle_mins <= 30.0);
+    sqlx::query("UPDATE sessions SET idle_expires_at=now()-interval '1 second'")
+        .execute(&pool)
+        .await
+        .expect("idle");
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+    let reason: Option<String> = sqlx::query_scalar("SELECT revoked_reason FROM sessions")
+        .fetch_one(&pool)
+        .await
+        .expect("reason");
+    assert_eq!(reason.as_deref(), Some("idle"));
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE failure_code='session_idle'")
+            .fetch_one(&pool)
+            .await
+            .expect("n");
+    assert_eq!(n, 1);
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_6_session_absolute_limit_is_12_hours(pool: PgPool) {
+    fixture(&pool).await;
+    let cookie = login_ok(&pool).await;
+    let hours: f64 = sqlx::query_scalar(
+        "SELECT (extract(epoch FROM expires_at-created_at)/3600)::float8 FROM sessions",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("abs");
+    assert!((hours - 12.0).abs() < 0.01);
+    // Activity keeps idle alive but never beyond the absolute limit.
+    sqlx::query("UPDATE sessions SET created_at=now()-interval '12 hours 1 second', expires_at=now()-interval '1 second', idle_expires_at=now()+interval '30 minutes'").execute(&pool).await.expect("abs");
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_4_session_with_old_credential_version_is_rejected(pool: PgPool) {
+    let user = fixture(&pool).await;
+    let cookie = login_ok(&pool).await;
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::OK);
+    sqlx::query(
+        "UPDATE local_credentials SET credential_version=credential_version+1 WHERE user_id=$1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("bump");
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+}
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn us_1_7_deactivated_user_cannot_login_or_use_session(pool: PgPool) {
+    let user = fixture(&pool).await;
+    let cookie = login_ok(&pool).await;
+    sqlx::query("UPDATE users SET deactivated_at=now() WHERE id=$1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .expect("deactivate");
+    assert_eq!(workspaces(&pool, &cookie).await, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = request(
+        &pool,
+        "password",
+        "/api/v1/login",
+        "POST",
+        json!({"username":"admin@example.test","password":"synthetic-password-123"}),
+        true,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM auth_events WHERE failure_code='deactivated'")
+            .fetch_one(&pool)
+            .await
+            .expect("n");
+    assert_eq!(n, 1);
 }

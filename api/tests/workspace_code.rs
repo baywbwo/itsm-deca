@@ -569,6 +569,11 @@ async fn migration_0014_rolls_back_only_without_renamed_history(pool: PgPool) {
         "history kept",
     );
     assert!(still >= 3);
+    // The refused undo already reverted 0015+; restore the full schema before using the API.
+    ok(
+        db::MIGRATOR.run(&pool).await,
+        "reapply after refused rollback",
+    );
 
     // Back to the tickets' code: the rollback is allowed and the D02 freeze returns.
     let r = rename(&pool, &admin, &company(&pool, &admin, f.a).await, "DUMA").await;

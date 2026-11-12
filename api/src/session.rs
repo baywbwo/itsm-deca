@@ -18,7 +18,9 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::error::AppError;
 
-pub const SESSION_TTL_HOURS: i32 = 8;
+pub const SESSION_TTL_HOURS: i32 = 12;
+/// Sessions unused for this long are revoked (US-1.6).
+pub const SESSION_IDLE_MINUTES: i32 = 30;
 pub const CSRF_HEADER: &str = "x-csrf-token";
 pub const UAT_ENTRY_HEADER: &str = "x-itsm-uat-entry";
 pub const UAT_ENTRY_PATH: &str = "/api/v1/uat/session";
@@ -104,14 +106,18 @@ pub async fn issue(
     let token = random_token().map_err(AppError::internal)?;
     let csrf_token = random_token().map_err(AppError::internal)?;
     sqlx::query(
-        "INSERT INTO sessions (token_hash, csrf_hash, user_id, access_mode, expires_at) \
-         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5))",
+        "INSERT INTO sessions (token_hash, csrf_hash, user_id, access_mode, expires_at, \
+                               last_seen_at, idle_expires_at, credential_version) \
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), now(), \
+                 now() + make_interval(mins => $6), \
+                 (SELECT credential_version FROM local_credentials WHERE user_id = $3))",
     )
     .bind(digest(&token))
     .bind(digest(&csrf_token))
     .bind(user_id)
     .bind(access_mode)
     .bind(SESSION_TTL_HOURS)
+    .bind(SESSION_IDLE_MINUTES)
     .execute(pool)
     .await?;
     Ok(IssuedSession { token, csrf_token })
@@ -150,12 +156,40 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
                         WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin') \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
-           AND s.access_mode = $2 AND u.active",
+           AND (s.idle_expires_at IS NULL OR s.idle_expires_at > now()) \
+           AND s.access_mode = $2 AND u.active AND u.deactivated_at IS NULL \
+           AND (s.credential_version IS NULL OR s.credential_version = \
+                (SELECT c.credential_version FROM local_credentials c WHERE c.user_id = s.user_id))",
     )
     .bind(digest(token))
     .bind(state.config.access_mode.as_str())
     .fetch_optional(&state.pool)
     .await?;
+    match &row {
+        Some((id, ..)) => {
+            sqlx::query(
+                "UPDATE sessions SET last_seen_at = now(), \
+                 idle_expires_at = LEAST(now() + make_interval(mins => $2), expires_at) WHERE id = $1",
+            )
+            .bind(id)
+            .bind(SESSION_IDLE_MINUTES)
+            .execute(&state.pool)
+            .await?;
+        }
+        None => {
+            // US-1.6: an idle-expired session is revoked once and audited without the token.
+            sqlx::query(
+                "WITH r AS (UPDATE sessions SET revoked_at = now(), revoked_reason = 'idle' \
+                 WHERE token_hash = $1 AND revoked_at IS NULL AND idle_expires_at <= now() \
+                 RETURNING user_id) \
+                 INSERT INTO auth_events (user_id, event, outcome, failure_code) \
+                 SELECT user_id, 'logout', 'success', 'session_idle' FROM r",
+            )
+            .bind(digest(token))
+            .execute(&state.pool)
+            .await?;
+        }
+    }
     Ok(row.map(|(id, user_id, csrf_hash, grant)| Session {
         id,
         user_id,
