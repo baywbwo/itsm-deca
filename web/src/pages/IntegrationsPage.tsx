@@ -17,7 +17,7 @@ import { JiraWebhookSection } from './JiraWebhook';
 
 const PROVIDER_LABEL: Record<ProviderCode, string> = { jira: 'Jira', lark: 'Lark' };
 const PROVIDER_ROLE: Record<ProviderCode, string> = {
-  jira: 'Pekerjaan terkait (issue) untuk tiket. Status tiket yang dipetakan ikut diteruskan ke Jira; perubahan di Jira hanya dicatat di timeline, tidak menyelesaikan tiket.',
+  jira: 'Pekerjaan terkait (issue) untuk tiket. Status yang dipetakan dapat disinkronkan melalui webhook Jira. CS tetap menyelesaikan tiket setelah verifikasi.',
   lark: 'Notifikasi tim ke grup Lark (nomor tiket, subjek, produk, PIC, prioritas, dan tautan Jira); tidak mengubah status tiket.',
 };
 const SECRET_LABEL: Record<ProviderCode, string> = { jira: 'API token Jira', lark: 'App secret Lark' };
@@ -509,7 +509,7 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
             <fieldset className="int-map">
               <legend>Pemetaan prioritas &amp; status</legend>
               <p className="tiny muted">
-                Prioritas tiket dipakai saat issue dibuat. Pemetaan status disimpan sebagai acuan; status Jira tidak diubah otomatis.
+                Prioritas tiket dipakai saat issue dibuat. Gunakan ID Jira yang unik untuk setiap status agar perubahan dari Jira bisa diterapkan ke board ITSM.
               </p>
               <div className="int-form">
                 {list.priorities.map((p) => (

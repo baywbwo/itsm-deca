@@ -3274,7 +3274,7 @@ export interface components {
         BrandKey: "deca" | "ajr" | "bmt" | null;
         WordingRequest: {
             /** @enum {string} */
-            mode: "chronology" | "reply";
+            mode: "chronology" | "reply" | "handover";
             text: string;
         };
         WordingSuggestion: {

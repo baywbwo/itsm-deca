@@ -402,7 +402,7 @@ export function createApi(transport: Transport) {
   const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
 
   return {
-    suggestWording: (workspaceId: string, mode: 'chronology' | 'reply', text: string): Promise<{ suggestion: string; reviewRequired: boolean }> =>
+    suggestWording: (workspaceId: string, mode: 'chronology' | 'reply' | 'handover', text: string): Promise<{ suggestion: string; reviewRequired: boolean }> =>
       call({ method: 'POST', path: `${ws(workspaceId)}/ai-suggestions`, headers: csrf(), body: { mode, text } },
         (value: unknown): value is { suggestion: string; reviewRequired: boolean } => !!value && typeof value === 'object' &&
           'suggestion' in value && typeof value.suggestion === 'string' && 'reviewRequired' in value && value.reviewRequired === true),

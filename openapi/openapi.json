@@ -5883,7 +5883,8 @@
             "type": "string",
             "enum": [
               "chronology",
-              "reply"
+              "reply",
+              "handover"
             ]
           },
           "text": {
