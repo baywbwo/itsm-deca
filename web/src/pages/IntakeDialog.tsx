@@ -408,7 +408,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                 </>
               )}
               {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: o.displayName })) : [], {
-                empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark, 'Lark'),
+                empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: larkUsable ? 'Grup menerima subjek tiket, produk, PIC, prioritas, dan tautan Jira. Hindari data pribadi pada subjek.' : providerHint(lark, 'Lark'),
               })}
             </fieldset>
           </details>

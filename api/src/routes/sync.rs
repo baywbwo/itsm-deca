@@ -281,7 +281,7 @@ pub(crate) async fn dispatch_ticket(
     let task = tokio::spawn(async move {
         let ids: Vec<Uuid> = match sqlx::query_scalar(
             "SELECT id FROM integration_outbox WHERE workspace_id = $1 AND ticket_id = $2 \
-             AND state = 'pending' ORDER BY created_at, id",
+             AND state = 'pending' ORDER BY (provider = 'lark'), created_at, id",
         )
         .bind(ws)
         .bind(ticket)

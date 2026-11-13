@@ -86,12 +86,16 @@ pub async fn claim_one(
     id: Uuid,
 ) -> Result<Option<Claim>, AppError> {
     let token: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE integration_outbox \
+        "UPDATE integration_outbox o \
          SET attempt = attempt + 1, auto_attempts = auto_attempts + 1, \
              claim_token = gen_random_uuid(), claimed_until = now() + $3::interval, \
              next_attempt_at = NULL \
          WHERE workspace_id = $1 AND id = $2 AND state = 'pending' AND claim_token IS NULL \
            AND (next_attempt_at IS NULL OR next_attempt_at <= now()) \
+         AND (o.operation <> 'lark_ticket_created' OR NOT EXISTS ( \
+             SELECT 1 FROM integration_outbox j WHERE j.workspace_id = o.workspace_id \
+               AND j.ticket_id = o.ticket_id AND j.operation IN ('jira_create_issue', 'jira_link_issue') \
+               AND j.state = 'pending')) \
          RETURNING claim_token",
     )
     .bind(ws)
@@ -111,10 +115,14 @@ pub async fn claim_one(
 pub async fn claim_due(conn: &mut PgConnection, limit: i64) -> Result<Vec<Claim>, AppError> {
     let rows: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
         "WITH due AS ( \
-           SELECT id FROM integration_outbox \
+           SELECT id FROM integration_outbox o \
            WHERE state = 'pending' AND claim_token IS NULL \
              AND ((next_attempt_at IS NOT NULL AND next_attempt_at <= now()) \
                OR (next_attempt_at IS NULL AND created_at <= now() - $2::interval)) \
+           AND (o.operation <> 'lark_ticket_created' OR NOT EXISTS ( \
+             SELECT 1 FROM integration_outbox j WHERE j.workspace_id = o.workspace_id \
+               AND j.ticket_id = o.ticket_id AND j.operation IN ('jira_create_issue', 'jira_link_issue') \
+               AND j.state = 'pending')) \
            ORDER BY COALESCE(next_attempt_at, created_at), id \
            LIMIT $1 FOR UPDATE SKIP LOCKED) \
          UPDATE integration_outbox o \

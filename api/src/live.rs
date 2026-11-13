@@ -537,6 +537,11 @@ struct Work {
     priority_code: Option<String>,
     priority_label: Option<String>,
     category_label: Option<String>,
+    subject: String,
+    product_label: Option<String>,
+    jira_assignee_name: Option<String>,
+    owner_name: Option<String>,
+    jira_url: Option<String>,
     linked: bool,
     assignee_ref: Option<String>,
     assignee_source: Option<String>,
@@ -555,6 +560,8 @@ struct Work {
 
 const WORK_SQL: &str = "SELECT o.operation, o.requested_issue_key, t.number_prefix, t.number, \
         p.code AS priority_code, p.label AS priority_label, cat.label AS category_label, \
+        t.subject, product.label AS product_label, owner_user.display_name AS owner_name, \
+        lark_work.assignee_name AS jira_assignee_name, lark_work.safe_url AS jira_url, \
         (r.jira_issue_id IS NOT NULL) IS TRUE AS linked, \
         a.external_account_ref AS assignee_ref, a.source AS assignee_source, \
         d.external_chat_ref AS chat_ref, d.source AS dest_source, \
@@ -568,6 +575,18 @@ const WORK_SQL: &str = "SELECT o.operation, o.requested_issue_key, t.number_pref
      LEFT JOIN related_work r ON r.workspace_id = o.workspace_id AND r.id = o.related_work_id \
      LEFT JOIN jira_assignees a ON a.workspace_id = r.workspace_id AND a.id = r.jira_assignee_id \
      LEFT JOIN jira_issues ji ON ji.workspace_id = r.workspace_id AND ji.id = r.jira_issue_id \
+     LEFT JOIN products product ON product.workspace_id = t.workspace_id AND product.id = t.product_id \
+     LEFT JOIN users owner_user ON owner_user.id = t.owner_user_id \
+     LEFT JOIN LATERAL ( \
+       SELECT ja.display_name AS assignee_name, j.safe_url \
+       FROM integration_outbox jo \
+       JOIN related_work rw ON rw.workspace_id = jo.workspace_id AND rw.id = jo.related_work_id \
+       LEFT JOIN jira_assignees ja ON ja.workspace_id = rw.workspace_id AND ja.id = rw.jira_assignee_id \
+       LEFT JOIN jira_issues j ON j.workspace_id = rw.workspace_id AND j.id = rw.jira_issue_id \
+       WHERE o.operation = 'lark_ticket_created' AND jo.workspace_id = o.workspace_id \
+         AND jo.ticket_id = o.ticket_id AND jo.operation IN ('jira_create_issue', 'jira_link_issue') \
+       ORDER BY jo.created_at, jo.id LIMIT 1 \
+     ) lark_work ON true \
      LEFT JOIN lark_destinations d ON d.workspace_id = o.workspace_id AND d.id = o.lark_destination_id \
      WHERE o.workspace_id = $1 AND o.id = $2 AND o.claim_token = $3";
 
@@ -740,13 +759,25 @@ async fn deliver(
                 return Ok(Attempt::Failed("Tujuan Lark tidak ada.".to_owned()));
             };
             let (l, key) = lark(state, ws, conn).await?;
-            // Ticket number and priority only: no subject, chronology or customer data in chat.
+            // Share the subject and routing fields only. Chronology and contact fields stay in ITSM.
             let priority = work
                 .priority_label
                 .as_deref()
                 .map(|p| format!(" · Prioritas {}", short(p, 60)))
                 .unwrap_or_default();
-            let text = format!("[ITSM] Tiket baru {ticket}{priority}. Buka ITSM untuk rincian.");
+            let subject = short(&work.subject, 300);
+            let product = short(work.product_label.as_deref().unwrap_or("Belum dipilih"), 120);
+            let assignee = short(
+                work.jira_assignee_name
+                    .as_deref()
+                    .or(work.owner_name.as_deref())
+                    .unwrap_or("Belum ditugaskan"),
+                120,
+            );
+            let jira = work.jira_url.as_deref().unwrap_or("Belum ada tautan");
+            let text = format!(
+                "[ITSM] Tiket baru {ticket}{priority}\nIssue: {subject}\nProduk: {product}\nPIC: {assignee}\nJira: {jira}"
+            );
             writing.store(true, Ordering::SeqCst);
             l.send_text(chat, &text, &outbox_id.to_string())
                 .await

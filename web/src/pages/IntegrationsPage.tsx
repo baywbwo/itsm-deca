@@ -18,7 +18,7 @@ import { JiraWebhookSection } from './JiraWebhook';
 const PROVIDER_LABEL: Record<ProviderCode, string> = { jira: 'Jira', lark: 'Lark' };
 const PROVIDER_ROLE: Record<ProviderCode, string> = {
   jira: 'Pekerjaan terkait (issue) untuk tiket. Status tiket yang dipetakan ikut diteruskan ke Jira; perubahan di Jira hanya dicatat di timeline, tidak menyelesaikan tiket.',
-  lark: 'Notifikasi tim ke grup Lark (nomor tiket dan prioritas saja); tidak mengubah status tiket.',
+  lark: 'Notifikasi tim ke grup Lark (nomor tiket, subjek, produk, PIC, prioritas, dan tautan Jira); tidak mengubah status tiket.',
 };
 const SECRET_LABEL: Record<ProviderCode, string> = { jira: 'API token Jira', lark: 'App secret Lark' };
 const STATE: Record<IntegrationConnection['state'], { label: string; tone: BadgeTone }> = {
