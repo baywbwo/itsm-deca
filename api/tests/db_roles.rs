@@ -67,6 +67,30 @@ async fn provision() -> String {
         .execute(&mut *tx)
         .await
         .expect("roles.sql");
+    // The roles get their passwords from set-passwords.sh at deploy time. Under password auth
+    // (the CI service container) the tests connect as them with the superuser's credentials,
+    // so they get the superuser's own SCRAM verifier; a trust cluster has none and skips this.
+    let verifier: Option<String> =
+        sqlx::query_scalar("SELECT rolpassword FROM pg_authid WHERE rolname = current_user")
+            .fetch_one(&mut *tx)
+            .await
+            .expect("superuser verifier");
+    if let Some(verifier) = verifier {
+        for role in ["itsm_app", "itsm_migrator"] {
+            let stmt: String = sqlx::query_scalar(
+                "SELECT format('ALTER ROLE %I PASSWORD %L', $1::text, $2::text)",
+            )
+            .bind(role)
+            .bind(&verifier)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("format");
+            sqlx::query(&stmt)
+                .execute(&mut *tx)
+                .await
+                .expect("role password");
+        }
+    }
     tx.commit().await.expect("commit roles");
     let name = format!("itsm_cp8_{}", Uuid::new_v4().simple());
     sqlx::query(&format!("CREATE DATABASE {name} OWNER itsm_migrator"))
