@@ -184,7 +184,7 @@ async fn cp7a_access_log_names_route_and_request_id_never_the_uri(pool: PgPool) 
 
     // Anything else is replaced by a fresh UUID (bounded log/audit field, no injection).
     for bad in [
-        "a b",
+        "cp7a bad id",
         "x\"},{\"level\":\"ERROR",
         &"z".repeat(65),
         "nasabah@example.test",
@@ -262,7 +262,7 @@ async fn cp7a_access_log_names_route_and_request_id_never_the_uri(pool: PgPool) 
     for needle in [
         SECRET_QUERY,
         SECRET_PATH,
-        "a b",
+        "cp7a bad id",
         "nasabah@example.test",
         "cp7a-dup-",
         fx.cookie.as_str(),

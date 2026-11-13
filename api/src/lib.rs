@@ -19,6 +19,7 @@ pub mod rate_limit;
 pub mod routes;
 pub mod seed;
 pub mod session;
+pub mod shared_limit;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,9 @@ pub const UAT_BANNER: &str = "Mode uji — Superadmin";
 const BODY_LIMIT_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+/// CP7d (TM-07): JSON and downloads only; a response rendered as a document can do nothing.
+pub const API_CSP: &str =
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; sandbox";
 
 #[derive(Clone)]
 pub struct AppState {
@@ -55,8 +59,11 @@ pub fn app(state: AppState) -> Router {
         state.config.rate_limit.clone(),
     ));
     let limited = axum::middleware::from_fn_with_state(limiter, rate_limit::layer);
+    // CP7d: sign-in, outbound and look-up routes also count in Postgres (all replicas).
+    let shared = axum::middleware::from_fn_with_state(state.clone(), shared_limit::layer);
     let api = routes::api_router()
         .route_layer(denied.clone())
+        .route_layer(shared)
         .layer(limited.clone())
         .layer(session.clone());
     let bounded = Router::new()
@@ -77,7 +84,7 @@ pub fn app(state: AppState) -> Router {
         ));
 
     // CP6a: Jira webhook: no session/CSRF (signed body), own limits (routes::jira_webhook).
-    let webhook = routes::jira_webhook::router();
+    let webhook = routes::jira_webhook::router(&state);
 
     Router::new()
         .merge(bounded)
@@ -91,6 +98,25 @@ pub fn app(state: AppState) -> Router {
         .layer(SetResponseHeaderLayer::overriding(
             header::X_CONTENT_TYPE_OPTIONS,
             HeaderValue::from_static("nosniff"),
+        ))
+        // CP7d (TM-07): the API never serves a page, so nothing it returns may run, embed or
+        // be framed, even when reached without the ingress (which adds its own headers). A
+        // route that sets a stricter policy itself (attachment download) keeps it.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(API_CSP),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
         ))
         .layer(PropagateRequestIdLayer::new(request_id.clone()))
         // CP7a: access log + HTTP metrics by route template (never the URI or query).

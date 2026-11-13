@@ -47,14 +47,22 @@ const SIGNATURE_HEADER: &str = "x-hub-signature";
 const DELIVERY_HEADER: &str = "x-atlassian-webhook-identifier";
 const FALLBACK_AUTHOR: &str = "Pengguna Jira";
 
-/// The webhook route with its own body limit, timeout and concurrency cap (no session layer).
-pub fn router() -> Router<AppState> {
+/// The webhook route with its own body limit, timeout, concurrency cap and (CP7d) per-address
+/// limit shared by every replica (no session layer). The shared count runs inside the
+/// concurrency cap, so a flood never opens more than `MAX_CONCURRENT` database writes.
+/// Route layers only: with `layer` they also wrapped the merged fallback, so every unknown
+/// path (404) took a webhook slot and, since CP7d, a webhook count (found by CP7d tests).
+pub fn router(state: &AppState) -> Router<AppState> {
     let slots = Arc::new(Semaphore::new(MAX_CONCURRENT));
     Router::new()
         .route(PATH, post(receive))
-        .layer(axum::middleware::from_fn_with_state(slots, shed))
-        .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
-        .layer(TimeoutLayer::with_status_code(
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::shared_limit::webhook_layer,
+        ))
+        .route_layer(axum::middleware::from_fn_with_state(slots, shed))
+        .route_layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
+        .route_layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             TIMEOUT,
         ))

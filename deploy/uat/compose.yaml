@@ -79,6 +79,13 @@ services:
       # Postgres max_connections (default 100) minus a reserve. deploy/RUNBOOK-scaling.md.
       ITSM_DB_MAX_CONNECTIONS: "${ITSM_DB_MAX_CONNECTIONS:-10}"
       ITSM_DB_ACQUIRE_TIMEOUT_MS: "${ITSM_DB_ACQUIRE_TIMEOUT_MS:-3000}"
+      # CP7d: limits shared by every replica (Postgres). Empty = API default. RUNBOOK-scaling.md.
+      ITSM_LIMIT_AUTH_PER_IP_10MIN: "${ITSM_LIMIT_AUTH_PER_IP_10MIN:-}"
+      ITSM_LIMIT_AI_PER_USER_MIN: "${ITSM_LIMIT_AI_PER_USER_MIN:-}"
+      ITSM_LIMIT_AI_PER_WORKSPACE_DAY: "${ITSM_LIMIT_AI_PER_WORKSPACE_DAY:-}"
+      ITSM_LIMIT_OUTBOUND_PER_USER_10MIN: "${ITSM_LIMIT_OUTBOUND_PER_USER_10MIN:-}"
+      ITSM_LIMIT_LOOKUP_PER_USER_MIN: "${ITSM_LIMIT_LOOKUP_PER_USER_MIN:-}"
+      ITSM_LIMIT_WEBHOOK_PER_IP_MIN: "${ITSM_LIMIT_WEBHOOK_PER_IP_MIN:-}"
       # Prometheus metrics (CP7a) on a separate listener: backend network only, no published port,
       # never forwarded by the ingress (Caddy proxies /api and /health). Scrape api:9464/metrics.
       ITSM_METRICS_BIND: "${ITSM_METRICS_BIND:-0.0.0.0:9464}"

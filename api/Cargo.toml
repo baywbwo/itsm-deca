@@ -37,4 +37,4 @@ sha1 = "0.10"
 zeroize = "1"
 
 [dev-dependencies]
-calamine = { version = "0.30", default-features = false, features = ["dates"] }
+calamine = { version = "0.38", default-features = false, features = ["dates"] }

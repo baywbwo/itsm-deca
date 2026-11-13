@@ -289,6 +289,45 @@ pub struct RateLimitConfig {
     /// `ITSM_TRUSTED_PROXIES`: comma-separated exact IPs whose `X-Forwarded-For` is honoured
     /// (at most 16). Empty (default) = `X-Forwarded-For` is ignored.
     pub trusted_proxies: Vec<IpAddr>,
+    /// CP7d limits shared by every replica (Postgres, see `shared_limit`).
+    pub shared: SharedLimits,
+}
+
+/// CP7d: fixed-window limits kept in Postgres, so they hold whatever the number of API
+/// replicas. Each value is requests per window (1–1000000).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedLimits {
+    /// `ITSM_LIMIT_AUTH_PER_IP_10MIN`: sign-in requests (password, MFA code, OIDC start and
+    /// callback, UAT entry) per client address per 10 minutes (default 100). Offices behind one
+    /// NAT address share it; raise it for large sites rather than trusting forwarded headers.
+    pub auth_per_ip_10min: u32,
+    /// `ITSM_LIMIT_AI_PER_USER_MIN`: AI suggestions per user per minute (default 10).
+    pub ai_per_user_min: u32,
+    /// `ITSM_LIMIT_AI_PER_WORKSPACE_DAY`: AI suggestions per workspace per UTC day (default 2000),
+    /// the provider cost ceiling of one company.
+    pub ai_per_workspace_day: u32,
+    /// `ITSM_LIMIT_OUTBOUND_PER_USER_10MIN`: connection tests (integrations, AI providers, MCP),
+    /// directory sync and manual retries per user per 10 minutes (default 30).
+    pub outbound_per_user_10min: u32,
+    /// `ITSM_LIMIT_LOOKUP_PER_USER_MIN`: live Jira look-ups (field options, user search) per user
+    /// per minute (default 60).
+    pub lookup_per_user_min: u32,
+    /// `ITSM_LIMIT_WEBHOOK_PER_IP_MIN`: Jira webhook deliveries per client address per minute
+    /// (default 600), counted before the signature is checked.
+    pub webhook_per_ip_min: u32,
+}
+
+impl Default for SharedLimits {
+    fn default() -> Self {
+        SharedLimits {
+            auth_per_ip_10min: 100,
+            ai_per_user_min: 10,
+            ai_per_workspace_day: 2000,
+            outbound_per_user_10min: 30,
+            lookup_per_user_min: 60,
+            webhook_per_ip_min: 600,
+        }
+    }
 }
 
 impl Default for RateLimitConfig {
@@ -299,6 +338,7 @@ impl Default for RateLimitConfig {
             anon_per_min: 30,
             max_keys: 10_000,
             trusted_proxies: Vec::new(),
+            shared: SharedLimits::default(),
         }
     }
 }
@@ -467,7 +507,43 @@ impl Config {
                 .filter(|n| (1..=100_000).contains(n))
                 .ok_or(ConfigError::Invalid { name }),
         };
+        let shared_defaults = SharedLimits::default();
+        let shared_limit = |name: &'static str, default: u32| match optional(name) {
+            None => Ok(default),
+            Some(v) => v
+                .parse::<u32>()
+                .ok()
+                .filter(|n| (1..=1_000_000).contains(n))
+                .ok_or(ConfigError::Invalid { name }),
+        };
+        let shared = SharedLimits {
+            auth_per_ip_10min: shared_limit(
+                "ITSM_LIMIT_AUTH_PER_IP_10MIN",
+                shared_defaults.auth_per_ip_10min,
+            )?,
+            ai_per_user_min: shared_limit(
+                "ITSM_LIMIT_AI_PER_USER_MIN",
+                shared_defaults.ai_per_user_min,
+            )?,
+            ai_per_workspace_day: shared_limit(
+                "ITSM_LIMIT_AI_PER_WORKSPACE_DAY",
+                shared_defaults.ai_per_workspace_day,
+            )?,
+            outbound_per_user_10min: shared_limit(
+                "ITSM_LIMIT_OUTBOUND_PER_USER_10MIN",
+                shared_defaults.outbound_per_user_10min,
+            )?,
+            lookup_per_user_min: shared_limit(
+                "ITSM_LIMIT_LOOKUP_PER_USER_MIN",
+                shared_defaults.lookup_per_user_min,
+            )?,
+            webhook_per_ip_min: shared_limit(
+                "ITSM_LIMIT_WEBHOOK_PER_IP_MIN",
+                shared_defaults.webhook_per_ip_min,
+            )?,
+        };
         let rate_limit = RateLimitConfig {
+            shared,
             read_per_min: per_min("ITSM_RATE_LIMIT_READ_PER_MIN", defaults.read_per_min)?,
             write_per_min: per_min("ITSM_RATE_LIMIT_WRITE_PER_MIN", defaults.write_per_min)?,
             anon_per_min: per_min("ITSM_RATE_LIMIT_ANON_PER_MIN", defaults.anon_per_min)?,
@@ -1235,7 +1311,33 @@ mod tests {
             && c.rate_limit.max_keys == 500
             && c.rate_limit.trusted_proxies.len() == 2));
 
+        let mut v = base();
+        v.push(("ITSM_LIMIT_AUTH_PER_IP_10MIN", "40"));
+        v.push(("ITSM_LIMIT_AI_PER_USER_MIN", "3"));
+        v.push(("ITSM_LIMIT_AI_PER_WORKSPACE_DAY", "500"));
+        v.push(("ITSM_LIMIT_OUTBOUND_PER_USER_10MIN", "7"));
+        v.push(("ITSM_LIMIT_LOOKUP_PER_USER_MIN", "20"));
+        v.push(("ITSM_LIMIT_WEBHOOK_PER_IP_MIN", "1000000"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert_eq!(
+            cfg.map(|c| c.rate_limit.shared),
+            Ok(SharedLimits {
+                auth_per_ip_10min: 40,
+                ai_per_user_min: 3,
+                ai_per_workspace_day: 500,
+                outbound_per_user_10min: 7,
+                lookup_per_user_min: 20,
+                webhook_per_ip_min: 1_000_000,
+            })
+        );
+
         for (name, bad) in [
+            ("ITSM_LIMIT_AUTH_PER_IP_10MIN", "0"),
+            ("ITSM_LIMIT_AI_PER_USER_MIN", "1000001"),
+            ("ITSM_LIMIT_AI_PER_WORKSPACE_DAY", "-5"),
+            ("ITSM_LIMIT_OUTBOUND_PER_USER_10MIN", "many"),
+            ("ITSM_LIMIT_LOOKUP_PER_USER_MIN", "0x10"),
+            ("ITSM_LIMIT_WEBHOOK_PER_IP_MIN", "1.5"),
             ("ITSM_RATE_LIMIT_READ_PER_MIN", "0"),
             ("ITSM_RATE_LIMIT_READ_PER_MIN", "100001"),
             ("ITSM_RATE_LIMIT_WRITE_PER_MIN", "-1"),

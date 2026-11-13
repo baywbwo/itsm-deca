@@ -5,6 +5,7 @@ use crate::{
     authz::{self, Permission},
     error::AppError,
     session::Session,
+    shared_limit::{self, Identity, Policy},
 };
 use axum::{
     Json,
@@ -63,7 +64,8 @@ pub async fn suggest(
     Path(raw_ws): Path<String>,
     payload: Result<Json<SuggestBody>, JsonRejection>,
 ) -> Result<Json<SuggestResult>, AppError> {
-    let access = authz::resolve(&state, &s, parse_id(&raw_ws)?).await?;
+    let ws = parse_id(&raw_ws)?;
+    let access = authz::resolve(&state, &s, ws).await?;
     access.require(Permission::TicketCreate)?;
     let request = body(payload)?;
     let task = match request.mode.as_str() {
@@ -78,6 +80,23 @@ pub async fn suggest(
     if request.text.trim().is_empty() || request.text.chars().count() > 6000 {
         return Err(AppError::Validation("text"));
     }
+    // CP7d: counted after authorisation and validation, shared by every replica. The user
+    // limit first, so a user over their own limit does not spend the workspace quota.
+    let limits = &state.config.rate_limit.shared;
+    shared_limit::hit(
+        &state.pool,
+        limits,
+        Policy::AiPerUser,
+        Identity::User(s.user_id),
+    )
+    .await?;
+    shared_limit::hit(
+        &state.pool,
+        limits,
+        Policy::AiPerWorkspaceDay,
+        Identity::Workspace(ws),
+    )
+    .await?;
     let key = std::env::var("OPENAI_API_KEY")
         .ok()
         .filter(|s| !s.trim().is_empty())

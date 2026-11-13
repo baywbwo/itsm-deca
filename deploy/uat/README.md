@@ -18,6 +18,23 @@ dependensi start dan bukan gerbang rilis. Data/skema lampiran historis dan kontr
 Yang sudah diuji native: guard, Caddyfile di depan API UAT live, entrypoint, dan cek statis compose.
 Lihat bukti kandidat. Image belum di-build, container belum dijalankan, compose belum dijalankan.
 
+## Header keamanan (CP7d)
+Caddy menambahkan header ini ke semua jawaban (web dan API):
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` (tanpa preload; hanya nama di bawah alamat UAT);
+- `X-Content-Type-Options`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`;
+- `Permissions-Policy` (kamera, mikrofon, lokasi, pembayaran dan USB mati);
+- `Cross-Origin-Opener-Policy: same-origin`.
+
+SPA mendapat CSP ketat: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; …;
+frame-ancestors 'none'`. Tidak ada inline script atau style, dan tidak ada origin pihak ketiga. API mengirim CSP-nya
+sendiri (`default-src 'none'; …; sandbox`), `X-Frame-Options`, `Referrer-Policy: no-referrer` dan
+`Cross-Origin-Resource-Policy`, juga tanpa Caddy.
+
+Build web dengan CSP ini diuji di Chromium lewat `evidence/i3/cp7d/csp/`: header dibaca langsung dari Caddyfile ini,
+10 halaman dibuka, 0 pelanggaran, dan inline script uji diblokir. Caddy sendiri belum dijalankan di sini.
+Bila nanti web memuat aset dari origin lain (font, peta, analitik), CSP harus diubah dulu. Kalau tidak, aset itu
+diblokir.
+
 ## Pembatasan akses (wajib, gagal tutup)
 Entri Superadmin UAT tidak boleh terbuka ke publik. Ada dua lapis, dan keduanya wajib:
 1. **Allowlist IP** (`ITSM_UAT_ALLOWED_CIDRS`) diperiksa pada peer TCP. Peer di luar allowlist

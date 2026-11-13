@@ -34,3 +34,16 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: test
         run: cargo test --locked --all-targets
+  # CP7d (TM-43): RustSec + npm advisories. Separate job: needs network for the advisory
+  # databases and a tool install, and must not hide a test failure behind an advisory or back.
+  deps-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain (pinned by rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: cargo-audit (tool, pinned version)
+        run: cargo install cargo-audit --locked --version 0.23.0
+      - name: audit
+        run: scripts/audit-deps.sh

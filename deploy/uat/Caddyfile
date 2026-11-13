@@ -35,11 +35,15 @@
 			{$ITSM_UAT_BASIC_AUTH_USER} {$ITSM_UAT_BASIC_AUTH_HASH}
 		}
 
+		# CP7d (TM-07/TM-08): every response, web and API. The site address is the UAT host
+		# itself, so includeSubDomains covers only names below it (no preload).
 		header {
-			Strict-Transport-Security "max-age=31536000"
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
 			X-Content-Type-Options "nosniff"
 			Referrer-Policy "same-origin"
 			X-Frame-Options "DENY"
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+			Cross-Origin-Opener-Policy "same-origin"
 			-Server
 		}
 
@@ -51,6 +55,9 @@
 			}
 		}
 		handle {
+			# CP7d (TM-07): the SPA loads only its own bundle (no inline script or style, no
+			# third-party origin); checked in a browser by evidence/i3/cp7d/csp-check.mjs.
+			header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
 			root * {$ITSM_UAT_WEB_ROOT:/srv}
 			try_files {path} /index.html
 			file_server

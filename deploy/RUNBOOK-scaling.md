@@ -72,17 +72,54 @@ Semua state yang harus konsisten antar replika ada di Postgres:
 - sesi;
 - percobaan login OIDC;
 - idempotensi webhook dan intake;
-- outbox.
+- outbox;
+- jendela rate limit bersama (`rate_limit_windows`, CP7d).
 
 Sisanya bersifat lokal per proses:
 
 | State | Sifat | Dampak multi-replika |
 |---|---|---|
-| Rate limiter (`rate_limit.rs`) | Per proses | Batas efektif = batas × jumlah replika API. Penyelarasan antar replika: CP7d |
+| Rate limiter umum (`rate_limit.rs`) | Per proses | Batas efektif = batas × jumlah replika API. Sengaja: lapis pertama yang murah untuk semua lalu lintas. Endpoint mahal atau rawan dihitung bersama di Postgres (lihat di bawah) |
 | Cache token tenant Lark (`live.rs`) | Cache | Tiap proses meminta token sendiri; tidak ada ketidakkonsistenan |
 | Cache discovery/JWKS OIDC (`oidc.rs`, TTL 1 jam) | Cache | Setelah rotasi kunci IdP, replika lain memuat ulang saat `kid` tidak dikenal atau TTL habis |
 | Lampiran (`ITSM_ATTACHMENT_DIR`) | Volume `attachments` | Fitur mati sejak D13. Volume hanya bisa dibagi di satu host. Untuk multi-host perlu object storage (gap) |
 | SLA | Dihitung saat baca (`dashboard.rs`) | Tidak ada job SLA, tidak ada state |
+
+## Rate limit bersama (CP7d)
+Endpoint yang mahal atau rawan diserang dihitung di tabel Postgres `rate_limit_windows`, sehingga batasnya sama
+berapa pun jumlah replika API. Ini lapis kedua, di belakang rate limiter per proses.
+
+| Kelas | Kunci | Jendela | Default | Variabel |
+|---|---|---|---|---|
+| Masuk (`POST /login`, `/login/mfa`, `/uat/session`, OIDC start/callback) | Alamat klien | 10 menit | 100 | `ITSM_LIMIT_AUTH_PER_IP_10MIN` |
+| Saran AI, per pengguna | Pengguna | 1 menit | 10 | `ITSM_LIMIT_AI_PER_USER_MIN` |
+| Saran AI, per perusahaan | Workspace | 1 hari (00.00 UTC = 07.00 WIB) | 2000 | `ITSM_LIMIT_AI_PER_WORKSPACE_DAY` |
+| Panggilan keluar (uji koneksi, sinkron direktori, retry outbox, uji penyedia AI/MCP) | Pengguna | 10 menit | 30 | `ITSM_LIMIT_OUTBOUND_PER_USER_10MIN` |
+| Lookup Jira langsung (opsi, pencarian pengguna Jira) | Pengguna | 1 menit | 60 | `ITSM_LIMIT_LOOKUP_PER_USER_MIN` |
+| Webhook Jira | Alamat klien | 1 menit | 600 | `ITSM_LIMIT_WEBHOOK_PER_IP_MIN` |
+
+Semua nilai 1–1000000; nilai di luar rentang menolak start. Jawaban saat batas terlampaui: `429`,
+`{"error":{"code":"rate_limited","retryAfterSeconds":N}}` dan header `Retry-After`. Log
+`shared rate limit` dengan `rate_limit.class` (tanpa alamat atau ID pengguna).
+
+Cara kerja dan batasannya:
+- Satu `INSERT … ON CONFLICT DO UPDATE` per hit. Hitungan tepat antar replika (diuji paralel dua instance).
+- Jendela tetap. Di batas jendela, sampai 2× batas bisa lolos dalam waktu singkat.
+- Identitas disimpan sebagai SHA-256 (cakupan + jenis + nilai), bukan alamat atau ID mentah.
+- Tabel `UNLOGGED`: setelah crash Postgres hitungan kembali nol. Ini disengaja (data sementara, tanpa beban WAL),
+  dan tabel tidak ikut replika baca.
+- Worker menghapus jendela lebih tua dari 2 hari, maksimal 5000 baris per putaran.
+- Kuota AI dihitung setelah otorisasi dan validasi. Pengguna lain tidak bisa menghabiskan kuota perusahaan lain,
+  dan pengguna yang sudah melewati batas pribadinya tidak lagi memakai kuota perusahaan.
+- Webhook dihitung per alamat, bukan per koneksi, agar pengirim palsu tidak bisa memblokir pengiriman Jira yang sah.
+  Body di atas 1 MiB ditolak `413` sebelum dihitung.
+- Perlindungan per akun untuk kata sandi dan kode MFA tetap lockout di baris kredensial (5 gagal, 15 menit).
+  Lockout itu sudah di Postgres, jadi berlaku lintas replika.
+- Alamat klien hanya dari `ITSM_TRUSTED_PROXIES`. `X-Forwarded-For` dari peer lain diabaikan.
+
+Bila pengguna sah terkena 429 (misalnya satu NAT kantor untuk banyak CS saat jam masuk), naikkan
+`ITSM_LIMIT_AUTH_PER_IP_10MIN` lalu restart API. Kosongkan jendela yang sedang berjalan bila perlu:
+`DELETE FROM rate_limit_windows WHERE scope = 'auth_ip';` (role migrator).
 
 Migrasi memakai advisory lock Postgres (sqlx), jadi dua `api` yang start bersamaan tidak saling menimpa.
 
@@ -171,7 +208,6 @@ Hanya untuk database dummy bermarker (`ITSM_SEED_CONFIRM_DB`). `DATABASE_URL` di
 ## Belum tercakup
 - Beberapa replika `api` di belakang Caddy. `reverse_proxy` saat ini satu upstream (`ITSM_UAT_API_UPSTREAM`);
   load balancing dan health upstream masuk CP8.
-- Rate limit lintas replika (CP7d).
 - Object storage untuk lampiran (bila fitur lampiran dihidupkan lagi).
 - Compose dan Docker belum dijalankan di lingkungan ini. Topologi diuji dengan proses lokal (`evidence/i3/cp7b/`).
 - Kinerja (CP7c):

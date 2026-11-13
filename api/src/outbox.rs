@@ -367,12 +367,15 @@ pub async fn prune_webhook_events(state: &AppState) -> Result<u64, AppError> {
     .rows_affected())
 }
 
-/// One worker tick: sweep expired leases, prune old webhook deliveries, claim due intents,
-/// settle each.
+/// One worker tick: sweep expired leases, prune old webhook deliveries and expired rate-limit
+/// windows (CP7d), claim due intents, settle each.
 pub async fn run_once(state: &AppState) -> Result<Tick, AppError> {
     let expired = sweep_expired(state).await?;
     if let Err(e) = prune_webhook_events(state).await {
         tracing::warn!(error = %e.log_text(), "webhook event prune failed");
+    }
+    if let Err(e) = crate::shared_limit::prune(&state.pool).await {
+        tracing::warn!(error = %e.log_text(), "rate limit window prune failed");
     }
     let mut tick = Tick {
         expired,
