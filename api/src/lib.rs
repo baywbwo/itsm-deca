@@ -63,7 +63,7 @@ pub fn app(state: AppState) -> Router {
     let shared = axum::middleware::from_fn_with_state(state.clone(), shared_limit::layer);
     let api = routes::api_router()
         .route_layer(denied.clone())
-        .route_layer(shared)
+        .route_layer(shared.clone())
         .layer(limited.clone())
         .layer(session.clone());
     let bounded = Router::new()
@@ -73,6 +73,16 @@ pub fn app(state: AppState) -> Router {
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             REQUEST_TIMEOUT,
+        ));
+    let ai = routes::ai_router()
+        .route_layer(denied.clone())
+        .route_layer(shared)
+        .layer(limited.clone())
+        .layer(session.clone())
+        .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::from_secs(55),
         ));
     let upload = routes::upload_router()
         .route_layer(denied)
@@ -88,6 +98,7 @@ pub fn app(state: AppState) -> Router {
 
     Router::new()
         .merge(bounded)
+        .merge(ai)
         .merge(upload)
         .merge(webhook)
         .with_state(state)

@@ -282,6 +282,13 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/intake/jira-users"),
 ];
 
+pub fn ai_router() -> Router<AppState> {
+    Router::new().route(
+        "/api/v1/workspaces/{workspace_id}/ai-suggestions",
+        post(ai_suggestions::suggest),
+    )
+}
+
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/login", post(password::login))
@@ -291,7 +298,6 @@ pub fn api_router() -> Router<AppState> {
             get(oidc::start),
         )
         .route("/api/v1/auth/oidc/callback", get(oidc::callback))
-        .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route(
             "/api/v1/workspaces/{workspace_id}/ai-settings",
             get(ai_settings::list),
