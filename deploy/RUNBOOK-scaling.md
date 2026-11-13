@@ -1,4 +1,4 @@
-# Runbook: worker terpisah dan skala (CP7b)
+# Runbook: worker terpisah, skala, dan kinerja (CP7b, CP7c)
 
 ## Topologi
 | Service | Perintah | Isi | Port |
@@ -86,9 +86,98 @@ Sisanya bersifat lokal per proses:
 
 Migrasi memakai advisory lock Postgres (sqlx), jadi dua `api` yang start bersamaan tidak saling menimpa.
 
+## Kinerja dan volume (CP7c)
+Target: p95 baca ≤ 300 ms, tulis ≤ 600 ms, daftar/laporan ≤ 1,5 detik, pada 300 pengguna bersamaan dengan 1 juta
+tiket dan sekitar 10 juta catatan/event. Bukti di `evidence/i3/cp7c/`.
+
+### Hasil uji beban
+Kondisi uji: 1 proses `api` dengan pool 10, Postgres 18.6 di host 8 core yang sama dengan generator beban, data
+dummy, 300 pengguna, jeda 1 detik, pengukuran 180 detik.
+
+| | Sebelum (2b6bcc9) | Sesudah (CP7c) |
+|---|---|---|
+| p95 baca | 5972 ms | 94 ms |
+| p95 daftar/cari/papan/dasbor | 7071 ms | 213 ms (dasbor 350 ms) |
+| p95 tulis | 6902 ms | 132 ms |
+| Throughput | 49 req/dtk | 286 req/dtk |
+| Gagal | 7414 (non-2xx; log server mencatat `db_unavailable` 8662×, yaitu pool habis) | 0 |
+
+Yang mengubah hasil:
+- Index yang mengikuti ORDER BY daftar (0029).
+- Penghitung status per workspace (0030), sehingga hitungan tanpa filter tidak lagi membaca seluruh index status.
+- Dasbor:
+  - event resolve hanya dicek ke tiket bila ada filter;
+  - "perlu perhatian" dibaca per prioritas lewat index parsial;
+  - plan custom per request.
+
+Pool 10 cukup untuk beban ini, dan database tetap menjadi batas CPU. Menaikkan pool tidak menambah throughput bila CPU
+Postgres sudah penuh. Pakai rumus pool di atas, lalu ukur ulang di host produksi.
+
+### Jendela migrasi 0029 dan 0030
+Diukur pada 1 juta tiket:
+
+| Migrasi | Isi | Waktu | Kunci |
+|---|---|---|---|
+| 0029 | Membangun ulang 2 index, 1 index baru, `pg_trgm` + index GIN subjek | ±10 detik | SHARE pada `tickets`: baca jalan, tulis menunggu |
+| 0030 | Tabel penghitung, backfill, pemicu, index parsial "perlu perhatian" | < 1 detik | SHARE ROW EXCLUSIVE pada `tickets`: baca jalan, tulis menunggu |
+
+Hal yang perlu disiapkan:
+- Migrasi memakai `SET LOCAL statement_timeout = 0`, karena pool aplikasi membatasi statement 5 detik.
+- Jalankan di luar jam sibuk. Tulis tiket menunggu sampai migrasi selesai, dan request tulis bisa kena `lock_timeout`
+  3 detik.
+- `CREATE EXTENSION pg_trgm` butuh hak CREATE pada database untuk peran migrasi. Ekstensi ini bawaan contrib Postgres
+  (image resmi sudah memuatnya).
+- Down 0029 menghapus `pg_trgm`. Down 0030 menghapus tabel penghitung dan pemicunya. Bila 0030 dipasang ulang, backfill
+  menghitung ulang dari tiket.
+
+### Penghitung status (`ticket_status_counts`)
+- Diisi oleh pemicu statement-level pada INSERT, UPDATE, dan DELETE `tickets`, dalam transaksi yang sama.
+  - Pemicu memakai `ENABLE ALWAYS`, jadi impor dengan `session_replication_role = replica` tetap tercatat.
+- Tiap (workspace, status) dibagi 16 shard menurut id tiket. Baris penghitung dikunci dalam urutan kunci, sehingga
+  transisi berlawanan arah tidak deadlock (`api/tests/list_indexes.rs`).
+- Dipakai hanya untuk daftar, papan, dan dasbor tanpa filter. Lingkup berfilter tetap menghitung tiket.
+- TRUNCATE `tickets` tidak didukung, karena FK dan tabel append-only menolaknya.
+
+Cek selisih. Hasil 0 baris berarti sesuai. `itsm-perf verify` menjalankan cek yang sama:
+```sql
+SELECT * FROM
+  (SELECT workspace_id, workflow_status, count(*) AS n FROM tickets GROUP BY 1, 2) t
+FULL JOIN
+  (SELECT workspace_id, workflow_status, sum(n)::bigint AS n FROM ticket_status_counts
+   GROUP BY 1, 2 HAVING sum(n) <> 0) c
+USING (workspace_id, workflow_status) WHERE t.n IS DISTINCT FROM c.n;
+```
+
+Hitung ulang bila ada selisih, dalam satu transaksi, dengan tulis tiket tertahan sebentar:
+```sql
+BEGIN;
+LOCK TABLE tickets IN SHARE ROW EXCLUSIVE MODE;
+DELETE FROM ticket_status_counts;
+INSERT INTO ticket_status_counts (workspace_id, workflow_status, shard, n)
+SELECT workspace_id, workflow_status, hashtext(id::text) & 15, count(*) FROM tickets GROUP BY 1, 2, 3;
+COMMIT;
+```
+
+### Alat uji (`itsm-perf`, tidak masuk image)
+Hanya untuk database dummy bermarker (`ITSM_SEED_CONFIRM_DB`). `DATABASE_URL` diambil dari env dan tidak dicetak.
+
+| Perintah | Kegunaan |
+|---|---|
+| `itsm-perf seed [--tickets N] [--notes-per-ticket N] [--users N]` | Isi volume. Default 1 juta tiket, sekitar 5 menit di host uji |
+| `itsm-perf load --base URL --users 300 --duration-secs 180 --out hasil.json` | Uji beban dengan p50/p95/p99 per skenario dan per kelas terhadap target |
+| `itsm-perf verify` | Cek invarian data, termasuk selisih penghitung status. Jalankan setelah uji beban |
+| `itsm-perf stats [--top N] [--reset]` | Statement terlambat dari `pg_stat_statements` (bila ekstensi dimuat) |
+
 ## Belum tercakup
 - Beberapa replika `api` di belakang Caddy. `reverse_proxy` saat ini satu upstream (`ITSM_UAT_API_UPSTREAM`);
   load balancing dan health upstream masuk CP8.
 - Rate limit lintas replika (CP7d).
 - Object storage untuk lampiran (bila fitur lampiran dihidupkan lagi).
 - Compose dan Docker belum dijalankan di lingkungan ini. Topologi diuji dengan proses lokal (`evidence/i3/cp7b/`).
+- Kinerja (CP7c):
+  - generator beban berjalan di host yang sama dengan Postgres dan API (8 core), sehingga angka di host produksi bisa
+    berbeda;
+  - data sintetis;
+  - Docker belum dipakai untuk uji beban.
+- Pencarian teks dengan istilah yang cocok ke puluhan ribu tiket masih menghitung semua kecocokan (rata-rata ±70 ms per
+  hitungan saat beban). Istilah kurang dari 3 huruf tidak bisa memakai index trigram.
