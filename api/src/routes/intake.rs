@@ -361,7 +361,11 @@ pub async fn create(
     if out_of_range {
         return Err(AppError::Validation("receivedAt"));
     }
-    check_owner(&access, n.owner_user_id)?;
+    let owner_user_id = n.owner_user_id.or_else(|| {
+        (access.membership_id.is_some() && access.allows(Permission::TicketAssignSelf))
+            .then_some(access.user_id)
+    });
+    check_owner(&access, owner_user_id)?;
     require_active(
         &mut tx,
         "intake_channels",
@@ -394,7 +398,7 @@ pub async fn create(
             return Err(AppError::Validation("merchantId"));
         }
     }
-    if let Some(owner) = n.owner_user_id {
+    if let Some(owner) = owner_user_id {
         let active: Option<bool> = sqlx::query_scalar(
             "SELECT m.active AND u.active FROM workspace_memberships m JOIN users u ON u.id = m.user_id \
              WHERE m.workspace_id = $1 AND m.user_id = $2",
@@ -502,7 +506,7 @@ pub async fn create(
     .bind(n.receiving_unit_id)
     .bind(n.region_id)
     .bind(n.merchant_id)
-    .bind(n.owner_user_id)
+    .bind(owner_user_id)
     .bind(access.user_id)
     .bind(&key)
     .bind(&hash)
@@ -570,7 +574,7 @@ pub async fn create(
         serde_json::json!({
             "number": number,
             "kind": "initial",
-            "to": n.owner_user_id,
+            "to": owner_user_id,
             "intakeChannelId": n.intake_channel_id,
             "priorityId": n.priority_id,
             "categoryId": n.category_id,

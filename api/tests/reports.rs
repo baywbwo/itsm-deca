@@ -631,7 +631,7 @@ async fn export_matches_preview_and_download_is_scoped(pool: PgPool) {
     assert_eq!(run["requestedBy"]["id"], json!(f.cs));
     assert!(
         s(&run["fileName"])
-            .starts_with("DUMA-rekap-operasional-NON-REGULATOR-2026-10-01_sd_2026-10-31-received-")
+            .starts_with("DUMA-rekap-operasional-2026-10-01_sd_2026-10-31-received-")
     );
     let id = s(&run["id"]);
 
@@ -689,7 +689,7 @@ async fn export_matches_preview_and_download_is_scoped(pool: PgPool) {
             line.contains(&format!("\"{}\"", s(&row["displayNumber"]))),
             "{line}"
         );
-        assert!(line.starts_with("\"Rekap operasional (bukan format regulator BI)\",\"DUMA\""));
+        assert!(line.starts_with("\"Rekap operasional\",\"DUMA\""));
     }
     // Formula cells neutralized, quotes doubled.
     assert!(
@@ -1094,7 +1094,7 @@ async fn xlsx_export_matches_preview_typed_and_safe(pool: PgPool) {
         let r = i + 1;
         assert_eq!(
             text(&sheet, r, 0),
-            "Rekap operasional (bukan format regulator BI)"
+            "Rekap operasional"
         );
         assert_eq!(text(&sheet, r, 1), "DUMA");
         assert_eq!(when(&sheet, r, 4, "YYYY-MM-DD"), "2026-10-01");
