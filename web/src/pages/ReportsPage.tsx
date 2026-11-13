@@ -144,7 +144,6 @@ export function ReportsPage({ api, workspace, query = '', onNotice }: {
 
   const tz = p?.header.timezone ?? workspace.timezone;
   const filtered = params.status.length > 0 || DASHBOARD_FILTERS.some((k) => params.filters[k]);
-  const bi = p?.reportTypes.find((t) => t.code === 'bi_regulator');
   const morePicked = params.status.length > 0 || !!params.filters.owner || !!params.filters.priority;
   const refresh = () => {
     if (dateError) return;
@@ -183,7 +182,7 @@ export function ReportsPage({ api, workspace, query = '', onNotice }: {
 
   return (
     <>
-      <PageHeader title="Laporan" description="Rekap operasional per periode · bukan laporan regulator"
+      <PageHeader title="Laporan" description="Rekap operasional per periode"
         action={<Button variant="primary" onClick={refresh} disabled={!!dateError}><Icon name="reports" size={16} /> Pratinjau</Button>} />
 
       <section className="pcard rep-params" aria-label="Parameter laporan">
@@ -227,16 +226,6 @@ export function ReportsPage({ api, workspace, query = '', onNotice }: {
             <details className="full rep-more" open={morePicked || undefined}>
               <summary>Filter lanjutan{morePicked ? ' · aktif' : ''}</summary>
               <div className="formgrid">
-                <label className="field">
-                  Jenis laporan
-                  <select className="field-control" value="operational" aria-describedby="rep-type-hint" onChange={() => undefined}>
-                    <option value="operational">Rekap operasional</option>
-                    <option value="bi_regulator" disabled>Persiapan laporan BI (belum tersedia)</option>
-                  </select>
-                  <span id="rep-type-hint" className="field-hint">
-                    Persiapan laporan BI dinonaktifkan: {(bi?.reason ?? 'pemetaan regulator belum tersedia').replace(/\.$/, '')}.
-                  </span>
-                </label>
                 {filterSelect(byKey('owner'))}
                 {filterSelect(byKey('priority'))}
                 <fieldset className="report-status full">
@@ -309,16 +298,6 @@ export function ReportsPage({ api, workspace, query = '', onNotice }: {
           ))}
       </section>
 
-      <section className="pcard callout-amber" aria-labelledby="rep-bi">
-        <div className="bd">
-          <h2 id="rep-bi">Laporan pengaduan untuk regulator (BI) belum tersedia</h2>
-          <p className="hintline">
-            {bi?.reason ?? 'Pemetaan format regulator belum ditetapkan, jadi tidak ada kode BI yang dibuat atau ditebak.'}{' '}
-            Ekspor di halaman ini hanya rekap operasional, berlabel OPERASIONAL / NON-REGULATOR.
-            {p && <> Perusahaan: {p.header.companyName} ({p.header.companyCode}) · kode pelapor {p.header.reporterCode ?? 'belum dikonfigurasi'}.</>}
-          </p>
-        </div>
-      </section>
     </>
   );
 }
@@ -449,7 +428,7 @@ function PreviewBody({ p, filtered, blocking }: { p: ReportPreview; filtered: bo
         </>
       )}
       <p className="hintline rep-source">
-        {p.notice} · per {instantLabel(p.asOf, tz)} {tzLabel(tz)} · rentang UTC {p.header.startAt} s.d. sebelum {p.header.endAt}
+        Per {instantLabel(p.asOf, tz)} {tzLabel(tz)} · rentang UTC {p.header.startAt} s.d. sebelum {p.header.endAt}
       </p>
     </>
   );

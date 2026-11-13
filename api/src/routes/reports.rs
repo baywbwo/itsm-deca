@@ -62,7 +62,7 @@ const RUN_LIST_LIMIT: i64 = 20;
 
 const OPERATIONAL: &str = "operational";
 const REGULATOR: &str = "bi_regulator";
-const KIND_LABEL: &str = "Rekap operasional (bukan format regulator BI)";
+const KIND_LABEL: &str = "Rekap operasional";
 const NOT_SET: &str = "Tidak diisi";
 const NO_PIC: &str = "Belum ditugaskan";
 
@@ -1261,7 +1261,7 @@ const RUN_SELECT: &str = concat!(
 fn file_name(r: &RunRow) -> String {
     let short: String = r.id.to_string().chars().take(8).collect();
     format!(
-        "{}-rekap-operasional-NON-REGULATOR-{}_sd_{}-{}-{short}.{}",
+        "{}-rekap-operasional-{}_sd_{}-{}-{short}.{}",
         r.workspace_code,
         r.period_start,
         r.period_end,

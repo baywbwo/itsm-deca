@@ -338,7 +338,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                   {errorOf('receivedLocal') && <span id={`${fid('receivedLocal')}-error`} className="field-error">{errorOf('receivedLocal')}</span>}
                 </div>
                 {select('ownerUserId', 'PIC CS', ownerChoices.map((m) => ({ id: m.userId, label: m.userId === userId ? `${m.displayName} (saya)` : m.displayName })), {
-                  empty: 'Belum ditugaskan',
+                  empty: canSelf ? 'Otomatis · akun saya' : 'Belum ditugaskan',
                   disabled: ownerChoices.length === 0,
                   hint: canAny ? 'Anggota aktif perusahaan ini.' : canSelf ? 'Peran Anda hanya dapat menugaskan diri sendiri.' : 'Peran Anda tidak dapat menetapkan PIC.',
                 })}
