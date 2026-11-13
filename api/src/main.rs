@@ -96,6 +96,8 @@ enum Role {
 }
 
 async fn serve(mut config: Config, pool: sqlx::PgPool, role: Role) -> Result<(), String> {
+    // CP8: migrations are a separate step (production runs them as the schema owner).
+    db::verify_schema(&pool).await.map_err(|e| e.to_string())?;
     db::verify_runtime_guard(&config, &pool)
         .await
         .map_err(|e| e.to_string())?;

@@ -17,10 +17,14 @@
 
 {$ITSM_UAT_SITE_ADDRESS} {
 	tls {$ITSM_UAT_TLS}
-	# Access log (Caddy redacts Authorization and Cookie by default).
+	# Access log. Caddy redacts Cookie, Set-Cookie and Authorization by default; the CSRF
+	# token (a per-session secret) is removed here too.
 	log {
 		output stdout
-		format json
+		format filter {
+			request>headers>X-Csrf-Token delete
+			wrap json
+		}
 	}
 
 	route {

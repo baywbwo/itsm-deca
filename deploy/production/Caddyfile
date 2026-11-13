@@ -1,0 +1,94 @@
+# ITSM production ingress (CP8): single origin for web + API, TLS, network allowlist, two API
+# replicas with active health checks. Values come from ingress-guard.sh, which refuses to start
+# Caddy without a site address, a TLS mode and an explicit allowlist. Authentication is the
+# application login (password/SSO, cookie session + CSRF); there is no ingress basic auth.
+{
+	admin off
+	# Ports overridable only for local harness runs; the container uses 80/443.
+	http_port {$ITSM_PROD_HTTP_PORT:80}
+	https_port {$ITSM_PROD_HTTPS_PORT:443}
+	skip_install_trust
+	# X-Forwarded-For from clients is not trusted here (no trusted_proxies); the API trusts XFF
+	# only from this proxy (ITSM_TRUSTED_PROXIES = ingress address).
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$ITSM_PROD_SITE_ADDRESS} {
+	tls {$ITSM_PROD_TLS}
+	# Access log. Caddy redacts Cookie, Set-Cookie and Authorization by default; the CSRF
+	# token (a per-session secret) is removed here too.
+	log {
+		output stdout
+		format filter {
+			request>headers>X-Csrf-Token delete
+			wrap json
+		}
+	}
+
+	route {
+		# 1) Network allowlist on the real TCP peer. Everything else: 403, nothing proxied.
+		@outside not remote_ip {$ITSM_PROD_ALLOWED_CIDRS}
+		respond @outside "Forbidden" 403 {
+			close
+		}
+
+		# CP7d headers on every response, web and API.
+		header {
+			Strict-Transport-Security "max-age=31536000; includeSubDomains"
+			X-Content-Type-Options "nosniff"
+			Referrer-Policy "same-origin"
+			X-Frame-Options "DENY"
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+			Cross-Origin-Opener-Policy "same-origin"
+			-Server
+		}
+
+		# 2) /api and /health go to the API replicas, everything else is the SPA.
+		@api path /api/* /health/*
+		handle @api {
+			reverse_proxy {$ITSM_PROD_API_UPSTREAMS} {
+				lb_policy round_robin
+				# A replica that is down or restarting is skipped: connection failures are retried
+				# on the other replica for up to 5 s. A request that reached a replica which then
+				# died (crash, SIGKILL) is replayed only when replay is safe: reads, and the four
+				# writes whose handlers store their Idempotency-Key in the same transaction (a
+				# replay returns the stored result). Every other write fails with 502 instead.
+				lb_try_duration 5s
+				lb_try_interval 250ms
+				# A replay needs the body again: buffer it (API bodies are capped at 64 KiB; larger
+				# bodies, i.e. the 1 MiB Jira webhook, stream past the buffer and are never replayed).
+				request_buffers 64KiB
+				lb_retry_match {
+					method GET HEAD
+				}
+				lb_retry_match {
+					method POST
+					header Idempotency-Key *
+					path /api/v1/workspaces/*/tickets /api/v1/workspaces/*/report-runs /api/v1/workspaces/*/tickets/*/notes /api/v1/workspaces/*/tickets/*/related-work
+				}
+				fail_duration 10s
+				health_uri /health/ready
+				health_interval 3s
+				health_timeout 2s
+				health_status 200
+				header_up -Authorization
+			}
+		}
+		handle {
+			# CP7d (TM-07): the SPA loads only its own bundle (no inline script or style).
+			header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+			root * {$ITSM_PROD_WEB_ROOT:/srv}
+			try_files {path} /index.html
+			file_server
+		}
+	}
+}
+
+# Container healthcheck only; bound to loopback inside the ingress container.
+http://127.0.0.1:{$ITSM_PROD_HEALTH_PORT:8099} {
+	bind 127.0.0.1
+	respond /ingress-health "ok" 200
+}
