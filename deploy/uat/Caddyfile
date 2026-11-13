@@ -9,9 +9,14 @@
 	skip_install_trust
 	# Upstream API trusts X-Forwarded-For only from this proxy (ITSM_TRUSTED_PROXIES).
 	# Client-supplied X-Forwarded-For is not trusted here (no trusted_proxies configured).
+	# Error logs (e.g. a failed upstream dial) carry the request headers too and go through
+	# this default logger: the CSRF token is removed here as well.
 	log {
 		output stdout
-		format json
+		format filter {
+			request>headers>X-Csrf-Token delete
+			wrap json
+		}
 	}
 }
 

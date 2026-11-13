@@ -217,6 +217,10 @@ pub fn state(pool: &PgPool, auth: &str, keyring: bool) -> AppState {
         ("ITSM_ENV", "uat".into()),
         ("ITSM_ACCESS_MODE", "password".into()),
         ("ITSM_COOKIE_SECURE", "true".into()),
+        // Retries on the login semaphore's 429 (the request helpers) are counted by the shared
+        // sign-in limit too; lift it so a slow machine cannot stall here for its 10-minute
+        // window. shared_limits.rs tests that limit.
+        ("ITSM_LIMIT_AUTH_PER_IP_10MIN", "1000000".into()),
         ("DATABASE_URL", "postgres://unused-in-tests".into()),
         ("ITSM_AUTH", auth.into()),
         ("ITSM_PUBLIC_URL", PUBLIC_URL.into()),

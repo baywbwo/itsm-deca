@@ -15,6 +15,10 @@ fn state(pool: &PgPool, mode: &str) -> AppState {
         ("ITSM_ENV", "uat"),
         ("ITSM_ACCESS_MODE", mode),
         ("ITSM_COOKIE_SECURE", "true"),
+        // Retries on the login semaphore's 429 (the request helpers) are counted by the shared
+        // sign-in limit too; lift it so a slow machine cannot stall here for its 10-minute
+        // window. shared_limits.rs tests that limit.
+        ("ITSM_LIMIT_AUTH_PER_IP_10MIN", "1000000"),
         ("DATABASE_URL", "postgres://unused"),
         ("ITSM_MFA", "on"),
         // Synthetic test-only MFA key material (US-1.2): admins must enrol before administering.

@@ -81,8 +81,8 @@ N+1 (contract), setelah tidak ada lagi binary N-1 yang berjalan.
    `docker compose run --rm --entrypoint /usr/local/lib/itsm/backup/base-backup.sh backup`
 4. `docker compose run --rm migrate`
 5. Rolling restart: `docker compose up -d --no-deps api-a`, tunggu `healthy`, lalu `… api-b`, `… worker`, dan `… ingress`.
-   - Caddy hanya merutekan ke replika yang sehat (health check 3 s) dan memindahkan request yang gagal tersambung
-     ke replika lain.
+   - Caddy hanya merutekan ke replika yang sehat (health check aktif 3 s) dan memindahkan request yang gagal
+     tersambung ke replika lain.
    - Bukti e2e: SIGTERM pada satu replika di tengah 60 request menghasilkan 0 error; SIGKILL juga 0 error, karena
      baca dan 4 tulis ber-Idempotency-Key diulang dengan aman.
    - Tulis lain yang sedang berjalan di replika yang **crash** bisa mendapat 502, dan pengguna mengulanginya.
@@ -188,7 +188,20 @@ dari `archive_timeout`). Latihan otomatis tanpa Docker: `evidence/i3/cp8/backup-
   - Prefix lebih lebar dari /8 (IPv4) atau /32 (IPv6) ditolak.
 - Klien di luar allowlist mendapat 403 sebelum request diteruskan ke API. API hanya memercayai `X-Forwarded-For`
   dari IP tetap ingress (`ITSM_PROD_INGRESS_IP`).
-- Access log Caddy (stdout) menyamarkan Cookie, Set-Cookie, dan Authorization, serta menghapus X-CSRF-Token.
+- Log Caddy (stdout), baik access log maupun error log, menyamarkan Cookie, Set-Cookie, dan Authorization, serta
+  menghapus X-CSRF-Token. Error log (misalnya gagal dial ke replika) ikut memuat header request, jadi filter juga
+  dipasang di logger global.
+- Batas body API ditegakkan juga di ingress: 64 KiB, dan 1 MiB untuk webhook Jira.
+  - `Content-Length` di atas batas dijawab 413 sebelum replika mana pun dihubungi.
+  - Body chunked dipotong di batas lalu dijawab 413, dan koneksinya ditutup. Tanpa penutupan, sisa body dibaca
+    sebagai request berikutnya (431).
+  - Lewat HTTP/2, penutupan berarti GOAWAY. Chromium tetap menerima 413; curl 7.88 kadang hanya melaporkan
+    error stream.
+- Jawaban error ingress (413, 502) membawa header keamanan yang sama dengan jawaban biasa.
+- Tidak ada passive health check (`fail_duration`). Caddy menghitung kegagalan akibat klien (body terpotong, upload
+  yang ditolak lebih awal) sebagai kegagalan replika, sehingga replika sehat bisa dikeluarkan dari pool. Dua request
+  oversized cukup untuk mengosongkan pool. Replika yang mati dikeluarkan oleh health check aktif (3 s); sampai
+  saat itu, kegagalan koneksinya diulang ke replika lain.
 - `/metrics` tidak dirutekan ingress.
 
 ## Belum diverifikasi di CP8
@@ -199,5 +212,8 @@ dari `archive_timeout`). Latihan otomatis tanpa Docker: `evidence/i3/cp8/backup-
   - compose diperiksa statis.
 - Salinan backup off-site: TUNGGU owner.
 - Koneksi app→Postgres di jaringan internal `backend` tanpa TLS. Jaringan ini internal Docker di satu host.
+- Tulis non-idempoten yang sedang berjalan di replika yang crash tetap bisa mendapat 502 (bagian 2).
+- Body chunked oversized sempat diteruskan sebagian ke replika sebelum dipotong di batas. Replika menolaknya,
+  dan replika itu tidak dikeluarkan dari pool.
 - Langkah `ALTER SYSTEM RESET` pasca-restore dan perintah `docker run` pada bagian 5 belum dilatih
   dengan Docker.
