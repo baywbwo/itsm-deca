@@ -158,8 +158,8 @@ pub async fn suggest(
         client(&LOCAL_CLIENT, false, 50)?
             .post(ollama_url()?)
             .json(&json!({
-                "model": model, "stream": false, "keep_alive": "2m",
-                "options": {"num_predict": 512, "num_ctx": 4096, "temperature": 0.2},
+                "model": model, "stream": false, "keep_alive": "10m",
+                "options": {"num_predict": 512, "num_thread": 3, "num_ctx": 4096, "temperature": 0.2},
                 "messages": [
                     {"role": "system", "content": instructions},
                     {"role": "user", "content": input}
