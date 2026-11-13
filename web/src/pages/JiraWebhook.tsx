@@ -96,7 +96,7 @@ export function WebhookPanel({ connection: c, timezone, origin, canManage, keyri
     <section className="int-section" aria-labelledby={`${id}-h`}>
       <h3 id={`${id}-h`}>Webhook masuk dari Jira</h3>
       <p className="tiny muted">
-        Jira mengirim komentar, perubahan status, dan penerima tugas issue ke timeline tiket terkait. Status tiket ITSM tidak diubah oleh Jira.
+        Jira mengirim komentar, perubahan status, dan penerima tugas issue ke timeline tiket terkait. Status yang dipetakan dapat memindahkan tiket aktif di board ITSM. Penyelesaian tetap ditinjau CS.
         Di Jira pilih peristiwa <b>Issue updated</b> dan <b>Comment created</b>.
       </p>
       <dl className="props spaced-bottom">

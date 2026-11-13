@@ -193,6 +193,7 @@ struct Conn {
     state: String,
     mode: String,
     webhook_secret_id: Option<Uuid>,
+    config: Value,
 }
 
 #[derive(sqlx::FromRow)]
@@ -243,7 +244,7 @@ pub async fn receive(
 ) -> Result<StatusCode, AppError> {
     let id = Uuid::parse_str(&raw_id).map_err(|_| AppError::Unauthenticated)?;
     let conn = sqlx::query_as::<_, Conn>(
-        "SELECT workspace_id, provider, state, mode, webhook_secret_id \
+        "SELECT workspace_id, provider, state, mode, webhook_secret_id, config \
          FROM integration_connections WHERE id = $1",
     )
     .bind(id)
@@ -337,7 +338,7 @@ pub async fn receive(
                 } else if !issue.in_order {
                     Outcome::Stale
                 } else {
-                    apply_issue(&mut tx, &ctx, &issue, sent_ms, &mut effect).await?
+                    apply_issue(&mut tx, &ctx, &issue, &conn.config, sent_ms, &mut effect).await?
                 }
             }
         }
@@ -456,10 +457,23 @@ fn actor_name(payload: &Value) -> String {
     label(payload.pointer("/user/displayName"), 200).unwrap_or_else(|| FALLBACK_AUTHOR.to_owned())
 }
 
+fn inbound_status<'a>(config: &'a Value, id: Option<&str>) -> Option<&'a str> {
+    let id = id?;
+    let mut matches = config.get("statusMap")?.as_object()?.iter()
+        .filter(|(_, value)| value.as_str() == Some(id));
+    let (target, _) = matches.next()?;
+    if matches.next().is_none() && matches!(target.as_str(), "new" | "open" | "pending_engineering") {
+        Some(target.as_str())
+    } else {
+        None
+    }
+}
+
 async fn apply_issue(
     tx: &mut PgConnection,
     ctx: &Ctx<'_>,
     issue: &Issue,
+    config: &Value,
     sent_ms: Option<i64>,
     effect: &mut Effect,
 ) -> Result<Outcome, AppError> {
@@ -515,6 +529,28 @@ async fn apply_issue(
                 _ => format!("Status isu Jira {key} sekarang: {to}."),
             };
             activity(tx, ctx, ticket, "jira_status", 's', &author, &body).await?;
+            if let Some(target) = inbound_status(config, status_id.as_deref()) {
+                let previous: Option<String> = sqlx::query_scalar(
+                    "SELECT workflow_status FROM tickets t WHERE workspace_id = $1 AND id = $2
+                     AND workflow_status IN ('new', 'open', 'pending_engineering')
+                     AND workflow_status <> $3
+                     AND (SELECT count(DISTINCT jira_issue_id) FROM related_work r
+                          WHERE r.workspace_id = t.workspace_id AND r.ticket_id = t.id) = 1
+                     FOR UPDATE",
+                )
+                .bind(ctx.ws)
+                .bind(ticket)
+                .bind(target)
+                .fetch_optional(&mut *tx)
+                .await?;
+                if let Some(from) = previous {
+                    sqlx::query("UPDATE tickets SET workflow_status = $3, version = version + 1 WHERE workspace_id = $1 AND id = $2")
+                        .bind(ctx.ws).bind(ticket).bind(target).execute(&mut *tx).await?;
+                    sync::audit_entity(tx, ctx.ws, None, "ticket.transition", "ticket", ticket,
+                        serde_json::json!({"from": from, "to": target, "source": "jira", "issueKey": key}), &None).await?;
+                }
+            }
+
         }
         if assignee_changed {
             let body = match (&assignee_name, &assignee_ref) {
@@ -567,6 +603,16 @@ async fn apply_comment(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn inbound_status_requires_unique_active_mapping() {
+        let config = serde_json::json!({"statusMap": {"open": "10", "resolved": "20"}});
+        assert_eq!(super::inbound_status(&config, Some("10")), Some("open"));
+        assert_eq!(super::inbound_status(&config, Some("20")), None);
+        let ambiguous = serde_json::json!({"statusMap": {"new": "10", "open": "10"}});
+        assert_eq!(super::inbound_status(&ambiguous, Some("10")), None);
+    }
+
     use super::*;
     use axum::http::HeaderValue;
 
