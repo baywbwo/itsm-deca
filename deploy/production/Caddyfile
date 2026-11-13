@@ -10,9 +10,27 @@
 	skip_install_trust
 	# X-Forwarded-For from clients is not trusted here (no trusted_proxies); the API trusts XFF
 	# only from this proxy (ITSM_TRUSTED_PROXIES = ingress address).
+	# Error logs (e.g. a failed upstream dial) carry the request headers too and go through
+	# this default logger: the CSRF token is removed here as well.
 	log {
 		output stdout
-		format json
+		format filter {
+			request>headers>X-Csrf-Token delete
+			wrap json
+		}
+	}
+}
+
+# CP7d headers on every response, web and API; error responses (handle_errors) included.
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
 	}
 }
 
@@ -36,17 +54,40 @@
 		}
 
 		# CP7d headers on every response, web and API.
-		header {
-			Strict-Transport-Security "max-age=31536000; includeSubDomains"
-			X-Content-Type-Options "nosniff"
-			Referrer-Policy "same-origin"
-			X-Frame-Options "DENY"
-			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
-			Cross-Origin-Opener-Policy "same-origin"
-			-Server
+		import security_headers
+
+		# 2) The API's body limits (64 KiB; 1 MiB for the Jira webhook) are enforced here as well, so
+		#    an oversized body never reaches a replica: a declared Content-Length over the limit is
+		#    answered 413 before any upstream is contacted, and a chunked body is cut at the limit
+		#    (413). Without this the API's early 413 could race the upload and reach the client as 502.
+		@webhook path /api/v1/integrations/jira/*/webhook
+		@api_body {
+			path /api/* /health/*
+			not path /api/v1/integrations/jira/*/webhook
+		}
+		@webhook_oversized {
+			path /api/v1/integrations/jira/*/webhook
+			expression `{http.request.header.Content-Length}.matches("^[0-9]{1,18}$") && int({http.request.header.Content-Length}) > 1048576`
+		}
+		@api_oversized {
+			path /api/* /health/*
+			not path /api/v1/integrations/jira/*/webhook
+			expression `{http.request.header.Content-Length}.matches("^[0-9]{1,18}$") && int({http.request.header.Content-Length}) > 65536`
+		}
+		respond @webhook_oversized 413 {
+			close
+		}
+		respond @api_oversized 413 {
+			close
+		}
+		request_body @webhook {
+			max_size 1MiB
+		}
+		request_body @api_body {
+			max_size 64KiB
 		}
 
-		# 2) /api and /health go to the API replicas, everything else is the SPA.
+		# 3) /api and /health go to the API replicas, everything else is the SPA.
 		@api path /api/* /health/*
 		handle @api {
 			reverse_proxy {$ITSM_PROD_API_UPSTREAMS} {
@@ -69,7 +110,11 @@
 					header Idempotency-Key *
 					path /api/v1/workspaces/*/tickets /api/v1/workspaces/*/report-runs /api/v1/workspaces/*/tickets/*/notes /api/v1/workspaces/*/tickets/*/related-work
 				}
-				fail_duration 10s
+				# No passive health (fail_duration): Caddy would count a client-caused failure (a body
+				# cut at the limit, an upload the API refused early) against the replica and eject a
+				# healthy one; two oversized requests could empty the pool (found in the CP8 e2e).
+				# A dead replica is ejected by the active check below; until then its connection
+				# failures are retried on the other replica (lb_try_duration).
 				health_uri /health/ready
 				health_interval 3s
 				health_timeout 2s
@@ -84,6 +129,21 @@
 			try_files {path} /index.html
 			file_server
 		}
+	}
+
+	# A chunked body cut at the limit (request_body) surfaces here as a 413 error. The rest of the
+	# body is still on the connection and Caddy would read it as the next request (431, found in
+	# the CP8 e2e), so the connection is closed. Over HTTP/2 `close` ends the connection after
+	# this response (GOAWAY); browsers still receive the 413.
+	handle_errors 413 {
+		import security_headers
+		respond 413 {
+			close
+		}
+	}
+	# Every other error (e.g. 502 with no replica left) keeps its status and gets the same headers.
+	handle_errors {
+		import security_headers
 	}
 }
 
