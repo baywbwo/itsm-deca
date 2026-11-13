@@ -1,14 +1,16 @@
-//! D07 Jira/Lark delivery — SIMULATION only (no real provider, no credentials).
+//! D07/CP5b Jira/Lark delivery through the outbox, live or simulation (`ITSM_INTEGRATIONS`).
 //!
 //! Intake writes one outbox intent per target inside the ticket transaction. After commit the
-//! simulated delivery settles each intent to the outcome configured on its connection
-//! (`config.simulatedOutcome`: `success` | `failed` | `unknown` | `transient`, default `success`;
-//! claim/settle/backoff live in [`crate::outbox`]):
-//! - `success`: Jira create gets a simulated issue (`SIM-…`, no URL) linked to related work;
-//!   Jira link and Lark notifications are marked delivered.
+//! delivery is attempted inline (bounded wait) and by the background worker; claim/settle/backoff
+//! live in [`crate::outbox`], the provider calls in [`crate::live`].
+//! - live: Jira create (or link an existing issue) and the Lark ticket-created notification are
+//!   sent to the provider; the Jira issue id/key/status/URL is linked to related work.
+//! - simulation (tests/CI/UAT): each intent settles to the outcome configured on its connection
+//!   (`config.simulatedOutcome`: `success` | `failed` | `unknown` | `transient`, default
+//!   `success`); a Jira create gets a simulated issue (`SIM-…`, no URL).
 //! - `failed`: definite failure with a safe message; `integration.recovery` may retry.
-//! - `unknown`: the outcome cannot be known (simulated timeout). It is never retried blindly;
-//!   recovery records a reconciliation with evidence instead.
+//! - `unknown`: the outcome cannot be known (timeout after the request was sent). It is never
+//!   retried blindly; recovery records a reconciliation with evidence instead.
 //!
 //! A delivery that does not settle in time stays `pending`; it is never reported as success.
 
@@ -31,7 +33,8 @@ use crate::routes::ticket_list::{body, correlation};
 use crate::routes::workspaces::parse_id;
 use crate::session::Session;
 
-/// Upper bound for the simulated delivery of one ticket inside the create request.
+/// Upper bound for the inline delivery of one ticket inside the create request (the attempt keeps
+/// running in its own task; the response then shows `pending`).
 const DISPATCH_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_EVIDENCE_CHARS: usize = 2000;
 
@@ -44,9 +47,11 @@ pub struct SyncView {
     /// `pending` | `success` | `failed` | `unknown`.
     state: String,
     attempt: i32,
-    /// Dummy assignee / destination / issue label shown to the user.
+    /// Assignee / destination label shown to the user.
     target_label: Option<String>,
     issue_key: Option<String>,
+    /// Jira browse URL (live, https only).
+    issue_url: Option<String>,
     safe_error: Option<String>,
     reconciled: bool,
     /// Transient failure: next automatic attempt (UTC), otherwise null.
@@ -56,18 +61,20 @@ pub struct SyncView {
     /// A delivery attempt is in flight (claimed, not settled yet).
     in_flight: bool,
     updated_at: String,
-    /// Always `simulation` in this build.
+    /// Mode of the connection: `live` | `simulation`.
     mode: String,
+    /// CP6a `jira_transition_issue`: the ITSM status the Jira issue is moved for.
+    target_status: Option<String>,
 }
 
 const VIEW_SQL: &str = concat!(
     "SELECT o.id, o.provider, o.operation, o.state, o.attempt, ",
     "COALESCE(d.display_name, a.display_name) AS target_label, ",
-    "ji.issue_key, o.safe_error, (o.reconcile_evidence IS NOT NULL) AS reconciled, ",
+    "ji.issue_key, ji.safe_url AS issue_url, o.safe_error, (o.reconcile_evidence IS NOT NULL) AS reconciled, ",
     "to_char(o.next_attempt_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS next_attempt_at, ",
     "o.auto_attempts, (o.claim_token IS NOT NULL) AS in_flight, ",
     "to_char(o.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS updated_at, ",
-    "c.mode ",
+    "c.mode, o.target_ticket_status AS target_status ",
     "FROM integration_outbox o ",
     "JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id ",
     "LEFT JOIN lark_destinations d ON d.workspace_id = o.workspace_id AND d.id = o.lark_destination_id ",
@@ -110,12 +117,13 @@ pub(crate) async fn enqueue(
     operation: &str,
     related_work: Option<Uuid>,
     lark_destination: Option<Uuid>,
+    requested_issue_key: Option<&str>,
     corr: &Option<String>,
 ) -> Result<Uuid, AppError> {
     Ok(sqlx::query_scalar(
         "INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, operation, \
-           related_work_id, lark_destination_id, idempotency_key, correlation_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $2::text || ':' || $4, $8) RETURNING id",
+           related_work_id, lark_destination_id, idempotency_key, correlation_id, requested_issue_key) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $2::text || ':' || $4, $8, $9) RETURNING id",
     )
     .bind(ws)
     .bind(ticket)
@@ -125,6 +133,7 @@ pub(crate) async fn enqueue(
     .bind(related_work)
     .bind(lark_destination)
     .bind(corr)
+    .bind(requested_issue_key)
     .fetch_one(&mut *conn)
     .await?)
 }
@@ -170,6 +179,8 @@ pub(crate) struct Intent {
     /// Prefix the ticket was issued with, so a simulated key stays the same after a code change.
     pub(crate) ws_code: String,
     pub(crate) number: i64,
+    /// Mode the connection was configured/tested in.
+    pub(crate) mode: String,
 }
 
 pub(crate) async fn lock_intent(
@@ -181,7 +192,7 @@ pub(crate) async fn lock_intent(
         "SELECT o.ticket_id, o.connection_id, o.operation, o.related_work_id, o.state, o.attempt, \
                 o.auto_attempts, o.claim_token, \
                 CASE WHEN c.state <> 'active' THEN 'inactive' \
-                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, t.number_prefix AS ws_code, t.number \
+                     ELSE COALESCE(c.config->>'simulatedOutcome', 'success') END AS outcome, t.number_prefix AS ws_code, t.number, c.mode \
          FROM integration_outbox o \
          JOIN integration_connections c ON c.workspace_id = o.workspace_id AND c.id = o.connection_id \
          JOIN tickets t ON t.workspace_id = o.workspace_id AND t.id = o.ticket_id \
@@ -194,24 +205,35 @@ pub(crate) async fn lock_intent(
     .ok_or(AppError::NotFound)
 }
 
-/// Links a (simulated or reconciled) Jira issue to the intent's related work.
+/// Links a Jira issue (live, simulated or reconciled) to the intent's related work.
 pub(crate) async fn link_issue(
     conn: &mut PgConnection,
     ws: Uuid,
     intent: &Intent,
-    external_id: String,
+    external_id: &str,
     key: &str,
+    status: Option<&str>,
+    url: Option<&str>,
 ) -> Result<(), AppError> {
+    let key: String = key.chars().take(64).collect();
+    let status: Option<String> = status.map(|s| s.chars().take(100).collect());
+    let url = url.filter(|u| u.starts_with("https://") && u.len() <= 500);
     let issue: Uuid = sqlx::query_scalar(
-        "INSERT INTO jira_issues (workspace_id, connection_id, external_issue_id, issue_key, external_status) \
-         VALUES ($1, $2, $3, $4, 'Simulasi') \
-         ON CONFLICT (connection_id, external_issue_id) DO UPDATE SET issue_key = EXCLUDED.issue_key \
+        "INSERT INTO jira_issues (workspace_id, connection_id, external_issue_id, issue_key, \
+           external_status, safe_url, external_updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now()) \
+         ON CONFLICT (connection_id, external_issue_id) DO UPDATE SET issue_key = EXCLUDED.issue_key, \
+           external_status = COALESCE(EXCLUDED.external_status, jira_issues.external_status), \
+           safe_url = COALESCE(EXCLUDED.safe_url, jira_issues.safe_url), \
+           external_updated_at = now() \
          RETURNING id",
     )
     .bind(ws)
     .bind(intent.connection_id)
     .bind(external_id)
-    .bind(key)
+    .bind(&key)
+    .bind(status)
+    .bind(url)
     .fetch_one(&mut *conn)
     .await?;
     sqlx::query(
@@ -268,18 +290,18 @@ pub(crate) async fn dispatch_ticket(
         {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(error.kind = "dispatch_read", error = %e, "simulated dispatch skipped");
+                tracing::warn!(error.kind = "dispatch_read", error = %e, "dispatch skipped");
                 return;
             }
         };
         for id in ids {
             if let Err(e) = deliver(&st, ws, id, actor, &corr).await {
-                tracing::warn!(outbox_id = %id, error = ?e, "simulated delivery left pending");
+                tracing::warn!(outbox_id = %id, error = %e.log_text(), "delivery left pending");
             }
         }
     });
     if tokio::time::timeout(DISPATCH_TIMEOUT, task).await.is_err() {
-        tracing::warn!(workspace_id = %ws, ticket_id = %ticket, "simulated dispatch still running");
+        tracing::warn!(workspace_id = %ws, ticket_id = %ticket, "dispatch still running");
     }
 }
 
@@ -406,7 +428,7 @@ pub async fn retry(
     .await?;
     tx.commit().await?;
     if let Err(e) = deliver(&state, ws, id, access.user_id, &corr).await {
-        tracing::warn!(outbox_id = %id, error = ?e, "retry left pending");
+        tracing::warn!(outbox_id = %id, error = %e.log_text(), "retry left pending");
     }
     let mut conn = state.pool.acquire().await?;
     Ok(Json(RecoveryResult {
@@ -453,7 +475,16 @@ pub async fn reconcile(
         let key = issue_key
             .as_deref()
             .ok_or(AppError::Validation("issueKey"))?;
-        link_issue(&mut tx, ws, &intent, format!("reconciled-{id}"), key).await?;
+        link_issue(
+            &mut tx,
+            ws,
+            &intent,
+            &format!("reconciled-{id}"),
+            key,
+            None,
+            None,
+        )
+        .await?;
     } else if issue_key.is_some() {
         return Err(AppError::Validation("issueKey"));
     }

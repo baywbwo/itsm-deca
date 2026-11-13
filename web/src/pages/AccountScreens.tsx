@@ -17,6 +17,7 @@ import {
   type PasswordField,
 } from '../app/account';
 import { isTotp, loginMfaError, normalizeTotp } from '../app/mfa';
+import { rememberSsoCompany, rememberedSsoCompany, ssoCompanyCode, ssoStartPath } from '../app/sso';
 import { AccountSecurityDialog } from './MfaScreens';
 
 /** A message carried to the login screen: why the person is back here. */
@@ -113,6 +114,9 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
 
   const back = () => { setChallenge(null); setCode(''); setError(''); };
 
+  // CP5c ITSM_AUTH=sso: SSO first; the password form stays folded for break-glass admins.
+  const ssoOnly = meta.accessMode === 'password' && meta.sso === true && meta.passwordAdminOnly === true;
+
   if (challenge) {
     return (
       <AuthLayout>
@@ -141,10 +145,21 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
     );
   }
 
+  const passwordForm = (
+    <form className="auth-form" aria-label="Masuk dengan kata sandi" onSubmit={(e) => void login(e)}>
+      <TextField label="Nama pengguna" name="username" autoComplete="username" required maxLength={254}
+        value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy} />
+      <TextField label="Kata sandi" name="password" type="password" autoComplete="current-password" required
+        maxLength={1024} value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} />
+      {error && <p role="alert" className="auth-error">{error}</p>}
+      <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Masuk'}</Button>
+    </form>
+  );
+
   return (
     <AuthLayout>
       <h1>Masuk ke ITSM</h1>
-      <p className="muted">Gunakan akun internal yang diberikan administrator.</p>
+      <p className="muted">{ssoOnly ? 'Masuk dengan akun kantor perusahaan Anda.' : 'Gunakan akun internal yang diberikan administrator.'}</p>
       {notice && !stepNotice && (
         <div className="auth-notice" role="status">
           <strong>{notice.title}</strong>
@@ -157,16 +172,20 @@ export function LoginScreen({ api, meta, notice, onSuccess }: {
           <span>{stepNotice}</span>
         </div>
       )}
-      {meta.accessMode === 'password' ? (
-        <form className="auth-form" onSubmit={(e) => void login(e)}>
-          <TextField label="Nama pengguna" name="username" autoComplete="username" required maxLength={254}
-            value={username} onChange={(e) => setUsername(e.target.value)} disabled={busy} />
-          <TextField label="Kata sandi" name="password" type="password" autoComplete="current-password" required
-            maxLength={1024} value={password} onChange={(e) => setPassword(e.target.value)} disabled={busy} />
-          {error && <p role="alert" className="auth-error">{error}</p>}
-          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Memverifikasi…' : 'Masuk'}</Button>
-        </form>
-      ) : <p>Akses SSO belum dikonfigurasi.</p>}
+      {meta.accessMode !== 'password' ? <p>Akses SSO belum dikonfigurasi.</p> : ssoOnly ? (
+        <>
+          <SsoLoginForm disabled={busy} primary />
+          <details className="auth-break-glass" open={error !== ''}>
+            <summary>Masuk dengan kata sandi (khusus admin platform)</summary>
+            {passwordForm}
+          </details>
+        </>
+      ) : (
+        <>
+          {passwordForm}
+          {meta.sso && <SsoLoginForm disabled={busy} />}
+        </>
+      )}
       <p className="tiny muted auth-help">Belum punya akses? Hubungi administrator untuk pembuatan akun.</p>
       <p className="tiny muted">Akses sesuai perusahaan dan peran.</p>
     </AuthLayout>
@@ -395,5 +414,45 @@ export function LogoutAllDialog({ api, open, onClose, onDone }: {
       <p className="tiny muted">Draf tiket yang belum terkirim di tab ini akan hilang.</p>
       {error && <p role="alert" className="auth-error">{error}</p>}
     </Dialog>
+  );
+}
+
+/** CP5c: signed in, but no company or role yet (e.g. an SSO account whose groups map to no role). */
+export function AwaitingAccessScreen({ session, onRetry, onLogout }: { session: Session; onRetry: () => void; onLogout: () => void }) {
+  return (
+    <AuthLayout>
+      <h1>Menunggu akses</h1>
+      <p>Anda masuk sebagai <strong>{session.user.displayName}</strong>, tetapi akun ini belum memiliki peran di perusahaan mana pun.</p>
+      <p className="muted">Minta admin platform memberi peran di perusahaan Anda, lalu muat ulang.</p>
+      <div className="auth-form">
+        <Button variant="primary" onClick={onRetry}>Muat ulang</Button>
+        <Button variant="ghost" onClick={onLogout}>Keluar</Button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+/** CP5c login entry: the company code picks the provider; no company list is published. */
+export function SsoLoginForm({ disabled, primary = false, go = (url) => window.location.assign(url) }:
+  { disabled: boolean; primary?: boolean; go?: (url: string) => void }) {
+  const [code, setCode] = useState(() => rememberedSsoCompany());
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <form className="auth-form auth-sso" aria-label="Masuk dengan SSO" onSubmit={(e) => {
+      e.preventDefault();
+      const c = ssoCompanyCode(code);
+      if (!c) { setError('Kode perusahaan 2–10 huruf atau angka, mis. DOB.'); return; }
+      setError('');
+      setBusy(true);
+      rememberSsoCompany(c);
+      go(ssoStartPath(c));
+    }}>
+      {!primary && <p className="auth-divider"><span>atau</span></p>}
+      <TextField label="Kode perusahaan" name="company" autoComplete="organization" autoCapitalize="characters" spellCheck={false}
+        maxLength={10} value={code} disabled={disabled || busy} hint="Kode singkat perusahaan Anda dari administrator."
+        error={error || undefined} onChange={(e) => setCode(e.target.value)} />
+      <Button type="submit" variant={primary ? 'primary' : 'secondary'} disabled={disabled || busy}>{busy ? 'Mengalihkan…' : 'Masuk dengan SSO'}</Button>
+    </form>
   );
 }

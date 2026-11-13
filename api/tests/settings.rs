@@ -992,8 +992,13 @@ async fn connection_lifecycle_is_save_test_activate(pool: PgPool) {
     let jira = connection(&list.json, "jira").clone();
     assert_eq!(jira["state"], "active", "seeded dummy connection is active");
     assert_eq!(jira["mode"], "simulation");
-    assert_eq!(jira["credential"], "not_available");
-    assert_eq!(jira["mapping"], "not_available");
+    assert_eq!(
+        jira["credential"],
+        json!({"state": "missing", "updatedAt": null})
+    );
+    assert!(jira.get("mapping").is_none());
+    assert!(jira["settings"].is_object());
+    assert_eq!(list.json["integrationsMode"], "simulation");
     let id = s(&jira["id"]);
     let step = |a: &str| ws_uri(f.a, &format!("integrations/{id}/{a}"));
 

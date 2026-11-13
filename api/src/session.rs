@@ -123,7 +123,7 @@ pub fn clear_cookie_value(secure: bool) -> String {
     )
 }
 
-fn read_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn read_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -172,6 +172,35 @@ pub async fn issue_with_mfa(
     Ok(IssuedSession { token, csrf_token })
 }
 
+/// CP5c: a session signed in through the company IdP. It names the IdP, never passes the local
+/// MFA or password-change gates (the IdP owns those) and ends when that IdP is disabled or
+/// `ITSM_AUTH` drops OIDC.
+pub async fn issue_oidc(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    access_mode: &str,
+    idp_id: Uuid,
+) -> Result<IssuedSession, AppError> {
+    let token = random_token().map_err(AppError::internal)?;
+    let csrf_token = random_token().map_err(AppError::internal)?;
+    sqlx::query(
+        "INSERT INTO sessions (token_hash, csrf_hash, user_id, access_mode, expires_at, \
+                               last_seen_at, idle_expires_at, auth_method, idp_id) \
+         VALUES ($1, $2, $3, $4, now() + make_interval(hours => $5), now(), \
+                 now() + make_interval(mins => $6), 'oidc', $7)",
+    )
+    .bind(digest(&token))
+    .bind(digest(&csrf_token))
+    .bind(user_id)
+    .bind(access_mode)
+    .bind(SESSION_TTL_HOURS)
+    .bind(SESSION_IDLE_MINUTES)
+    .bind(idp_id)
+    .execute(conn)
+    .await?;
+    Ok(IssuedSession { token, csrf_token })
+}
+
 /// Rotates the CSRF token of a live session and returns the new token (only its digest is kept).
 /// Any older token for this session stops working.
 pub async fn rotate_csrf(pool: &PgPool, session_id: Uuid) -> Result<String, AppError> {
@@ -198,21 +227,28 @@ async fn lookup(state: &AppState, token: &str) -> Result<Option<Session>, AppErr
         "SELECT s.id, s.user_id, s.csrf_hash, \
                 EXISTS (SELECT 1 FROM platform_grants g \
                         WHERE g.user_id = s.user_id AND g.grant_code = 'uat_superadmin'), \
-                coalesce((SELECT c.must_change_password FROM local_credentials c \
-                          WHERE c.user_id = s.user_id), false), \
-                (s.access_mode = 'password' AND s.mfa_verified_at IS NULL \
-                 AND itsm_mfa_required(s.user_id)), \
+                s.auth_method = 'password' AND coalesce((SELECT c.must_change_password \
+                          FROM local_credentials c WHERE c.user_id = s.user_id), false), \
+                (s.access_mode = 'password' AND s.auth_method = 'password' \
+                 AND s.mfa_verified_at IS NULL AND itsm_mfa_required(s.user_id)), \
                 coalesce(s.step_up_at > now() - make_interval(mins => $3), false) \
          FROM sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() \
            AND (s.idle_expires_at IS NULL OR s.idle_expires_at > now()) \
            AND s.access_mode = $2 AND u.active AND u.deactivated_at IS NULL \
            AND (s.credential_version IS NULL OR s.credential_version = \
-                (SELECT c.credential_version FROM local_credentials c WHERE c.user_id = s.user_id))",
+                (SELECT c.credential_version FROM local_credentials c WHERE c.user_id = s.user_id)) \
+           AND (s.auth_method = 'password' OR ($4 AND EXISTS (SELECT 1 FROM identity_providers p \
+                WHERE p.id = s.idp_id AND p.enabled))) \
+           AND (s.auth_method <> 'password' OR NOT $5 OR EXISTS (SELECT 1 FROM platform_grants g \
+                WHERE g.user_id = s.user_id AND g.grant_code = 'platform_admin'))",
     )
     .bind(digest(token))
     .bind(state.config.access_mode.as_str())
     .bind(STEP_UP_MINUTES)
+    .bind(state.config.auth.methods.oidc())
+    // CP5c ITSM_AUTH=sso: password sessions stay valid for break-glass platform admins only.
+    .bind(state.config.auth.methods == crate::config::AuthMethods::Sso)
     .fetch_optional(&state.pool)
     .await?;
     match &row {

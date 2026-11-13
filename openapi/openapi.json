@@ -752,7 +752,15 @@
                   "step_up_required",
                   "mfa_required_for_role",
                   "self_mfa_reset",
-                  "user_in_other_company"
+                  "user_in_other_company",
+                  "keyring_missing",
+                  "integration_not_live",
+                  "provider_error",
+                  "integration_not_configured",
+                  "integration_mode_mismatch",
+                  "idp_not_ready",
+                  "subject_linked",
+                  "user_linked"
                 ]
               },
               "message": {
@@ -781,6 +789,8 @@
         "required": [
           "environment",
           "accessMode",
+          "sso",
+          "passwordAdminOnly",
           "banner"
         ],
         "properties": {
@@ -798,6 +808,14 @@
               "sso",
               "password"
             ]
+          },
+          "sso": {
+            "type": "boolean",
+            "description": "Company sign-in through OIDC is offered (ITSM_AUTH sso or both, password access mode). The login screen then shows \"Masuk dengan SSO\"."
+          },
+          "passwordAdminOnly": {
+            "type": "boolean",
+            "description": "CP5c ITSM_AUTH=sso: the password form is break-glass only (platform admins); everyone else signs in through the company IdP. Any other account gets the same 401 as a wrong password (auth event login denied sso_only), and its existing password sessions stop working."
           },
           "banner": {
             "type": [
@@ -850,7 +868,8 @@
           "mfaEnrolled",
           "platformAdmin",
           "createdAt",
-          "deactivatedAt"
+          "deactivatedAt",
+          "company"
         ],
         "properties": {
           "id": {
@@ -900,6 +919,17 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "company": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/HomeCompany"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "CP5d. Null without an active membership."
           }
         }
       },
@@ -2785,7 +2815,7 @@
         "required": [
           "mode"
         ],
-        "description": "Jira SIMULATION: no real provider. create = new related work + simulated issue; link = existing issue key of this workspace's simulated provider.",
+        "description": "Jira link for the new ticket. create = new related work + Jira issue (live: created via the outbox, idempotent); link = existing issue key (live: verified at delivery).",
         "properties": {
           "mode": {
             "type": "string",
@@ -2799,7 +2829,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300,
-            "description": "Required for create; optional related-work title for link."
+            "description": "Required for create; optional related-work title for link. Stored in ITSM only: a created Jira issue gets the server summary \"[ITSM] <ticket> — <category>\" (no free text leaves the app)."
           },
           "issueKey": {
             "type": "string",
@@ -2810,7 +2840,7 @@
           "assigneeId": {
             "type": "string",
             "format": "uuid",
-            "description": "Dummy Jira assignee of this workspace's connection."
+            "description": "Jira assignee of this workspace's connection (live: from the Jira user search)."
           }
         }
       },
@@ -2948,7 +2978,8 @@
             "enum": [
               "jira_create_issue",
               "jira_link_issue",
-              "lark_ticket_created"
+              "lark_ticket_created",
+              "jira_transition_issue"
             ]
           },
           "state": {
@@ -2993,7 +3024,8 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
+              "simulation",
+              "live"
             ]
           },
           "nextAttemptAt": {
@@ -3012,6 +3044,20 @@
           "inFlight": {
             "type": "boolean",
             "description": "An attempt is claimed and not settled yet. A claim that outlives its lease becomes unknown."
+          },
+          "issueUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "https link to the Jira issue (live only)."
+          },
+          "targetStatus": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "jira_transition_issue: the ITSM status the Jira issue is moved for. Superseded when the ticket has moved on."
           }
         }
       },
@@ -3082,8 +3128,11 @@
           "source": {
             "type": "string",
             "enum": [
-              "dummy"
-            ]
+              "dummy",
+              "jira",
+              "lark"
+            ],
+            "description": "dummy rows are offered only in simulation mode."
           }
         }
       },
@@ -3097,6 +3146,7 @@
           "state",
           "simulatedOutcome",
           "version",
+          "usable",
           "options"
         ],
         "properties": {
@@ -3110,7 +3160,8 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
+              "simulation",
+              "live"
             ]
           },
           "state": {
@@ -3140,7 +3191,11 @@
             "items": {
               "$ref": "#/components/schemas/DirectoryEntry"
             },
-            "description": "Jira: dummy assignees. Lark: dummy destinations. Empty when disabled."
+            "description": "Jira: assignees picked before (search Jira for more). Lark: chats the bot belongs to. Empty when not usable."
+          },
+          "usable": {
+            "type": "boolean",
+            "description": "Active and configured for the server mode."
           }
         }
       },
@@ -3179,6 +3234,7 @@
         "additionalProperties": false,
         "required": [
           "workspaceId",
+          "integrationsMode",
           "jira",
           "lark",
           "merchants"
@@ -3214,6 +3270,13 @@
             "items": {
               "$ref": "#/components/schemas/MerchantOption"
             }
+          },
+          "integrationsMode": {
+            "type": "string",
+            "enum": [
+              "simulation",
+              "live"
+            ]
           }
         }
       },
@@ -3574,7 +3637,7 @@
           "externalStatus",
           "safeUrl"
         ],
-        "description": "Simulated provider link; status is informational and never completes work.",
+        "description": "Jira issue link; status is informational and never completes work.",
         "properties": {
           "issueKey": {
             "type": "string"
@@ -4101,8 +4164,10 @@
         "type": "object",
         "required": [
           "id",
+          "kind",
           "body",
           "author",
+          "externalAuthor",
           "createdAt"
         ],
         "properties": {
@@ -4110,11 +4175,36 @@
             "type": "string",
             "format": "uuid"
           },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "note",
+              "jira_comment",
+              "jira_status",
+              "jira_assignee"
+            ],
+            "description": "note = ITSM officer note; jira_* = written by the inbound Jira webhook (CP6a)."
+          },
           "body": {
             "type": "string"
           },
           "author": {
-            "$ref": "#/components/schemas/PersonRef"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PersonRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ITSM author; null for Jira entries."
+          },
+          "externalAuthor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Jira display name as sent by Jira (not an ITSM account)."
           },
           "createdAt": {
             "type": "string",
@@ -4940,12 +5030,14 @@
           "state",
           "testedAt",
           "lastTestNote",
+          "lastTestOk",
           "simulatedOutcome",
           "version",
           "directoryCount",
+          "settings",
           "credential",
-          "mapping",
-          "recent"
+          "recent",
+          "webhook"
         ],
         "properties": {
           "id": {
@@ -4961,8 +5053,10 @@
           "mode": {
             "type": "string",
             "enum": [
-              "simulation"
-            ]
+              "simulation",
+              "live"
+            ],
+            "description": "Mode the connection was last configured/tested in; a connection from the other mode is not used."
           },
           "state": {
             "type": "string",
@@ -4998,22 +5092,33 @@
             "format": "int64"
           },
           "credential": {
-            "type": "string",
-            "enum": [
-              "not_available"
-            ]
-          },
-          "mapping": {
-            "type": "string",
-            "enum": [
-              "not_available"
-            ]
+            "$ref": "#/components/schemas/IntegrationCredential"
           },
           "recent": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/IntegrationLogEntry"
             }
+          },
+          "lastTestOk": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "settings": {
+            "$ref": "#/components/schemas/IntegrationSettings"
+          },
+          "webhook": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/IntegrationWebhook"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Jira only; null for Lark."
           }
         },
         "additionalProperties": false
@@ -5022,9 +5127,13 @@
         "type": "object",
         "required": [
           "workspaceId",
+          "integrationsMode",
+          "keyringConfigured",
           "items",
           "creatable",
-          "canManageCredentials"
+          "canManageCredentials",
+          "priorities",
+          "ticketStatuses"
         ],
         "properties": {
           "workspaceId": {
@@ -5045,6 +5154,30 @@
           },
           "canManageCredentials": {
             "type": "boolean"
+          },
+          "integrationsMode": {
+            "type": "string",
+            "enum": [
+              "simulation",
+              "live"
+            ],
+            "description": "Server switch ITSM_INTEGRATIONS."
+          },
+          "keyringConfigured": {
+            "type": "boolean",
+            "description": "The keyring (ITSM_KEYRING_FILE) is set (credentials can be stored)."
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationPriorityOption"
+            }
+          },
+          "ticketStatuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -6090,6 +6223,654 @@
             "type": "integer"
           }
         }
+      },
+      "IntegrationSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "baseUrl",
+          "email",
+          "projectKey",
+          "issueTypeId",
+          "appId",
+          "priorityMap",
+          "statusMap"
+        ],
+        "description": "Non-secret connection settings. Jira: baseUrl/email/projectKey/issueTypeId + mappings; Lark: appId (+ optional baseUrl).",
+        "properties": {
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "projectKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issueTypeId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "appId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priorityMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "ITSM priority code → Jira priority id."
+          },
+          "statusMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "ITSM ticket status → Jira status id (stored only; no automatic transition)."
+          }
+        }
+      },
+      "IntegrationCredential": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "updatedAt"
+        ],
+        "description": "Write-only secret: only whether it is stored and when it was replaced.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "stored"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "IntegrationPriorityOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "IntegrationConfigRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "description": "Jira: baseUrl (https, public host), email, projectKey, optional issueTypeId and mappings. Lark: appId, optional baseUrl. Changing the target returns the connection to draft.",
+        "properties": {
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 200
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 254
+          },
+          "projectKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 31
+          },
+          "issueTypeId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 32
+          },
+          "appId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 64
+          },
+          "priorityMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "statusMap": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "IntegrationCredentialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "secret",
+          "version"
+        ],
+        "description": "Jira API token or Lark app secret. Encrypted with the server keyring; never returned or logged.",
+        "properties": {
+          "secret": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "writeOnly": true
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "IntegrationIdName": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "JiraOptions": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issueTypes",
+          "priorities",
+          "statuses"
+        ],
+        "properties": {
+          "issueTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          },
+          "priorities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IntegrationIdName"
+            }
+          }
+        }
+      },
+      "DirectorySyncResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "auditEventId",
+          "synced",
+          "deactivated"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationConnection"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "synced": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deactivated": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "JiraUserList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirectoryEntry"
+            }
+          }
+        }
+      },
+      "HomeCompany": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "code",
+          "name",
+          "role",
+          "grants"
+        ],
+        "description": "CP5d. The user's one company: the home membership the server resolves (oldest active membership in an active workspace).",
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "Company name."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "admin.members",
+                "admin.settings",
+                "integration.manage",
+                "integration.credentials",
+                "integration.recovery"
+              ]
+            },
+            "description": "Live administration grants of the home membership."
+          }
+        }
+      },
+      "CompanyOption": {
+        "type": "object",
+        "required": [
+          "workspaceId",
+          "code",
+          "name"
+        ],
+        "properties": {
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SsoProvider": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "issuer",
+          "clientId",
+          "secretSet",
+          "secretUpdatedAt",
+          "emailDomains",
+          "extraHosts",
+          "groupClaim",
+          "roleMapping",
+          "syncRoles",
+          "enabled",
+          "lastTestOk",
+          "lastTestedAt",
+          "version"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "secretSet": {
+            "type": "boolean",
+            "description": "A client secret is stored. The secret itself is never returned."
+          },
+          "secretUpdatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "emailDomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "extraHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "groupClaim": {
+            "type": "string"
+          },
+          "roleMapping": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SsoRoleMapping"
+            }
+          },
+          "syncRoles": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "lastTestOk": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Result of the last discovery test; null = not tested since the issuer, client id or hosts changed."
+          },
+          "lastTestedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "SsoRoleMapping": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "group",
+          "role"
+        ],
+        "properties": {
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "cs",
+              "lead_cs"
+            ]
+          }
+        }
+      },
+      "SsoCompany": {
+        "type": "object",
+        "required": [
+          "companyId",
+          "workspaceId",
+          "code",
+          "name",
+          "active",
+          "identities",
+          "provider"
+        ],
+        "properties": {
+          "companyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workspaceId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "identities": {
+            "type": "integer",
+            "description": "Accounts linked to the company's IdP."
+          },
+          "provider": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SsoProvider"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "SsoProviderResult": {
+        "type": "object",
+        "required": [
+          "item",
+          "auditEventId"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/SsoProvider"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SsoIdentity": {
+        "type": "object",
+        "required": [
+          "id",
+          "userId",
+          "displayName",
+          "email",
+          "userActive",
+          "subject",
+          "provisioned",
+          "createdAt",
+          "lastLoginAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "userId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userActive": {
+            "type": "boolean"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "provisioned": {
+            "type": "boolean",
+            "description": "Created by just-in-time provisioning (false = linked by an administrator)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastLoginAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "SsoVersion": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "IntegrationWebhook": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "updatedAt",
+          "path",
+          "url"
+        ],
+        "description": "Inbound Jira webhook. The secret itself is never returned here.",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "stored"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path on this server Jira must POST to."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full address when ITSM_PUBLIC_URL is configured."
+          }
+        }
+      },
+      "WebhookSecretResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item",
+          "auditEventId",
+          "secret",
+          "path",
+          "url"
+        ],
+        "description": "Returned once. The secret is not stored in readable form anywhere the API can show again.",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/IntegrationConnection"
+          },
+          "auditEventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "secret": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "description": "64 hex characters; paste into the Jira webhook Secret field now."
+          },
+          "path": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       }
     },
     "responses": {
@@ -6274,6 +7055,56 @@
             }
           }
         },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "ProviderError": {
+        "description": "The provider refused or failed the call (provider_error); message is a safe summary, never a secret",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "KeyringMissing": {
+        "description": "The keyring (ITSM_KEYRING_FILE) is not configured on the server (keyring_missing); credentials cannot be stored or read",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "IntegrationConflict": {
+        "description": "Stale version (version_conflict), connection not configured or without credential (integration_not_configured), configured for the other server mode (integration_mode_mismatch), or server not in live mode (integration_not_live)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "WebhookUnauthorized": {
+        "description": "Unknown, inactive or other-mode connection, no secret configured, or signature missing/invalid (unauthenticated). Deliberately the same response for every case.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "WebhookUnavailable": {
+        "description": "Overloaded, timed out or keyring/database not available (dependency_unavailable). Jira retries.",
         "content": {
           "application/json": {
             "schema": {
@@ -8730,7 +9561,7 @@
     "/api/v1/workspaces/{workspace_id}/intake-directory": {
       "get": {
         "operationId": "getIntakeDirectory",
-        "summary": "Simulated Jira/Lark connections, dummy assignees/destinations and dummy merchants for intake",
+        "summary": "Jira/Lark connections usable for intake, their assignees/destinations, and dummy merchants",
         "security": [
           {
             "sessionCookie": []
@@ -10391,7 +11222,7 @@
     "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/test": {
       "post": {
         "operationId": "testIntegration",
-        "summary": "Simulated test (no provider contacted)",
+        "summary": "Test the connection (live: calls the provider; simulation: nothing is contacted)",
         "security": [
           {
             "sessionCookie": [],
@@ -10440,13 +11271,19 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/VersionConflict"
+            "$ref": "#/components/responses/IntegrationConflict"
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
           }
         }
       }
@@ -10503,13 +11340,16 @@
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "$ref": "#/components/responses/VersionConflict"
+            "$ref": "#/components/responses/IntegrationConflict"
           },
           "422": {
             "$ref": "#/components/responses/RuleViolation"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
           }
         }
       }
@@ -10963,7 +11803,7 @@
     "/api/v1/login": {
       "post": {
         "operationId": "passwordLogin",
-        "description": "Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user.",
+        "description": "Password mode only. Returns 201 with a session, or 401 mfa_required + challengeId for users with a confirmed authenticator (US-1.2). 503 dependency_unavailable when MFA keys are not configured for an enrolled user. CP5c: with ITSM_AUTH=sso only break-glass platform admins may sign in with a password; any other account gets the same 401 as a wrong password (auth event login denied sso_only).",
         "summary": "Local password login for one deployment",
         "security": [],
         "parameters": [
@@ -11118,6 +11958,101 @@
           },
           "422": {
             "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/{company_code}/start": {
+      "get": {
+        "operationId": "oidcStart",
+        "summary": "Start company SSO sign-in (OIDC Authorization Code + PKCE)",
+        "description": "Browser navigation, not fetch. Only with ITSM_AUTH=sso|both (404 otherwise). Opens a single-use 10-minute attempt and redirects to the company IdP with state, nonce and an S256 code challenge; sets a short-lived SameSite=Lax binding cookie. Unknown or disabled company IdP, missing keyring or unreachable discovery redirect to /?sso=<code>.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "company_code",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]{2,10}$"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the IdP authorization endpoint, or to /?sso=<code> on failure.",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/DependencyUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/oidc/callback": {
+      "get": {
+        "operationId": "oidcCallback",
+        "summary": "OIDC redirect URI",
+        "description": "Consumes the attempt (single use, same browser), exchanges the code with client_secret_basic and the PKCE verifier, verifies the ID token (RS256/ES256, iss, aud/azp, exp/nbf/iat, nonce) and issues the session cookie. Users are linked by (IdP, subject); a new subject is provisioned only with a verified e-mail in an allowed domain that no account uses. Every outcome is audited.",
+        "security": [],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect. Success: Location /, Set-Cookie session. Failure: Location /?sso=<code> (expired, idp_error, not_configured, unavailable, idp_unavailable, denied, not_linked, email_in_use, inactive).",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
@@ -11617,6 +12552,1428 @@
           },
           "429": {
             "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config": {
+      "put": {
+        "operationId": "configureIntegration",
+        "summary": "Save connection settings and mappings (non-secret)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "description": "Changing the target account or address (Jira baseUrl/email, Lark baseUrl/appId) deletes the stored credential in the same transaction; it must be entered again by a holder of integration.credentials. Outside lab mode baseUrl must be https on port 443 at <name>.atlassian.net (Jira) or open.larksuite.com / open.feishu.cn (Lark); anything else is 422 baseUrl."
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential": {
+      "put": {
+        "operationId": "putIntegrationCredential",
+        "summary": "Store or replace the Jira API token / Lark app secret (write-only, encrypted)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationCredentialRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIntegrationCredential",
+        "summary": "Delete the stored credential (connection returns to draft)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options": {
+      "get": {
+        "operationId": "getJiraOptions",
+        "summary": "Jira issue types, priorities and statuses read live (live mode, Jira only)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Options",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JiraOptions"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync": {
+      "post": {
+        "operationId": "syncLarkChats",
+        "summary": "Read the Lark chats the bot belongs to as intake destinations (live mode, Lark only)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Synced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DirectorySyncResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/intake/jira-users": {
+      "get": {
+        "operationId": "searchJiraUsers",
+        "summary": "Search Jira users assignable in the configured project (live mode)",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JiraUserList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/ProviderError"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/company": {
+      "put": {
+        "operationId": "setUserCompany",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5d. Password mode, platform_admin only (any company: the platform admin exemption from the one-company rule). Sets the user's one company, role and administration grants (grants replace the current set of that membership). Other active memberships of the user are deactivated and their grants revoked. Allowed on the caller itself; platform_admin is never changed here. Audited: workspace audit membership.deactivate (reason company_set) per deactivated membership, membership.company_set in the target company, and auth event user_company_set. No change = 200 with changed false and no audit. 409 user_inactive; 422 role, grants or workspaceId (unknown or inactive company). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "workspaceId",
+                  "role",
+                  "grants"
+                ],
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "cs",
+                      "lead_cs"
+                    ]
+                  },
+                  "grants": {
+                    "type": "array",
+                    "maxItems": 18,
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "admin.members",
+                        "admin.settings",
+                        "integration.manage",
+                        "integration.credentials",
+                        "integration.recovery"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company set (or already so)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "user",
+                    "changed",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/UserListItem"
+                    },
+                    "changed": {
+                      "type": "boolean"
+                    },
+                    "auditEventId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "uuid",
+                      "description": "membership.company_set audit row; null when nothing changed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "description": "unauthenticated or step_up_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "user_inactive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies": {
+      "get": {
+        "operationId": "listPlatformCompanies",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5d. Password mode, platform_admin only. Active companies a user can be assigned to, by workspace code.",
+        "responses": {
+          "200": {
+            "description": "Companies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/CompanyOption"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/sso": {
+      "get": {
+        "operationId": "getPlatformSso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "description": "CP5c. Password mode, platform_admin only. Every company with its identity provider (null when none) and the server's SSO settings: ITSM_AUTH, the redirect URI to register at each IdP, whether the server keyring is present, and lab mode.",
+        "responses": {
+          "200": {
+            "description": "Companies and SSO settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "server"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SsoCompany"
+                      }
+                    },
+                    "server": {
+                      "type": "object",
+                      "required": [
+                        "auth",
+                        "redirectUri",
+                        "keyring",
+                        "lab"
+                      ],
+                      "properties": {
+                        "auth": {
+                          "type": "string",
+                          "enum": [
+                            "password",
+                            "sso",
+                            "both"
+                          ]
+                        },
+                        "redirectUri": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "keyring": {
+                          "type": "boolean"
+                        },
+                        "lab": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso": {
+      "put": {
+        "operationId": "saveCompanySso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Creates (no version, 201) or updates (version, 200) the company's identity provider. Changing the issuer, client id or extra hosts clears the test result and turns the IdP off (its sessions end): it must pass the discovery test again. The issuer is kept exactly as given (https, no port, query, fragment or user info; http and private addresses only in lab mode). Audited idp.create / idp.update. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "displayName",
+                  "issuer",
+                  "clientId",
+                  "groupClaim",
+                  "syncRoles"
+                ],
+                "properties": {
+                  "displayName": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "issuer": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  },
+                  "emailDomains": {
+                    "type": "array",
+                    "maxItems": 20,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Domains whose verified addresses may be provisioned just in time."
+                  },
+                  "extraHosts": {
+                    "type": "array",
+                    "maxItems": 10,
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Endpoint hosts allowed besides the issuer host (e.g. oauth2.googleapis.com)."
+                  },
+                  "groupClaim": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_.:/-]{1,100}$"
+                  },
+                  "roleMapping": {
+                    "type": "array",
+                    "maxItems": 50,
+                    "items": {
+                      "$ref": "#/components/schemas/SsoRoleMapping"
+                    }
+                  },
+                  "syncRoles": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/secret": {
+      "put": {
+        "operationId": "setCompanySsoSecret",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Stores or replaces the IdP client secret, sealed with the server keyring (write-only; never returned, logged or audited). Audited idp.secret.set. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "secret",
+                  "version"
+                ],
+                "properties": {
+                  "secret": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000,
+                    "writeOnly": true
+                  },
+                  "version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/test": {
+      "post": {
+        "operationId": "testCompanySso",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Discovery test: fetches the discovery document and the key set through the egress guard (stale version = 409 before any request). A pass marks the IdP ready to enable. A failure on an IdP that is on is reported and audited but leaves it on; on an IdP that is off it is stored. Codes are stable (unreachable, timeout, refused, http_404, discovery_issuer, jwks, ...), never IdP text. Audited idp.test. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SsoVersion"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "item",
+                    "result",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/SsoProvider"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "result": {
+                      "type": "object",
+                      "required": [
+                        "ok",
+                        "stage",
+                        "code"
+                      ],
+                      "properties": {
+                        "ok": {
+                          "type": "boolean"
+                        },
+                        "stage": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "enum": [
+                            "policy",
+                            "discovery",
+                            "jwks",
+                            null
+                          ]
+                        },
+                        "code": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/enabled": {
+      "put": {
+        "operationId": "setCompanySsoEnabled",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Turns company sign-in through the IdP on or off. On needs a stored secret and a passing test (409 idp_not_ready) and the server keyring (503). Off ends every session made through the IdP. No change = 422 rule_violation. Audited idp.enable / idp.disable. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "enabled",
+                  "version"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "version": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SsoProviderResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/identities": {
+      "get": {
+        "operationId": "listCompanySsoIdentities",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "description": "Filter on name, e-mail or subject."
+          }
+        ],
+        "description": "CP5c. Password mode, platform_admin only. Accounts linked to the company's IdP (at most 100, by name; total counts every match). 404 when the company has no IdP.",
+        "responses": {
+          "200": {
+            "description": "Linked accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "items",
+                    "total"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SsoIdentity"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "post": {
+        "operationId": "linkCompanySsoIdentity",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          }
+        ],
+        "description": "CP5c. Links an existing active account to an IdP subject (the sub claim), for accounts that cannot be provisioned by verified address (e.g. Entra ID). The account must not work in another company. 409 user_inactive, user_in_other_company, subject_linked or user_linked; 422 userId (unknown) or subject. Audited identity.link and auth event identity_link. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "userId",
+                  "subject"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "subject": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 255
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Linked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "item",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "item": {
+                      "$ref": "#/components/schemas/SsoIdentity"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationFailed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}": {
+      "delete": {
+        "operationId": "unlinkCompanySsoIdentity",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CompanyId"
+          },
+          {
+            "name": "identity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "description": "CP5c. Removes a link. The account and its memberships stay; its sessions through this IdP end. Audited identity.unlink and auth event identity_unlink. Password mode, platform_admin only (404 in other access modes, 403 otherwise, recorded as a denied platform.sso audit). Requires the CSRF token and a step-up within the last 5 minutes when MFA is on (401 step_up_required after the permission check).",
+        "responses": {
+          "200": {
+            "description": "Unlinked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "auditEventId"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "auditEventId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret": {
+      "post": {
+        "operationId": "rotateIntegrationWebhookSecret",
+        "summary": "Generate or rotate the inbound Jira webhook secret (shown once; the old one stops working)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "New secret, returned only in this response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSecretResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/VersionConflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/RuleViolation"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/KeyringMissing"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteIntegrationWebhookSecret",
+        "summary": "Remove the inbound Jira webhook secret (every delivery is refused until a new one is made)",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VersionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/IntegrationConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/integrations/jira/{connection_id}/webhook": {
+      "post": {
+        "operationId": "receiveJiraWebhook",
+        "summary": "Inbound Jira webhook (CP6a): HMAC-SHA256 signed, idempotent per delivery, applied in Jira timestamp order",
+        "description": "No session. Verified with X-Hub-Signature: sha256=<hex HMAC of the raw body> using the connection's webhook secret. A replayed delivery (same X-Atlassian-Webhook-Identifier, or same body hash) returns 204 without effect. Events older than the stored issue timestamp, or outside -72h..+5min, are recorded as stale. Only jira:issue_updated (status/assignee) and comment_created are applied; ticket status is never changed. Body limit 1 MB, 16 concurrent deliveries, 10 s timeout.",
+        "security": [],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ConnectionId"
+          },
+          {
+            "name": "X-Hub-Signature",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^sha256=[0-9a-fA-F]{64}$"
+            }
+          },
+          {
+            "name": "X-Atlassian-Webhook-Identifier",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "webhookEvent"
+                ],
+                "properties": {
+                  "webhookEvent": {
+                    "type": "string"
+                  },
+                  "timestamp": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Accepted (applied, ignored, stale, unknown issue or replay)"
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/WebhookUnauthorized"
+          },
+          "413": {
+            "description": "Body larger than 1 MB"
+          },
+          "503": {
+            "$ref": "#/components/responses/WebhookUnavailable"
           }
         }
       }

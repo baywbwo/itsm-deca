@@ -442,8 +442,53 @@ pub struct UserListItem {
     platform_admin: bool,
     created_at: String,
     deactivated_at: Option<String>,
+    /// CP5d: the user's one company (home membership), `null` without an active membership.
+    #[sqlx(skip)]
+    company: Option<HomeCompany>,
+    #[serde(skip)]
+    home_workspace_id: Option<Uuid>,
+    #[serde(skip)]
+    home_code: Option<String>,
+    #[serde(skip)]
+    home_name: Option<String>,
+    #[serde(skip)]
+    home_role: Option<String>,
+    #[serde(skip)]
+    home_grants: Option<Vec<String>>,
     #[serde(skip)]
     sort_key: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeCompany {
+    workspace_id: Uuid,
+    code: String,
+    name: String,
+    role: String,
+    /// Live administration grants of the home membership.
+    grants: Vec<String>,
+}
+
+impl UserListItem {
+    fn with_company(mut self) -> Self {
+        self.company = match (
+            self.home_workspace_id,
+            self.home_code.take(),
+            self.home_name.take(),
+            self.home_role.take(),
+        ) {
+            (Some(workspace_id), Some(code), Some(name), Some(role)) => Some(HomeCompany {
+                workspace_id,
+                code,
+                name,
+                role,
+                grants: self.home_grants.take().unwrap_or_default(),
+            }),
+            _ => None,
+        };
+        self
+    }
 }
 
 #[derive(Serialize)]
@@ -466,8 +511,17 @@ const LIST_SQL: &str = concat!(
        AND g.grant_code = 'platform_admin') AS platform_admin, ",
     "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS created_at, ",
     "to_char(u.deactivated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS deactivated_at, ",
-    "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS sort_key \
-     FROM users u LEFT JOIN local_credentials c ON c.user_id = u.id WHERE true"
+    "to_char(u.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS sort_key, \
+     h.workspace_id AS home_workspace_id, h.code AS home_code, h.name AS home_name, \
+     h.role AS home_role, h.grants AS home_grants \
+     FROM users u LEFT JOIN local_credentials c ON c.user_id = u.id \
+     LEFT JOIN LATERAL (SELECT hw.id AS workspace_id, hw.code, co.name, hm.role, \
+       ARRAY(SELECT g.grant_code FROM workspace_grants g WHERE g.membership_id = hm.id \
+             AND g.revoked_at IS NULL ORDER BY g.grant_code) AS grants \
+       FROM workspace_memberships hm JOIN workspaces hw ON hw.id = hm.workspace_id \
+       JOIN companies co ON co.id = hw.company_id \
+       WHERE hm.user_id = u.id AND hm.active AND hw.active \
+       ORDER BY hm.created_at, hw.code, hm.id LIMIT 1) h ON true WHERE true" // ^ same pick as `home_membership_sql!` (authz.rs).
 );
 
 /// `q` as an escaped ILIKE pattern.
@@ -549,6 +603,7 @@ pub async fn list(
     };
     let more = rows.len() as i64 > limit;
     rows.truncate(limit as usize);
+    let rows: Vec<UserListItem> = rows.into_iter().map(UserListItem::with_company).collect();
     let next_cursor = match (more, rows.last()) {
         (true, Some(last)) => Some(encode_cursor(&fp, last.sort_key.clone(), last.id)?),
         _ => None,
@@ -557,4 +612,268 @@ pub async fn list(
         items: rows,
         next_cursor,
     }))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyOption {
+    workspace_id: Uuid,
+    code: String,
+    name: String,
+}
+
+/// CP5d: active companies a platform admin can assign users to.
+pub async fn companies(
+    State(state): State<AppState>,
+    s: Session,
+) -> Result<Json<serde_json::Value>, AppError> {
+    platform_admin(&state, &s).await?;
+    let items: Vec<CompanyOption> = sqlx::query_as(
+        "SELECT w.id AS workspace_id, w.code, c.name FROM workspaces w \
+         JOIN companies c ON c.id = w.company_id WHERE w.active AND c.active ORDER BY w.code",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": items })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SetCompanyBody {
+    workspace_id: Uuid,
+    role: String,
+    /// Administration grants of the membership in that company (replaces the current set).
+    grants: Vec<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct MembershipRow {
+    id: Uuid,
+    workspace_id: Uuid,
+    role: String,
+    active: bool,
+    version: i32,
+}
+
+/// CP5d (owner 2026-11-13): a platform admin sets a user's one company, role and administration
+/// grants, across companies. This is the platform admin's exemption from the one-company rule:
+/// workspace member administration (members.rs) stays inside the caller's own company, while this
+/// platform endpoint reaches every company. Other active memberships of the user are deactivated
+/// and their grants revoked, so the user keeps exactly one company (CP5a). Applies to the caller
+/// too (the bootstrap admin moves itself to DOB); `platform_admin` itself is not touched, so a
+/// platform admin cannot lock itself out. Every changed membership gets a workspace audit row and
+/// the change an auth event (`user_company_set`), atomically. No change = 200 without audit.
+pub async fn set_company(
+    State(state): State<AppState>,
+    s: Session,
+    Path(raw): Path<String>,
+    headers: axum::http::HeaderMap,
+    payload: Result<Json<SetCompanyBody>, JsonRejection>,
+) -> Result<Response, AppError> {
+    use crate::authz::{Permission, PermissionSource, Role};
+    use std::collections::BTreeSet;
+    platform_admin(&state, &s).await?;
+    crate::authz::require_step_up(&state, &s)?;
+    let id = user_id(&raw)?;
+    let b = body(payload)?;
+    let role = Role::from_code(&b.role).ok_or(AppError::Validation("role"))?;
+    if b.grants.len() > Permission::ALL.len() {
+        return Err(AppError::Validation("grants"));
+    }
+    let wanted: BTreeSet<&'static str> = b
+        .grants
+        .iter()
+        .map(|c| {
+            Permission::from_code(c)
+                .filter(|p| p.source() == PermissionSource::Grant)
+                .map(Permission::code)
+                .ok_or(AppError::Validation("grants"))
+        })
+        .collect::<Result<_, _>>()?;
+    let corr = super::ticket_list::correlation(&headers);
+    let mut tx = state.pool.begin().await?;
+    let inactive: bool = sqlx::query_scalar(
+        "SELECT (NOT active OR deactivated_at IS NOT NULL) FROM users WHERE id=$1 FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if inactive {
+        return Err(AppError::Conflict("user_inactive"));
+    }
+    let target: Uuid = sqlx::query_scalar(
+        "SELECT w.id FROM workspaces w JOIN companies c ON c.id = w.company_id \
+         WHERE w.id = $1 AND w.active AND c.active",
+    )
+    .bind(b.workspace_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::Validation("workspaceId"))?;
+    let rows: Vec<MembershipRow> = sqlx::query_as(
+        "SELECT id, workspace_id, role, active, version FROM workspace_memberships \
+         WHERE user_id = $1 ORDER BY id FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let actor = Some(s.user_id);
+    let mut moved_from = Vec::new();
+    for m in rows.iter().filter(|m| m.active && m.workspace_id != target) {
+        sqlx::query(
+            "UPDATE workspace_memberships SET active = false, version = version + 1 WHERE id = $1",
+        )
+        .bind(m.id)
+        .execute(&mut *tx)
+        .await?;
+        let revoked: Vec<String> = sqlx::query_scalar(
+            "UPDATE workspace_grants SET revoked_at = now(), revoked_by = $2 \
+             WHERE membership_id = $1 AND revoked_at IS NULL RETURNING grant_code",
+        )
+        .bind(m.id)
+        .bind(s.user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        super::sync::audit_entity(
+            &mut tx,
+            m.workspace_id,
+            actor,
+            "membership.deactivate",
+            "workspace_membership",
+            m.id,
+            json!({
+                "reason": "company_set",
+                "role": { "from": m.role, "to": m.role },
+                "active": { "from": true, "to": false },
+                "revokedGrants": revoked,
+                "version": m.version + 1,
+            }),
+            &corr,
+        )
+        .await?;
+        moved_from.push(m.workspace_id);
+    }
+    let existing = rows.iter().find(|m| m.workspace_id == target);
+    let membership: Uuid = match existing {
+        Some(m) if m.active && m.role == role.code() => m.id,
+        Some(m) => {
+            sqlx::query(
+                "UPDATE workspace_memberships SET role = $2, active = true, version = version + 1 \
+                 WHERE id = $1",
+            )
+            .bind(m.id)
+            .bind(role.code())
+            .execute(&mut *tx)
+            .await?;
+            m.id
+        }
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO workspace_memberships (workspace_id, user_id, role) \
+                 VALUES ($1, $2, $3) RETURNING id",
+            )
+            .bind(target)
+            .bind(id)
+            .bind(role.code())
+            .fetch_one(&mut *tx)
+            .await?
+        }
+    };
+    let current: BTreeSet<String> = sqlx::query_scalar(
+        "SELECT grant_code FROM workspace_grants WHERE membership_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(membership)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .collect();
+    let revoked: Vec<String> = current
+        .iter()
+        .filter(|c| !wanted.contains(c.as_str()))
+        .cloned()
+        .collect();
+    let added: Vec<&str> = wanted
+        .iter()
+        .copied()
+        .filter(|c| !current.contains(*c))
+        .collect();
+    if !revoked.is_empty() {
+        sqlx::query(
+            "UPDATE workspace_grants SET revoked_at = now(), revoked_by = $3 \
+             WHERE membership_id = $1 AND revoked_at IS NULL AND grant_code = ANY($2)",
+        )
+        .bind(membership)
+        .bind(&revoked)
+        .bind(s.user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for code in &added {
+        sqlx::query(
+            "INSERT INTO workspace_grants (workspace_id, membership_id, grant_code, granted_by) \
+             VALUES ($1, $2, $3, $4)",
+        )
+        .bind(target)
+        .bind(membership)
+        .bind(code)
+        .bind(s.user_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let target_changed = existing.is_none_or(|m| !m.active || m.role != role.code());
+    let changed =
+        target_changed || !moved_from.is_empty() || !revoked.is_empty() || !added.is_empty();
+    let mut audit_event_id = None;
+    if changed {
+        if !target_changed && (!revoked.is_empty() || !added.is_empty()) {
+            sqlx::query("UPDATE workspace_memberships SET version = version + 1 WHERE id = $1")
+                .bind(membership)
+                .execute(&mut *tx)
+                .await?;
+        }
+        audit_event_id = Some(
+            super::sync::audit_entity(
+                &mut tx,
+                target,
+                actor,
+                "membership.company_set",
+                "workspace_membership",
+                membership,
+                json!({
+                    "userId": id,
+                    "role": { "from": existing.map(|m| m.role.as_str()), "to": role.code() },
+                    "active": { "from": existing.map(|m| m.active), "to": true },
+                    "grantsAdded": added,
+                    "grantsRevoked": revoked,
+                    "deactivatedIn": moved_from,
+                }),
+                &corr,
+            )
+            .await?,
+        );
+        auth_event_by(
+            &mut tx,
+            actor,
+            Some(id),
+            "",
+            "user_company_set",
+            "success",
+            None,
+        )
+        .await?;
+    }
+    let user: UserListItem = sqlx::query_as(&format!("{LIST_SQL} AND u.id = $1"))
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    if changed {
+        tracing::info!(actor = %s.user_id, user_id = %id, workspace_id = %target, "user company set");
+    }
+    Ok(Json(json!({
+        "user": user.with_company(),
+        "changed": changed,
+        "auditEventId": audit_event_id,
+    }))
+    .into_response())
 }

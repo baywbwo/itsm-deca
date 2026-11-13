@@ -614,6 +614,10 @@ table .subject {
 .auth-error { margin: 0; padding: 10px 12px; border-radius: 9px; background: #fdecec; color: #a22b2b; font-size: 13px; }
 .auth-notice { display: grid; gap: 2px; padding: 10px 12px; margin-bottom: 14px; border: 1px solid #c8d8f0; border-radius: 9px; background: #e8f1fe; color: #1b4ea8; font-size: 13px; }
 .auth-help { text-align: center; margin-top: 18px; }
+.auth-divider { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--auth-muted); font-size: 12px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--auth-line); }
+.auth-break-glass { margin-top: 8px; border-top: 1px solid var(--auth-line); padding-top: 12px; }
+.auth-break-glass > summary { cursor: pointer; color: var(--auth-muted); font-size: 13px; }
 @media (max-width: 860px) {
   .auth-screen { grid-template-columns: 1fr; }
   .auth-hero { padding: 24px; }

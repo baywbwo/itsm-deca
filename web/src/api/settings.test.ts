@@ -30,7 +30,9 @@ const member = {
 const connection = {
   id: 'i1', provider: 'jira', displayName: 'DUMA Jira', mode: 'simulation', state: 'tested', testedAt: '2026-11-02T01:00:00Z',
   lastTestNote: 'Uji simulasi', simulatedOutcome: 'success', version: 4, directoryCount: 2,
-  credential: 'not_available', mapping: 'not_available',
+  lastTestOk: true, credential: { state: 'missing', updatedAt: null },
+  webhook: { state: 'missing', updatedAt: null, path: '/api/v1/integrations/jira/i1/webhook', url: null },
+  settings: { baseUrl: null, email: null, projectKey: null, issueTypeId: null, appId: null, priorityMap: {}, statusMap: {} },
   recent: [{ action: 'integration.test', outcome: 'success', occurredAt: '2026-11-02T01:00:00Z', actor: 'Superadmin' }],
 };
 
@@ -157,11 +159,13 @@ describe('D09 api client', () => {
   });
 });
 
+const LIST_EXTRA = { integrationsMode: 'simulation', keyringConfigured: false, priorities: [{ code: 'urgent', label: 'Mendesak' }], ticketStatuses: ['new'] };
+
 describe('D09 guards', () => {
   it('accept the contract shapes', () => {
     expect(isSettingsBody({ settings, canEdit: false, timezones: ['Asia/Jakarta'] })).toBe(true);
     expect(isMemberList({ items: [member], myMembershipId: null, canManage: false, grantable: [] })).toBe(true);
-    expect(isIntegrationList({ workspaceId: 'w1', items: [connection], creatable: ['lark'], canManageCredentials: false })).toBe(true);
+    expect(isIntegrationList({ workspaceId: 'w1', items: [connection], ...LIST_EXTRA, creatable: ['lark'], canManageCredentials: false })).toBe(true);
     expect(isCompanyUpdateResult({ item: settings, auditEventId: null })).toBe(true);
     expect(isCompanyResult({ item: settings, auditEventId: null })).toBe(false);
   });
@@ -169,8 +173,8 @@ describe('D09 guards', () => {
   it('reject unknown grants, timezones, providers and a credential claim', () => {
     expect(isMemberList({ items: [{ ...member, grants: ['superuser'] }], myMembershipId: null, canManage: true, grantable: [] })).toBe(false);
     expect(isSettingsBody({ settings, canEdit: true, timezones: ['Europe/Paris'] })).toBe(false);
-    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, provider: 'whatsapp' }], creatable: [], canManageCredentials: false })).toBe(false);
-    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, credential: 'configured' }], creatable: [], canManageCredentials: true })).toBe(false);
-    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, mode: 'live' }], creatable: [], canManageCredentials: true })).toBe(false);
+    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, provider: 'whatsapp' }], ...LIST_EXTRA, creatable: [], canManageCredentials: false })).toBe(false);
+    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, credential: 'configured' }], ...LIST_EXTRA, creatable: [], canManageCredentials: true })).toBe(false);
+    expect(isIntegrationList({ workspaceId: 'w1', items: [{ ...connection, mode: 'production' }], ...LIST_EXTRA, creatable: [], canManageCredentials: true })).toBe(false);
   });
 });

@@ -1,0 +1,259 @@
+# ITSM production (CP8). Real data: ITSM_ENV=production, ITSM_ACCESS_MODE=password.
+# Read deploy/RUNBOOK-production.md before the first start. Pre-flight: ./check-config.sh
+#
+# Database roles (deploy/production/db/roles.sql): the `migrate` one-off runs every migration as
+# itsm_migrator (schema owner); api-a, api-b and worker run as itsm_app (DML only, append-only
+# tables without UPDATE/DELETE) and refuse to start while a migration is pending. `up` runs
+# migrate first and starts the API only after it exited 0.
+# Backups: postgres archives every WAL segment and the backup service takes daily base backups,
+# both encrypted with the age public key in ./backup-recipients (private key off-host).
+# Only the ingress publishes ports. Postgres, API, worker and backup stay on the internal backend
+# network; outbound calls leave only through egress-proxy (deploy/RUNBOOK-egress.md).
+name: itsm-prod
+
+x-api-env: &api-env
+  ITSM_ENV: production
+  ITSM_ACCESS_MODE: password
+  ITSM_COOKIE_SECURE: "true"
+  ITSM_DB_HOST: postgres
+  ITSM_DB_NAME: itsm
+  ITSM_PUBLIC_URL: https://${ITSM_PROD_SITE_ADDRESS:?ITSM_PROD_SITE_ADDRESS wajib (hostname produksi)}
+  ITSM_AUTH: "${ITSM_AUTH:-password}"
+  ITSM_MFA: "${ITSM_MFA:-off}"
+  ITSM_MFA_RECOVERY_PEPPER_FILE: /run/secrets/mfa_recovery_pepper
+  # D13: attachments out of scope; empty = uploads refused fail-closed (503).
+  ITSM_CLAMD_ADDR: ""
+  ITSM_TRUSTED_PROXIES: ${ITSM_PROD_INGRESS_IP:-172.30.58.10}
+  ITSM_OUTBOX_WORKER: "off"
+  ITSM_DB_MAX_CONNECTIONS: "${ITSM_DB_MAX_CONNECTIONS:-10}"
+  ITSM_DB_ACQUIRE_TIMEOUT_MS: "${ITSM_DB_ACQUIRE_TIMEOUT_MS:-3000}"
+  ITSM_LIMIT_AUTH_PER_IP_10MIN: "${ITSM_LIMIT_AUTH_PER_IP_10MIN:-}"
+  ITSM_LIMIT_AI_PER_USER_MIN: "${ITSM_LIMIT_AI_PER_USER_MIN:-}"
+  ITSM_LIMIT_AI_PER_WORKSPACE_DAY: "${ITSM_LIMIT_AI_PER_WORKSPACE_DAY:-}"
+  ITSM_LIMIT_OUTBOUND_PER_USER_10MIN: "${ITSM_LIMIT_OUTBOUND_PER_USER_10MIN:-}"
+  ITSM_LIMIT_LOOKUP_PER_USER_MIN: "${ITSM_LIMIT_LOOKUP_PER_USER_MIN:-}"
+  ITSM_LIMIT_WEBHOOK_PER_IP_MIN: "${ITSM_LIMIT_WEBHOOK_PER_IP_MIN:-}"
+  ITSM_METRICS_BIND: 0.0.0.0:9464
+  ITSM_INTEGRATIONS: live
+  ITSM_INTEGRATIONS_TIMEOUT_MS: "${ITSM_INTEGRATIONS_TIMEOUT_MS:-}"
+  ITSM_KEYRING_FILE: /run/secrets/itsm_keyring
+  ITSM_KEYRING_ACTIVE: "${ITSM_KEYRING_ACTIVE:-}"
+  ITSM_EGRESS_PROXY: http://egress-proxy:3128
+  ITSM_EGRESS_PROXY_AUTH_FILE: /run/secrets/egress_proxy_auth
+  RUST_LOG: ${RUST_LOG:-info}
+
+x-api-service: &api-service
+  build:
+    context: ../..
+    dockerfile: deploy/production/Dockerfile
+    target: api
+  image: itsm-prod-api:${ITSM_PROD_IMAGE_TAG:?ITSM_PROD_IMAGE_TAG wajib (git SHA rilis)}
+  environment: *api-env
+  secrets: [pg_app_password, itsm_keyring, egress_proxy_auth, mfa_recovery_pepper]
+  volumes:
+    # Shared by both replicas; unused while attachments are out of scope (D13).
+    - attachments:/var/lib/itsm/attachments
+  networks: [backend]
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    egress-proxy:
+      condition: service_started
+  read_only: true
+  tmpfs: [/tmp]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+
+x-pg-image: &pg-image
+  build:
+    context: ../..
+    dockerfile: deploy/production/Dockerfile
+    target: postgres
+  image: itsm-prod-postgres:${ITSM_PROD_IMAGE_TAG:?ITSM_PROD_IMAGE_TAG wajib (git SHA rilis)}
+
+services:
+  postgres:
+    <<: *pg-image
+    environment:
+      # Bootstrap superuser: reachable only over the container's socket (pg_hba.conf, peer).
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8 --data-checksums"
+      ITSM_DB_NAME: itsm
+    secrets: [pg_superuser_password, pg_migrator_password, pg_app_password, pg_backup_password]
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - backup:/backup
+      - ./backup-recipients:/etc/itsm/backup/age-recipients:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "itsm"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    shm_size: 256m
+    stop_grace_period: 60s
+    restart: unless-stopped
+
+  migrate:
+    # One-off, as itsm_migrator: applies pending migrations and exits. Also the service used for
+    # `docker compose run --rm -T -e ITSM_ADMIN_USERNAME=... -e ITSM_INIT_CONFIRM_DB=itsm
+    #  migrate init-password < admin-password-file` and `... migrate reseal [--dry-run]`.
+    <<: *api-service
+    command: ["migrate"]
+    secrets: [pg_migrator_password, itsm_keyring, egress_proxy_auth, mfa_recovery_pepper]
+    volumes: []
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api-a:
+    <<: *api-service
+  api-b:
+    <<: *api-service
+
+  worker:
+    # Outbox delivery, lease sweep, prunes. Claims use FOR UPDATE SKIP LOCKED with a lease, so
+    # --scale worker=N is safe (RUNBOOK-scaling.md).
+    <<: *api-service
+    command: ["worker"]
+    environment:
+      <<: *api-env
+      ITSM_DB_MAX_CONNECTIONS: "${ITSM_WORKER_DB_MAX_CONNECTIONS:-4}"
+    volumes: []
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/worker-healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 4
+
+  backup:
+    # Daily encrypted base backup as itsm_backup (replication only) + retention. WAL archiving
+    # itself runs inside postgres (archive_command). RUNBOOK-production.md "Backup & PITR".
+    <<: *pg-image
+    user: postgres
+    entrypoint: ["/usr/local/lib/itsm/backup/loop.sh"]
+    command: []
+    environment:
+      PGHOST: postgres
+      PGUSER: itsm_backup
+      ITSM_BACKUP_PASSWORD_FILE: /run/secrets/pg_backup_password
+      ITSM_BACKUP_KEEP: "${ITSM_BACKUP_KEEP:-7}"
+      ITSM_BACKUP_INTERVAL_SECS: "${ITSM_BACKUP_INTERVAL_SECS:-86400}"
+    secrets: [pg_backup_password]
+    volumes:
+      - backup:/backup
+      - ./backup-recipients:/etc/itsm/backup/age-recipients:ro
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "/usr/local/lib/itsm/backup/healthcheck.sh"]
+      interval: 5m
+      timeout: 10s
+      start_period: 2h
+      retries: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+  egress-proxy:
+    build:
+      context: ../..
+      dockerfile: deploy/uat/Dockerfile
+      target: egress
+    image: itsm-prod-egress:${ITSM_PROD_IMAGE_TAG:?ITSM_PROD_IMAGE_TAG wajib (git SHA rilis)}
+    environment:
+      ITSM_EGRESS_CLIENT_CIDRS: ${ITSM_PROD_BACKEND_SUBNET:-172.30.58.0/24}
+      ITSM_EGRESS_DNS: "${ITSM_EGRESS_DNS:-1.1.1.1 8.8.8.8}"
+    secrets: [egress_proxy_htpasswd]
+    volumes:
+      - ../egress/allowlist.regex:/etc/squid/itsm/allowlist.regex:ro
+    networks: [backend, egress]
+    read_only: true
+    tmpfs:
+      - /run/squid:uid=13,gid=13,mode=0700
+      - /tmp:uid=13,gid=13,mode=0700
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    restart: unless-stopped
+
+  ingress:
+    build:
+      context: ../..
+      dockerfile: deploy/production/Dockerfile
+      target: ingress
+    image: itsm-prod-ingress:${ITSM_PROD_IMAGE_TAG:?ITSM_PROD_IMAGE_TAG wajib (git SHA rilis)}
+    environment:
+      ITSM_PROD_SITE_ADDRESS: ${ITSM_PROD_SITE_ADDRESS:?ITSM_PROD_SITE_ADDRESS wajib (hostname produksi)}
+      ITSM_PROD_TLS: ${ITSM_PROD_TLS:?ITSM_PROD_TLS wajib (internal, e-mail ACME, atau file)}
+      ITSM_PROD_ALLOWED_CIDRS: ${ITSM_PROD_ALLOWED_CIDRS:?ITSM_PROD_ALLOWED_CIDRS wajib (jaringan kantor/VPN)}
+      ITSM_PROD_PUBLIC_ACCESS: "${ITSM_PROD_PUBLIC_ACCESS:-off}"
+      ITSM_PROD_API_UPSTREAMS: api-a:8080 api-b:8080
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+      # Only with ITSM_PROD_TLS=file: certificate + key from the company CA.
+      - ./tls:/etc/itsm/tls:ro
+    ports:
+      - "${ITSM_PROD_HTTPS_BIND:-0.0.0.0:443}:443"
+      - "${ITSM_PROD_HTTP_BIND:-0.0.0.0:80}:80"
+    networks:
+      edge: {}
+      backend:
+        ipv4_address: ${ITSM_PROD_INGRESS_IP:-172.30.58.10}
+    depends_on:
+      api-a:
+        condition: service_healthy
+      api-b:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${ITSM_PROD_BACKEND_SUBNET:-172.30.58.0/24}
+  edge: {}
+  egress: {}
+
+volumes:
+  pgdata:
+  backup:
+  attachments:
+  caddy-data:
+  caddy-config:
+
+secrets:
+  pg_superuser_password:
+    file: ./secrets/pg_superuser_password
+  pg_migrator_password:
+    file: ./secrets/pg_migrator_password
+  pg_app_password:
+    file: ./secrets/pg_app_password
+  pg_backup_password:
+    file: ./secrets/pg_backup_password
+  itsm_keyring:
+    file: ./secrets/itsm_keyring
+  mfa_recovery_pepper:
+    file: ./secrets/mfa_recovery_pepper
+  egress_proxy_auth:
+    file: ./secrets/egress_proxy_auth
+  egress_proxy_htpasswd:
+    file: ./secrets/egress_proxy_htpasswd

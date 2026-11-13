@@ -5,7 +5,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::config::{AccessMode, Environment};
+use crate::config::{AccessMode, AuthMethods, Environment};
 use crate::error::AppError;
 use crate::session::{self, Session};
 use crate::{AppState, UAT_BANNER, db};
@@ -15,6 +15,10 @@ use crate::{AppState, UAT_BANNER, db};
 pub struct Meta {
     environment: &'static str,
     access_mode: &'static str,
+    /// CP5c: company sign-in through OIDC is offered (`ITSM_AUTH` sso|both in password mode).
+    sso: bool,
+    /// CP5c `ITSM_AUTH=sso`: the password form is for break-glass platform admins only.
+    password_admin_only: bool,
     banner: Option<&'static str>,
     /// Present only in UAT Superadmin mode; the FE shows it on every screen.
     uat: Option<UatNotice>,
@@ -49,6 +53,8 @@ pub async fn meta(State(state): State<AppState>) -> Json<Meta> {
             Environment::Production => "production",
         },
         access_mode: state.config.access_mode.as_str(),
+        sso: state.config.access_mode == AccessMode::Password && state.config.auth.methods.oidc(),
+        password_admin_only: state.config.auth.methods == AuthMethods::Sso,
         banner: uat.then_some(UAT_BANNER),
         uat: uat.then(uat_notice),
     })

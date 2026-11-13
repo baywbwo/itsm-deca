@@ -346,7 +346,7 @@ async fn transient_failures_back_off_then_fail_and_retry_resets_budget(pool: PgP
         } else {
             assert_eq!(r.state, "failed", "{r:?}");
             assert!(r.wait_secs.is_none());
-            assert!(r.safe_error.unwrap_or_default().contains("batas 5"));
+            assert!(r.safe_error.unwrap_or_default().contains("Batas 5"));
         }
     }
     assert_eq!(waits, vec![2.0, 4.0, 8.0, 16.0]);
@@ -674,4 +674,137 @@ async fn disabled_connection_settles_pending_intent_as_failed(pool: PgPool) {
         before,
         "nothing sent through a disabled connection"
     );
+}
+
+/// CP7b: several worker processes (two pools = two instances, three workers each) drain a
+/// backlog together. Every intent is delivered once: one worker attempt, one issue, one audit.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp7b_worker_instances_share_a_backlog_without_double_delivery(pool: PgPool) {
+    const INTENTS: usize = 24;
+    let fx = fixture(&pool).await;
+    let mut ids = Vec::new();
+    for i in 0..INTENTS {
+        ids.push(transient_jira(&pool, &fx, &format!("cp7b-scale-{i:04}")).await);
+    }
+    let admin = tok(&pool, fx.admin).await;
+    simulate(&pool, fx.a, &admin, "jira", "success").await;
+    for id in &ids {
+        make_due(&pool, *id).await;
+    }
+
+    let second_instance = ok(
+        db::pool_options(&itsm_api::config::DbPoolConfig {
+            max_connections: 3,
+            acquire_timeout: std::time::Duration::from_secs(3),
+        })
+        .connect_with(
+            (*pool.connect_options())
+                .clone()
+                .application_name("itsm-worker"),
+        )
+        .await,
+        "second pool",
+    );
+    assert_eq!(second_instance.options().get_max_connections(), 3);
+
+    // All workers claim at the same moment: the race SKIP LOCKED has to win.
+    let start = Arc::new(tokio::sync::Barrier::new(6));
+    let mut tasks = Vec::new();
+    for i in 0..6 {
+        let st = state(if i % 2 == 0 { &pool } else { &second_instance });
+        let start = start.clone();
+        tasks.push(tokio::spawn(async move {
+            // Warm a connection first so the claims, not the connects, start together.
+            drop(st.pool.acquire().await?);
+            start.wait().await;
+            let mut settled = 0;
+            let mut idle = 0;
+            while idle < 2 {
+                let t = outbox::run_once(&st).await?;
+                settled += t.settled;
+                idle = if t.claimed == 0 { idle + 1 } else { 0 };
+            }
+            Ok::<usize, itsm_api::error::AppError>(settled)
+        }));
+    }
+    let mut settled = Vec::new();
+    for t in tasks {
+        settled.push(ok(ok(t.await, "join"), "worker"));
+    }
+    assert_eq!(settled.iter().sum::<usize>(), INTENTS, "{settled:?}");
+
+    for id in &ids {
+        let r = row(&pool, *id).await;
+        // attempt 1 was the inline transient failure, attempt 2 the single worker delivery.
+        assert_eq!(
+            (r.state.as_str(), r.attempt, r.in_flight),
+            ("success", 2, false)
+        );
+        assert_eq!(audits(&pool, *id, "integration.sync", true).await, 1);
+    }
+    let issues: i64 = ok(
+        sqlx::query_scalar(
+            "SELECT count(DISTINCT external_issue_id) FROM jira_issues \
+             WHERE external_issue_id = ANY($1)",
+        )
+        .bind(ids.iter().map(|id| format!("sim-{id}")).collect::<Vec<_>>())
+        .fetch_one(&pool)
+        .await,
+        "issues",
+    );
+    assert_eq!(issues, INTENTS as i64);
+    let rows: i64 = ok(
+        sqlx::query_scalar("SELECT count(*) FROM jira_issues WHERE external_issue_id = ANY($1)")
+            .bind(ids.iter().map(|id| format!("sim-{id}")).collect::<Vec<_>>())
+            .fetch_one(&pool)
+            .await,
+        "issue rows",
+    );
+    assert_eq!(rows, INTENTS as i64, "one issue row per intent");
+    second_instance.close().await;
+}
+
+/// CP7b: a tick holds one claim at a time, so every lease starts right before its own attempt.
+/// A whole batch claimed up front would age while earlier items are delivered, and another
+/// instance's sweeper would turn the last claims into `unknown` although they were never sent.
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn cp7b_worker_tick_holds_one_claim_at_a_time(pool: PgPool) {
+    const INTENTS: usize = 20;
+    let fx = fixture(&pool).await;
+    let mut ids = Vec::new();
+    for i in 0..INTENTS {
+        ids.push(transient_jira(&pool, &fx, &format!("cp7b-lease-{i:04}")).await);
+    }
+    let admin = tok(&pool, fx.admin).await;
+    simulate(&pool, fx.a, &admin, "jira", "success").await;
+    for id in &ids {
+        make_due(&pool, *id).await;
+    }
+
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observer = {
+        let pool = pool.clone();
+        let done = done.clone();
+        tokio::spawn(async move {
+            let mut max = 0i64;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                let n: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM integration_outbox WHERE claim_token IS NOT NULL",
+                )
+                .fetch_one(&pool)
+                .await?;
+                max = max.max(n);
+            }
+            Ok::<i64, sqlx::Error>(max)
+        })
+    };
+    let st = state(&pool);
+    let t = ok(outbox::run_once(&st).await, "tick");
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let max_in_flight = ok(ok(observer.await, "join"), "observer");
+    assert_eq!((t.claimed, t.settled), (INTENTS, INTENTS));
+    assert!(max_in_flight <= 1, "claims held at once: {max_in_flight}");
+    for id in &ids {
+        assert_eq!(row(&pool, *id).await.state, "success");
+    }
 }

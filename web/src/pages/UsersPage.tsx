@@ -1,17 +1,17 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
-import type { UserListItem } from '../api/types';
+import type { SetUserCompanyRequest, UserListItem } from '../api/types';
 import { Badge } from '../components/Badge';
 import { Button } from '../components/Button';
 import { DataTable } from '../components/DataTable';
 import { Dialog } from '../components/Dialog';
-import { TextField } from '../components/Field';
+import { SelectField, TextField } from '../components/Field';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { ErrorState, ForbiddenState, LoadingState } from '../components/States';
 import { initials } from '../app/labels';
 import { ACTIVE_FILTERS, MFA_RESET_REASON_MAX, userWriteError, validateMfaResetReason, type ActiveFilter, type UserWriteError } from '../app/users';
-import { ConfirmDialog, useLoad } from './adminKit';
+import { ConfirmDialog, GRANT_LABEL, ROLE_LABEL, useLoad } from './adminKit';
 
 /** A temporary password on screen: only while its dialog is open, never logged or kept after. */
 interface Secret { title: string; who: string; username: string; password: string }
@@ -45,8 +45,10 @@ const CONFIRM: Record<Pending['kind'], { title: (n: string) => string; impact: s
  * server decides access; this page only exists in the nav when the session says platformAdmin.
  */
 /** `mfaEnabled` false (server ITSM_MFA off, the default): no MFA badge and no Reset MFA. */
-export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
+export function UsersPage({ api, userId, mfaEnabled, onNotice, onWorkspacesChanged }: {
   api: Api; userId: string; mfaEnabled: boolean; onNotice: (t: string) => void;
+  /** CP5d: the caller's own company changed, so the header and workspace list must follow. */
+  onWorkspacesChanged?: () => void;
 }) {
   const [text, setText] = useState('');
   const [q, setQ] = useState('');
@@ -61,6 +63,7 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
   const [changed, setChanged] = useState<Record<string, UserListItem>>({});
   const [adding, setAdding] = useState(false);
   const [pending, setPending] = useState<Pending | null>(null);
+  const [placing, setPlacing] = useState<UserListItem | null>(null);
   const [actionError, setActionError] = useState<UserWriteError | null>(null);
   const [secret, setSecret] = useState<Secret | null>(null);
   const [reason, setReason] = useState('');
@@ -193,6 +196,12 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
                   },
                   { key: 'email', header: 'Email', cell: (u) => u.email ?? <span className="muted">—</span> },
                   {
+                    key: 'company', header: 'Perusahaan',
+                    cell: (u) => (u.company
+                      ? <span className="usr-company"><span>{u.company.name}</span><span className="tiny muted">{ROLE_LABEL[u.company.role]}</span></span>
+                      : <span className="muted">Belum ada perusahaan</span>),
+                  },
+                  {
                     key: 'status', header: 'Status',
                     cell: (u) => (
                       <div className="row">
@@ -208,8 +217,14 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
                 {
                   key: 'act', header: 'Aksi',
                   cell: (u) => {
-                    if (u.id === userId) return <span className="tiny muted">Pakai menu akun</span>;
                     if (!u.active) return <span className="tiny muted">—</span>;
+                    const place = (
+                      <Button className="btn-small" aria-label={`Atur perusahaan ${u.displayName}`}
+                        onClick={() => setPlacing(u)}>Atur perusahaan</Button>
+                    );
+                    if (u.id === userId) {
+                      return <div className="row usr-actions">{place}<span className="tiny muted">Sandi & MFA: menu akun</span></div>;
+                    }
                     const ask = (kind: Pending['kind']) => {
                       setActionError(null); setReason(''); setReasonError(undefined); setPending({ kind, user: u });
                     };
@@ -225,6 +240,7 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
                           <Button className="btn-small" aria-label={`Reset kata sandi ${u.displayName}`}
                             onClick={() => ask('reset')}>Reset kata sandi</Button>
                         )}
+                        {place}
                         <Button className="btn-small" aria-label={`Nonaktifkan ${u.displayName}`}
                           onClick={() => ask('deactivate')}>Nonaktifkan</Button>
                       </div>
@@ -272,8 +288,102 @@ export function UsersPage({ api, userId, mfaEnabled, onNotice }: {
           {actionError && <p role="alert" className="auth-error">{actionError.text}</p>}
         </ConfirmDialog>
       )}
+      {placing && (
+        <CompanyDialog api={api} user={placing} self={placing.id === userId} onClose={() => setPlacing(null)} onSaved={(r) => {
+          setPlacing(null);
+          setChanged((c) => ({ ...c, [r.user.id]: r.user }));
+          const where = r.user.company?.name ?? 'perusahaan tujuan';
+          onNotice(r.changed ? `${r.user.displayName} sekarang di ${where}. Tercatat di audit.` : `${r.user.displayName} sudah di ${where}; tidak ada yang berubah.`);
+          if (r.changed && r.user.id === userId) onWorkspacesChanged?.();
+        }} />
+      )}
       {secret && <TemporaryPasswordDialog secret={secret} onClose={() => setSecret(null)} />}
     </>
+  );
+}
+
+const GRANTS = Object.keys(GRANT_LABEL) as SetUserCompanyRequest['grants'];
+
+/**
+ * CP5d: the platform admin places a user (themselves included) in one company with a role and
+ * administration grants. The server deactivates the other memberships and audits every change.
+ */
+function CompanyDialog({ api, user, self, onClose, onSaved }: {
+  api: Api;
+  user: UserListItem;
+  self: boolean;
+  onClose: () => void;
+  onSaved: (r: Awaited<ReturnType<Api['setUserCompany']>>) => void;
+}) {
+  const companies = useLoad((s) => api.listPlatformCompanies(s), 'companies');
+  const [workspaceId, setWorkspaceId] = useState(user.company?.workspaceId ?? '');
+  const [role, setRole] = useState<SetUserCompanyRequest['role']>(user.company?.role ?? 'cs');
+  const [grants, setGrants] = useState<SetUserCompanyRequest['grants']>(user.company?.grants ?? []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<UserWriteError | null>(null);
+  const formId = useId();
+  const items = companies.data?.items ?? [];
+  const target = items.find((c) => c.workspaceId === workspaceId);
+  const moving = !!user.company && !!target && user.company.workspaceId !== target.workspaceId;
+
+  async function submit() {
+    if (busy || !workspaceId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      onSaved(await api.setUserCompany(user.id, { workspaceId, role, grants }));
+    } catch (e) {
+      setError(userWriteError(e, 'company'));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open onClose={busy ? () => undefined : onClose} title={`Atur perusahaan ${user.displayName}`} initialFocus="select"
+      footer={(
+        <>
+          <Button onClick={onClose} disabled={busy}>Batal</Button>
+          <Button type="submit" form={formId} variant="primary" disabled={busy || !workspaceId} aria-busy={busy}>
+            {busy ? 'Menyimpan…' : 'Simpan'}
+          </Button>
+        </>
+      )}>
+      {companies.error ? (
+        <p role="alert" className="auth-error">Daftar perusahaan belum dapat dimuat. Tutup lalu coba lagi.</p>
+      ) : !companies.data ? <LoadingState label="Memuat perusahaan…" /> : (
+        <form id={formId} className="formgrid" noValidate onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+          <SelectField className="full" label="Perusahaan" name="workspaceId" required value={workspaceId} disabled={busy}
+            onChange={(e) => setWorkspaceId(e.target.value)}
+            hint="Satu pengguna hanya di satu perusahaan; keanggotaan di perusahaan lain dinonaktifkan.">
+            {!workspaceId && <option value="">Pilih perusahaan…</option>}
+            {items.map((c) => <option key={c.workspaceId} value={c.workspaceId}>{c.name} ({c.code})</option>)}
+          </SelectField>
+          <SelectField className="full" label="Peran" name="role" value={role} disabled={busy}
+            onChange={(e) => setRole(e.target.value as SetUserCompanyRequest['role'])}>
+            {(['cs', 'lead_cs'] as const).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+          </SelectField>
+          <fieldset className="full usr-grants">
+            <legend>Hak tambahan</legend>
+            {GRANTS.map((g) => (
+              <label key={g} className="check">
+                <input type="checkbox" checked={grants.includes(g)} disabled={busy}
+                  onChange={(e) => setGrants((cur) => (e.target.checked ? [...cur, g] : cur.filter((x) => x !== g)))} />
+                {GRANT_LABEL[g]}
+              </label>
+            ))}
+          </fieldset>
+        </form>
+      )}
+      {moving && (
+        <p className="tiny" role="note">
+          Pindah dari {user.company?.name} ke {target?.name}: keanggotaan dan hak di {user.company?.name} dicabut;
+          peran dan hak tambahan di {target?.name} menjadi persis yang dipilih di atas.
+          {self ? ' Tampilan Anda akan berpindah ke perusahaan baru setelah disimpan.' : ''}
+        </p>
+      )}
+      <p className="tiny muted">Bila diminta, verifikasi ulang dengan kode autentikator Anda. Setiap perubahan tercatat di audit.</p>
+      {error && <p role="alert" className="auth-error">{error.text}</p>}
+    </Dialog>
   );
 }
 

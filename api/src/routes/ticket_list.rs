@@ -268,6 +268,35 @@ impl TicketQuery {
         })
     }
 
+    /// True when `push_scope(.., false)` selects every ticket of the workspace, i.e. only
+    /// the status filter (if any) narrows the result. Every field is named so that a new
+    /// filter does not compile until it is classified here.
+    fn whole_workspace(&self) -> bool {
+        let TicketQuery {
+            q,
+            status: _,
+            owner,
+            channel,
+            category,
+            priority,
+            priority_unset,
+            received_from,
+            received_before,
+            resolved_from,
+            resolved_before,
+            sort: _,
+            order: _,
+        } = self;
+        q.is_none()
+            && [*owner, *channel, *category].iter().all(|d| *d == Dim::Any)
+            && priority.is_none()
+            && !priority_unset
+            && received_from.is_none()
+            && received_before.is_none()
+            && resolved_from.is_none()
+            && resolved_before.is_none()
+    }
+
     fn resolved_filter(&self) -> bool {
         self.resolved_from.is_some() || self.resolved_before.is_some()
     }
@@ -890,30 +919,64 @@ pub(crate) async fn validate(
     }
 }
 
-async fn count(conn: &mut PgConnection, ws: Uuid, f: &TicketQuery) -> Result<i64, AppError> {
-    let mut b = QueryBuilder::<Postgres>::new("SELECT count(*) FROM tickets t");
-    push_scope(&mut b, ws, f, true);
-    Ok(b.build_query_scalar().fetch_one(&mut *conn).await?)
+/// Tickets per status in the scope WITHOUT the status filter (one pass over the scope).
+/// The filtered total and the board column totals are sums of these, read in the same
+/// snapshot, so no second count over the same rows is needed (CP7c: at 500k tickets per
+/// workspace each extra count cost a full index pass per request).
+struct StatusCounts(BTreeMap<String, i64>);
+
+impl StatusCounts {
+    async fn load(conn: &mut PgConnection, ws: Uuid, f: &TicketQuery) -> Result<Self, AppError> {
+        if f.whole_workspace() {
+            let rows = workspace_status_counts(conn, ws).await?;
+            return Ok(StatusCounts(rows.into_iter().collect()));
+        }
+        let mut b =
+            QueryBuilder::<Postgres>::new("SELECT t.workflow_status, count(*) FROM tickets t");
+        push_scope(&mut b, ws, f, false);
+        b.push(" GROUP BY t.workflow_status");
+        let rows: Vec<(String, i64)> = b.build_query_as().fetch_all(&mut *conn).await?;
+        Ok(StatusCounts(rows.into_iter().collect()))
+    }
+
+    fn of(&self, s: TicketStatus) -> i64 {
+        self.0.get(s.code()).copied().unwrap_or(0)
+    }
+
+    /// Tickets matching `f` including its status filter.
+    fn total(&self, f: &TicketQuery) -> i64 {
+        match &f.status {
+            Some(selected) => selected.iter().map(|s| self.of(*s)).sum(),
+            None => self.0.values().sum(),
+        }
+    }
+
+    fn views(&self) -> Vec<StatusCountView> {
+        TicketStatus::ALL
+            .into_iter()
+            .filter(|s| *s != TicketStatus::Closed || self.0.contains_key(s.code()))
+            .map(|s| StatusCountView {
+                status: s.into(),
+                count: self.of(s),
+            })
+            .collect()
+    }
 }
 
-async fn counts_by_status(
+/// Tickets per status of the whole workspace from the trigger-maintained counters
+/// (migration 0030), in the caller's snapshot. Statuses without tickets are omitted, as in
+/// a `GROUP BY` over the tickets.
+pub(crate) async fn workspace_status_counts(
     conn: &mut PgConnection,
     ws: Uuid,
-    f: &TicketQuery,
-) -> Result<Vec<StatusCountView>, AppError> {
-    let mut b = QueryBuilder::<Postgres>::new("SELECT t.workflow_status, count(*) FROM tickets t");
-    push_scope(&mut b, ws, f, false);
-    b.push(" GROUP BY t.workflow_status");
-    let rows: Vec<(String, i64)> = b.build_query_as().fetch_all(&mut *conn).await?;
-    let by: BTreeMap<String, i64> = rows.into_iter().collect();
-    Ok(TicketStatus::ALL
-        .into_iter()
-        .filter(|s| *s != TicketStatus::Closed || by.contains_key(s.code()))
-        .map(|s| StatusCountView {
-            status: s.into(),
-            count: by.get(s.code()).copied().unwrap_or(0),
-        })
-        .collect())
+) -> Result<Vec<(String, i64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT workflow_status, sum(n)::bigint FROM ticket_status_counts \
+         WHERE workspace_id = $1 GROUP BY 1 HAVING sum(n) <> 0",
+    )
+    .bind(ws)
+    .fetch_all(conn)
+    .await
 }
 
 async fn resolution_events(
@@ -1014,8 +1077,9 @@ pub async fn list(
 
     let mut tx = snapshot(&state).await?;
     validate(&mut tx, ws, &f).await?;
-    let total = count(&mut tx, ws, &f).await?;
-    let counts = counts_by_status(&mut tx, ws, &f).await?;
+    let by_status = StatusCounts::load(&mut tx, ws, &f).await?;
+    let total = by_status.total(&f);
+    let counts = by_status.views();
     let events = resolution_events(&mut tx, ws, &f).await?;
     let (items, next_cursor) = page(&mut tx, &access, &f, after, limit).await?;
     let as_of = as_of(&mut tx).await?;
@@ -1051,7 +1115,8 @@ pub async fn board(
 
     let mut tx = snapshot(&state).await?;
     validate(&mut tx, ws, &f).await?;
-    let counts = counts_by_status(&mut tx, ws, &f).await?;
+    let by_status = StatusCounts::load(&mut tx, ws, &f).await?;
+    let counts = by_status.views();
     let selected: Vec<TicketStatus> = match &f.status {
         Some(v) => TicketStatus::ALL
             .into_iter()
@@ -1066,7 +1131,7 @@ pub async fn board(
     let mut total = 0;
     for s in selected {
         let cf = f.with_status(s);
-        let n = count(&mut tx, ws, &cf).await?;
+        let n = by_status.of(s);
         let (items, next_cursor) = page(&mut tx, &access, &cf, None, limit).await?;
         total += n;
         columns.push(BoardColumn {
@@ -1305,6 +1370,28 @@ pub async fn transition(
     .bind(b.version + 1)
     .execute(&mut *tx)
     .await?;
+    // CP6a: move every linked Jira issue whose connection maps the new status, in the same
+    // transaction (the outbox worker delivers; Jira never changes the ticket status back).
+    let jira_intents = sqlx::query_scalar::<_, i64>(
+        "WITH q AS (INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, \
+           operation, related_work_id, idempotency_key, correlation_id, target_ticket_status) \
+         SELECT r.workspace_id, r.ticket_id, ji.connection_id, 'jira', 'jira_transition_issue', r.id, \
+           r.ticket_id::text || ':jira_transition:' || r.id::text || ':' || gen_random_uuid()::text, \
+           $4, $3 \
+         FROM related_work r \
+         JOIN jira_issues ji ON ji.workspace_id = r.workspace_id AND ji.id = r.jira_issue_id \
+         JOIN integration_connections c ON c.workspace_id = ji.workspace_id AND c.id = ji.connection_id \
+         WHERE r.workspace_id = $1 AND r.ticket_id = $2 AND c.state = 'active' AND c.mode = $5 \
+           AND length(c.config -> 'statusMap' ->> $3) > 0 \
+         RETURNING 1) SELECT count(*) FROM q",
+    )
+    .bind(access.workspace_id)
+    .bind(ticket_id)
+    .bind(to.code())
+    .bind(correlation(&headers))
+    .bind(state.config.integrations.mode.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
     let audit_id = audit(
         &mut tx,
         &access,
@@ -1317,6 +1404,7 @@ pub async fn transition(
             "cycleNo": cycle,
             "version": b.version + 1,
             "resolutionEventId": event_id,
+            "jiraTransitions": jira_intents,
         }),
         correlation(&headers),
     )

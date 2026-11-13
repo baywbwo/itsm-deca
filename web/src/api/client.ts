@@ -21,6 +21,10 @@ import {
   isCatalogEntryResult,
   isIntegrationList,
   isIntegrationResult,
+  isWebhookSecretResult,
+  isJiraOptions,
+  isDirectorySyncResult,
+  isJiraUserList,
   isAiSettingsView,
   isAiProviderView,
   isMcpServerView,
@@ -50,6 +54,14 @@ import {
   isUserCreated,
   isUserDeactivated,
   isUserList,
+  isCompanyOptionList,
+  isUserCompanySet,
+  isSsoOverview,
+  isSsoProviderResult,
+  isSsoTestResult,
+  isSsoIdentityList,
+  isSsoIdentityLinked,
+  isSsoIdentityUnlinked,
   isMfaStatus,
   isMfaEnrollment,
   isRecoveryCodes,
@@ -109,6 +121,12 @@ import type {
   IntegrationCreateRequest,
   IntegrationPatchRequest,
   IntegrationResult,
+  WebhookSecretResult,
+  IntegrationConfigRequest,
+  IntegrationCredentialRequest,
+  JiraOptions,
+  DirectorySyncResult,
+  JiraUserList,
   VersionRequest,
   Meta,
   SavedView,
@@ -132,6 +150,16 @@ import type {
   UserCreated,
   UserDeactivated,
   UserList,
+  CompanyOptionList,
+  SetUserCompanyRequest,
+  UserCompanySet,
+  SsoOverview,
+  SsoProviderResult,
+  SsoSettingsRequest,
+  SsoTestResult,
+  SsoIdentityList,
+  SsoIdentityLinked,
+  SsoIdentityUnlinked,
   MfaStatus,
   MfaEnrollment,
   RecoveryCodes,
@@ -370,6 +398,7 @@ export function createApi(transport: Transport) {
   const get = <T>(path: string, guard: Guard<T>, signal?: AbortSignal) =>
     call({ method: 'GET', path, headers: {}, signal }, guard);
   const ws = (id: string) => `/api/v1/workspaces/${encodeURIComponent(id)}`;
+  const sso = (companyId: string) => `/api/v1/platform/companies/${encodeURIComponent(companyId)}/sso`;
   const csrf = (): Record<string, string> => (csrfToken ? { 'X-CSRF-Token': csrfToken } : {});
 
   return {
@@ -655,7 +684,7 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants/revoke`, headers: csrf(), body,
       }, isMemberResult),
-    /** Simulated connections only: no provider is contacted and no credential exists. */
+    /** Jira/Lark connections. `integrationsMode` says whether the server talks to the providers (live). */
     listIntegrations: (id: string, signal?: AbortSignal): Promise<IntegrationList> =>
       get(`${ws(id)}/integrations`, isIntegrationList, signal),
     createIntegration: (id: string, body: IntegrationCreateRequest): Promise<IntegrationResult> =>
@@ -669,6 +698,40 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/${step}`, headers: csrf(), body,
       }, isIntegrationResult),
+    /** Non-secret settings and mappings; changing the target returns the connection to draft. */
+    configureIntegration: (id: string, connectionId: string, body: IntegrationConfigRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PUT', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/config`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Write-only secret (Jira API token / Lark app secret); never returned. */
+    putIntegrationCredential: (id: string, connectionId: string, body: IntegrationCredentialRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'PUT', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/credential`, headers: csrf(), body,
+      }, isIntegrationResult),
+    deleteIntegrationCredential: (id: string, connectionId: string, body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'DELETE', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/credential`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** CP6a: new inbound Jira webhook secret; the value is in this response only, never again. */
+    rotateWebhookSecret: (id: string, connectionId: string, body: VersionRequest): Promise<WebhookSecretResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/webhook-secret`, headers: csrf(), body,
+      }, isWebhookSecretResult),
+    deleteWebhookSecret: (id: string, connectionId: string, body: VersionRequest): Promise<IntegrationResult> =>
+      call({
+        method: 'DELETE', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/webhook-secret`, headers: csrf(), body,
+      }, isIntegrationResult),
+    /** Jira issue types, priorities and statuses read from Jira (live only). */
+    getJiraOptions: (id: string, connectionId: string, signal?: AbortSignal): Promise<JiraOptions> =>
+      get(`${ws(id)}/integrations/${encodeURIComponent(connectionId)}/options`, isJiraOptions, signal),
+    /** Reads the Lark chats the bot belongs to as intake destinations (live only). */
+    syncLarkChats: (id: string, connectionId: string): Promise<DirectorySyncResult> =>
+      call({
+        method: 'POST', path: `${ws(id)}/integrations/${encodeURIComponent(connectionId)}/directory/sync`, headers: csrf(),
+      }, isDirectorySyncResult),
+    /** Jira users assignable in the configured project (live only; 2..100 chars). */
+    searchJiraUsers: (id: string, query: string, signal?: AbortSignal): Promise<JiraUserList> =>
+      get(`${ws(id)}/intake/jira-users?query=${encodeURIComponent(query)}`, isJiraUserList, signal),
     /**
      * CP3b platform user directory (platform_admin only; 403 otherwise). `active` is
      * `true`/`false`/`all`; the cursor is only valid for the same search and filter.
@@ -702,6 +765,35 @@ export function createApi(transport: Transport) {
     unlockUser: async (userId: string): Promise<void> => {
       await call({ method: 'POST', path: `/api/v1/users/${encodeURIComponent(userId)}/unlock`, headers: csrf() }, isEmpty, 204);
     },
+    /** CP5d: active companies a platform admin can place a user in. */
+    listPlatformCompanies: (signal?: AbortSignal): Promise<CompanyOptionList> =>
+      get('/api/v1/platform/companies', isCompanyOptionList, signal),
+    /** CP5d: sets the user's one company, role and grants (other memberships are deactivated; audited). */
+    setUserCompany: (userId: string, body: SetUserCompanyRequest): Promise<UserCompanySet> =>
+      call({
+        method: 'PUT', path: `/api/v1/users/${encodeURIComponent(userId)}/company`, headers: csrf(), body,
+      }, isUserCompanySet),
+    /** CP5c: every company with its IdP and the server's SSO settings (platform_admin). */
+    getPlatformSso: (signal?: AbortSignal): Promise<SsoOverview> =>
+      get('/api/v1/platform/sso', isSsoOverview, signal),
+    /** CP5c: creates (version null, 201) or updates the company's IdP. A move needs a new test. */
+    saveCompanySso: (companyId: string, body: SsoSettingsRequest): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}`, headers: csrf(), body }, isSsoProviderResult, [200, 201]),
+    /** CP5c: write-only client secret (sealed on the server; never returned). */
+    setCompanySsoSecret: (companyId: string, secret: string, version: number): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}/secret`, headers: csrf(), body: { secret, version } }, isSsoProviderResult),
+    testCompanySso: (companyId: string, version: number): Promise<SsoTestResult> =>
+      call({ method: 'POST', path: `${sso(companyId)}/test`, headers: csrf(), body: { version } }, isSsoTestResult),
+    setCompanySsoEnabled: (companyId: string, enabled: boolean, version: number): Promise<SsoProviderResult> =>
+      call({ method: 'PUT', path: `${sso(companyId)}/enabled`, headers: csrf(), body: { enabled, version } }, isSsoProviderResult),
+    listCompanySsoIdentities: (companyId: string, q: string, signal?: AbortSignal): Promise<SsoIdentityList> =>
+      get(`${sso(companyId)}/identities${withParam('', 'q', q.trim() || null)}`, isSsoIdentityList, signal),
+    linkCompanySsoIdentity: (companyId: string, userId: string, subject: string): Promise<SsoIdentityLinked> =>
+      call({ method: 'POST', path: `${sso(companyId)}/identities`, headers: csrf(), body: { userId, subject } }, isSsoIdentityLinked, 201),
+    unlinkCompanySsoIdentity: (companyId: string, identityId: string): Promise<SsoIdentityUnlinked> =>
+      call({
+        method: 'DELETE', path: `${sso(companyId)}/identities/${encodeURIComponent(identityId)}`, headers: csrf(),
+      }, isSsoIdentityUnlinked),
     /** D18 — setelan LLM & MCP. Tidak ada kunci yang dikirim/diterima; hanya nama variabel lingkungan. */
     getAiSettings: (id: string, signal?: AbortSignal): Promise<AiSettingsView> =>
       get(`${ws(id)}/ai-settings`, isAiSettingsView, signal),

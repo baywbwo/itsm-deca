@@ -31,8 +31,13 @@ pub async fn run(pool: &PgPool, cfg: &Config) -> Result<(), String> {
     Ok(())
 }
 
-/// Creates the first local administrator: admin grants in every active workspace plus the
-/// `platform_admin` grant, so this account can create and manage the other users (US-1.3).
+/// Company code of the bootstrap administrator's home membership (owner, 2026-11-13).
+pub const HOME_COMPANY: &str = "DOB";
+
+/// Creates the first local administrator: the `platform_admin` grant, so this account can create
+/// users and assign their company (US-1.3, CP5d), plus one home membership with every
+/// administration grant. CP5a gives a user exactly one company; the home company is DOB
+/// (`HOME_COMPANY`), else the first active workspace by code.
 pub async fn bootstrap(
     pool: &PgPool,
     cfg: &Config,
@@ -111,7 +116,7 @@ pub async fn bootstrap(
         .map_err(|e| e.to_string())?;
     if expected == "operational" {
         for (code, name, brand) in [
-            ("DOB", "DOB", "deca"),
+            (HOME_COMPANY, "PT Delta Omega Beta", "deca"),
             ("AJR", "PT Asia Jaya Remindo", "ajr"),
             ("BMT", "BMT", "bmt"),
         ] {
@@ -137,16 +142,26 @@ pub async fn bootstrap(
         .fetch_all(&mut *tx)
         .await
         .map_err(|e| e.to_string())?;
+    let home: Uuid = sqlx::query_scalar(
+        "SELECT id FROM workspaces WHERE active ORDER BY (code = $1) DESC, code LIMIT 1",
+    )
+    .bind(HOME_COMPANY)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or("no active workspace")?;
     for ws in workspaces {
-        let member:Uuid=sqlx::query_scalar("INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,'lead_cs') RETURNING id").bind(ws).bind(user).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
-        for grant in [
-            "admin.members",
-            "admin.settings",
-            "integration.manage",
-            "integration.credentials",
-            "integration.recovery",
-        ] {
-            sqlx::query("INSERT INTO workspace_grants(workspace_id,membership_id,grant_code,granted_by) VALUES($1,$2,$3,$4)").bind(ws).bind(member).bind(grant).bind(user).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        if ws == home {
+            let member:Uuid=sqlx::query_scalar("INSERT INTO workspace_memberships(workspace_id,user_id,role) VALUES($1,$2,'lead_cs') RETURNING id").bind(ws).bind(user).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+            for grant in [
+                "admin.members",
+                "admin.settings",
+                "integration.manage",
+                "integration.credentials",
+                "integration.recovery",
+            ] {
+                sqlx::query("INSERT INTO workspace_grants(workspace_id,membership_id,grant_code,granted_by) VALUES($1,$2,$3,$4)").bind(ws).bind(member).bind(grant).bind(user).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+            }
         }
         if expected == "operational" {
             for (table, entries) in [

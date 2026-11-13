@@ -187,7 +187,11 @@ pub async fn add(
 
 /// CP5a: one company per user. An active membership elsewhere would never open (the server
 /// picks one home company, `home_membership_sql!`), so refuse it instead of keeping a dead row.
-async fn one_company(conn: &mut sqlx::PgConnection, user: Uuid, ws: Uuid) -> Result<(), AppError> {
+pub(crate) async fn one_company(
+    conn: &mut sqlx::PgConnection,
+    user: Uuid,
+    ws: Uuid,
+) -> Result<(), AppError> {
     let elsewhere: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM workspace_memberships m \
          JOIN workspaces w ON w.id = m.workspace_id \

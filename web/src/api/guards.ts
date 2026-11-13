@@ -1,6 +1,15 @@
 // Runtime checks at the network boundary. The compile-time types are generated; these
 // only make sure an unexpected payload fails loudly instead of rendering garbage.
 import type {
+  SsoCompany,
+  SsoIdentity,
+  SsoIdentityLinked,
+  SsoIdentityList,
+  SsoIdentityUnlinked,
+  SsoOverview,
+  SsoProvider,
+  SsoProviderResult,
+  SsoTestResult,
   ActivityPage,
   AttachmentUploaded,
   ConversationPanel,
@@ -31,10 +40,14 @@ import type {
   CatalogEntryResult,
   IntegrationConnection,
   IntegrationList,
+  JiraOptions,
+  DirectorySyncResult,
+  JiraUserList,
   AiSettingsView,
   AiProviderView,
   McpServerView,
   IntegrationResult,
+  WebhookSecretResult,
   Meta,
   PermissionCode,
   SavedView,
@@ -54,6 +67,9 @@ import type {
   UserDeactivated,
   UserList,
   UserListItem,
+  HomeCompany,
+  CompanyOptionList,
+  UserCompanySet,
   Workspace,
   WorkspacePermissions,
   MfaStatus,
@@ -82,6 +98,9 @@ export function isMeta(v: unknown): v is Meta {
   if (v.environment !== 'uat' && v.environment !== 'production') return false;
   if (v.accessMode !== 'uat_superadmin' && v.accessMode !== 'sso' && v.accessMode !== 'password') return false;
   if (!isStrOrNull(v.banner)) return false;
+  // CP5c: absent from an older server = no SSO offered.
+  if (v.sso !== undefined && !isBool(v.sso)) return false;
+  if (v.passwordAdminOnly !== undefined && !isBool(v.passwordAdminOnly)) return false;
   const uat = v.uat;
   if (uat === undefined || uat === null) return true;
   return (
@@ -262,11 +281,13 @@ export const isSavedViewList = (v: unknown): v is { items: SavedView[] } =>
 export const isEmpty = (v: unknown): v is null => v === null;
 
 const SYNC_STATES = ['pending', 'success', 'failed', 'unknown'];
+const isMode = (v: unknown) => v === 'simulation' || v === 'live';
 export const isIntegrationSync = (v: unknown): v is IntegrationSync =>
   isObj(v) && isStr(v.id) && (v.provider === 'jira' || v.provider === 'lark') && isStr(v.operation) &&
   SYNC_STATES.includes(v.state as string) && isNum(v.attempt) && isStrOrNull(v.targetLabel ?? null) &&
   isStrOrNull(v.issueKey ?? null) && isStrOrNull(v.safeError ?? null) && typeof v.reconciled === 'boolean' &&
-  isStr(v.updatedAt) && v.mode === 'simulation' && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isStr(v.updatedAt) && isMode(v.mode) && isStrOrNull(v.nextAttemptAt ?? null) &&
+  isStrOrNull(v.issueUrl ?? null) && isStrOrNull(v.targetStatus ?? null) &&
   isNum(v.autoAttempts) && typeof v.inFlight === 'boolean';
 
 export const isTicketCreateResult = (v: unknown): v is TicketCreateResult =>
@@ -278,12 +299,13 @@ export const isTicketIntegrations = (v: unknown): v is TicketIntegrations =>
 export const isOutboxRecoveryResult = (v: unknown): v is OutboxRecoveryResult =>
   isObj(v) && isIntegrationSync(v.item) && isStr(v.auditEventId);
 
-const isEntry = (e: unknown) => isObj(e) && isStr(e.id) && isStr(e.displayName) && e.source === 'dummy';
+const isEntry = (e: unknown) => isObj(e) && isStr(e.id) && isStr(e.displayName) && isStr(e.source);
 const isProvider = (p: unknown) =>
-  p === null || (isObj(p) && isStr(p.connectionId) && isStr(p.displayName) && p.mode === 'simulation' &&
-    isStr(p.state) && SYNC_STATES.includes(p.simulatedOutcome as string) && isNum(p.version) && isArr(p.options, isEntry));
+  p === null || (isObj(p) && isStr(p.connectionId) && isStr(p.displayName) && isMode(p.mode) &&
+    isStr(p.state) && isStr(p.simulatedOutcome) && isNum(p.version) && typeof p.usable === 'boolean' &&
+    isArr(p.options, isEntry));
 export const isIntakeDirectory = (v: unknown): v is IntakeDirectory =>
-  isObj(v) && isStr(v.workspaceId) && isProvider(v.jira) && isProvider(v.lark) && isArr(v.merchants, isEntry);
+  isObj(v) && isStr(v.workspaceId) && isMode(v.integrationsMode) && isProvider(v.jira) && isProvider(v.lark) && isArr(v.merchants, isEntry);
 
 const isPersonOrNull = (p: unknown) => p === undefined || p === null || (isObj(p) && isStr(p.id) && isStr(p.label));
 export const isAssignmentHistory = (v: unknown): v is AssignmentHistory =>
@@ -325,8 +347,12 @@ export const isActivityPage = (v: unknown): v is ActivityPage =>
   isArr(v.items, (i) => isObj(i) && isStr(i.id) && isStr(i.at) && isStr(i.action) && isStr(i.label) && isRefOrNull(i.actor));
 
 // D08b follow-up: notes, read-only conversation panel, attachment upload, idempotent related work.
+const NOTE_KINDS = ['note', 'jira_comment', 'jira_status', 'jira_assignee'];
+/** An officer note has an ITSM author; a Jira entry (CP6a) has only the name Jira sent. */
 const isNote = (n: unknown) =>
-  isObj(n) && isStr(n.id) && isStr(n.body) && isRefOrNull(n.author) && n.author !== null && isStr(n.createdAt);
+  isObj(n) && isStr(n.id) && isStr(n.body) && isStr(n.createdAt) && NOTE_KINDS.includes(n.kind as string) &&
+  isRefOrNull(n.author) && isStrOrNull(n.externalAuthor ?? null) &&
+  (n.kind === 'note' ? n.author !== null : n.author === null && isStr(n.externalAuthor));
 export const isNotePage = (v: unknown): v is NotePage =>
   isObj(v) && isStrOrNull(v.nextCursor) && isArr(v.items, isNote);
 export const isNoteCreated = (v: unknown): v is NoteCreated =>
@@ -372,11 +398,19 @@ export const isCatalogEntryResult = (v: unknown): v is CatalogEntryResult =>
 export const isMemberResult = (v: unknown): v is MemberResult => isObj(v) && isMember(v.item) && isStr(v.auditEventId);
 const isProviderCode = (v: unknown) => v === 'jira' || v === 'lark';
 const CONNECTION_STATES = ['draft', 'tested', 'active', 'disabled'];
+const isStrMap = (v: unknown) => isObj(v) && Object.values(v).every(isStr);
+const isSettings = (v: unknown) => isObj(v) &&
+  ['baseUrl', 'email', 'projectKey', 'issueTypeId', 'appId'].every((k) => isStrOrNull(v[k] ?? null)) &&
+  isStrMap(v.priorityMap) && isStrMap(v.statusMap);
+const isWebhook = (v: unknown) => isObj(v) && (v.state === 'missing' || v.state === 'stored') &&
+  isStrOrNull(v.updatedAt) && isStr(v.path) && isStrOrNull(v.url);
 const isConnection = (v: unknown): v is IntegrationConnection =>
-  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && v.mode === 'simulation' &&
+  isObj(v) && isStr(v.id) && isProviderCode(v.provider) && isStr(v.displayName) && isMode(v.mode) &&
   isStr(v.state) && CONNECTION_STATES.includes(v.state) && isStrOrNull(v.testedAt) && isStrOrNull(v.lastTestNote) &&
-  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) &&
-  v.credential === 'not_available' && v.mapping === 'not_available' &&
+  (v.lastTestOk === null || typeof v.lastTestOk === 'boolean') &&
+  isStr(v.simulatedOutcome) && isNum(v.version) && isNum(v.directoryCount) && isSettings(v.settings) &&
+  isObj(v.credential) && (v.credential.state === 'missing' || v.credential.state === 'stored') && isStrOrNull(v.credential.updatedAt) &&
+  (v.webhook === null || isWebhook(v.webhook)) &&
   isArr(v.recent, (r) => isObj(r) && isStr(r.action) && isStr(r.outcome) && isStr(r.occurredAt) && isStrOrNull(r.actor));
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -397,9 +431,19 @@ export const isAiSettingsView = (v: unknown): v is AiSettingsView =>
 
 export const isIntegrationList = (v: unknown): v is IntegrationList =>
   isObj(v) && isStr(v.workspaceId) && isArr(v.items, isConnection) && isArr(v.creatable, isProviderCode) &&
-  typeof v.canManageCredentials === 'boolean';
+  typeof v.canManageCredentials === 'boolean' && isMode(v.integrationsMode) && typeof v.keyringConfigured === 'boolean' &&
+  isArr(v.priorities, (p) => isObj(p) && isStr(p.code) && isStr(p.label)) && isArr(v.ticketStatuses, isStr);
+const isIdName = (v: unknown) => isObj(v) && isStr(v.id) && isStr(v.name);
+export const isJiraOptions = (v: unknown): v is JiraOptions =>
+  isObj(v) && isArr(v.issueTypes, isIdName) && isArr(v.priorities, isIdName) && isArr(v.statuses, isIdName);
+export const isDirectorySyncResult = (v: unknown): v is DirectorySyncResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId) && isNum(v.synced) && isNum(v.deactivated);
+export const isJiraUserList = (v: unknown): v is JiraUserList => isObj(v) && isArr(v.items, isEntry);
 export const isIntegrationResult = (v: unknown): v is IntegrationResult =>
   isObj(v) && isConnection(v.item) && isStr(v.auditEventId);
+export const isWebhookSecretResult = (v: unknown): v is WebhookSecretResult =>
+  isObj(v) && isConnection(v.item) && isStr(v.auditEventId) && isStr(v.secret) && /^[0-9a-f]{64}$/.test(v.secret) &&
+  isStr(v.path) && isStrOrNull(v.url);
 
 // --- D10 reports -------------------------------------------------------------
 const isReportBasis = (v: unknown) => v === 'received' || v === 'resolved';
@@ -460,7 +504,19 @@ const isTemp = (v: unknown) => isStr(v) && v.length > 0;
 export const isUserListItem = (v: unknown): v is UserListItem =>
   isObj(v) && isStr(v.id) && isStrOrNull(v.username) && isStr(v.displayName) && isStrOrNull(v.email) &&
   isBool(v.active) && isBool(v.mustChangePassword) && isBool(v.locked) && isBool(v.platformAdmin) &&
-  isBool(v.mfaEnrolled) && isStr(v.createdAt) && isStrOrNull(v.deactivatedAt);
+  isBool(v.mfaEnrolled) && isStr(v.createdAt) && isStrOrNull(v.deactivatedAt) &&
+  (v.company === null || isHomeCompany(v.company));
+
+// CP5d: the user's one company (home membership) and the companies a platform admin can pick from.
+export const isHomeCompany = (v: unknown): v is HomeCompany =>
+  isObj(v) && isStr(v.workspaceId) && isStr(v.code) && isStr(v.name) && (v.role === 'cs' || v.role === 'lead_cs') &&
+  isArr(v.grants, isGrant);
+
+export const isCompanyOptionList = (v: unknown): v is CompanyOptionList =>
+  isObj(v) && isArr(v.items, (c) => isObj(c) && isStr(c.workspaceId) && isStr(c.code) && isStr(c.name));
+
+export const isUserCompanySet = (v: unknown): v is UserCompanySet =>
+  isObj(v) && isUserListItem(v.user) && isBool(v.changed) && isStrOrNull(v.auditEventId);
 
 export const isUserList = (v: unknown): v is UserList =>
   isObj(v) && isArr(v.items, isUserListItem) && isStrOrNull(v.nextCursor);
@@ -482,3 +538,33 @@ export const isMfaEnrollment = (v: unknown): v is MfaEnrollment =>
 
 export const isRecoveryCodes = (v: unknown): v is RecoveryCodes =>
   isObj(v) && isArr(v.recoveryCodes, isStr) && (v.recoveryCodes as unknown[]).length === 10;
+
+// CP5c company SSO administration. The client secret never comes back (only secretSet).
+const isSsoMapping = (m: unknown) => isObj(m) && isStr(m.group) && (m.role === 'cs' || m.role === 'lead_cs');
+export const isSsoProvider = (v: unknown): v is SsoProvider =>
+  isObj(v) && isStr(v.id) && isStr(v.displayName) && isStr(v.issuer) && isStr(v.clientId) &&
+  isBool(v.secretSet) && isStrOrNull(v.secretUpdatedAt) && isArr(v.emailDomains, isStr) &&
+  isArr(v.extraHosts, isStr) && isStr(v.groupClaim) && isArr(v.roleMapping, isSsoMapping) &&
+  isBool(v.syncRoles) && isBool(v.enabled) && (v.lastTestOk === null || isBool(v.lastTestOk)) &&
+  isStrOrNull(v.lastTestedAt) && isNum(v.version) && !('secret' in v);
+const isSsoCompany = (v: unknown): v is SsoCompany =>
+  isObj(v) && isStr(v.companyId) && isStr(v.workspaceId) && isStr(v.code) && isStr(v.name) &&
+  isBool(v.active) && isNum(v.identities) && (v.provider === null || isSsoProvider(v.provider));
+export const isSsoOverview = (v: unknown): v is SsoOverview =>
+  isObj(v) && isArr(v.items, isSsoCompany) && isObj(v.server) &&
+  (v.server.auth === 'password' || v.server.auth === 'sso' || v.server.auth === 'both') &&
+  isStrOrNull(v.server.redirectUri) && isBool(v.server.keyring) && isBool(v.server.lab);
+export const isSsoProviderResult = (v: unknown): v is SsoProviderResult =>
+  isObj(v) && isSsoProvider(v.item) && isStr(v.auditEventId);
+export const isSsoTestResult = (v: unknown): v is SsoTestResult =>
+  isObj(v) && isSsoProvider(v.item) && isStr(v.auditEventId) && isObj(v.result) && isBool(v.result.ok) &&
+  isStrOrNull(v.result.stage) && isStrOrNull(v.result.code);
+const isSsoIdentity = (v: unknown): v is SsoIdentity =>
+  isObj(v) && isStr(v.id) && isStr(v.userId) && isStr(v.displayName) && isStrOrNull(v.email) &&
+  isBool(v.userActive) && isStr(v.subject) && isBool(v.provisioned) && isStr(v.createdAt) && isStrOrNull(v.lastLoginAt);
+export const isSsoIdentityList = (v: unknown): v is SsoIdentityList =>
+  isObj(v) && isArr(v.items, isSsoIdentity) && isNum(v.total);
+export const isSsoIdentityLinked = (v: unknown): v is SsoIdentityLinked =>
+  isObj(v) && isSsoIdentity(v.item) && isStr(v.auditEventId);
+export const isSsoIdentityUnlinked = (v: unknown): v is SsoIdentityUnlinked =>
+  isObj(v) && isStr(v.id) && isStr(v.auditEventId);

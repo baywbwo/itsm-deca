@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError, createApi, type TransportRequest, type TransportResponse } from './client';
-import { isSession, isTemporaryPassword, isUserCreated, isUserList } from './guards';
+import { isCompanyOptionList, isSession, isTemporaryPassword, isUserCompanySet, isUserCreated, isUserList } from './guards';
 import { userWriteError } from '../app/users';
 
 // CP3b user administration client: platform paths, CSRF on writes, guards at the boundary.
@@ -8,7 +8,9 @@ import { userWriteError } from '../app/users';
 const item = {
   id: 'u-2', username: 'budi.santoso', displayName: 'Budi Santoso', email: 'budi@contoh.test', active: true,
   mustChangePassword: true, locked: false, platformAdmin: false, mfaEnrolled: false, createdAt: '2026-11-12T03:00:00Z', deactivatedAt: null,
+  company: null as null | Record<string, unknown>,
 };
+const DOB = { workspaceId: 'w-dob', code: 'DOB', name: 'PT Delta Omega Beta', role: 'lead_cs', grants: ['admin.members'] };
 const TEMP = 'contoh-sandi-sementara-0001';
 
 function harness(answer: (req: TransportRequest) => TransportResponse) {
@@ -92,5 +94,42 @@ describe('CP3b user administration client', () => {
     expect(userWriteError(err(403, 'forbidden'), 'deactivate').text).toContain('Hanya admin platform');
     expect(userWriteError(err(404, 'not_found'), 'reset').reload).toBe(true);
     expect(userWriteError(err(409, 'last_admin'), 'deactivate').text).toContain('(ID permintaan req-1)');
+  });
+
+  it('CP5d: company guard, platform company list and set-company with CSRF', async () => {
+    expect(isUserList({ items: [{ ...item, company: DOB }], nextCursor: null })).toBe(true);
+    // The field is required (null = no company yet) and its role and grants are closed sets.
+    const { company: _omit, ...noCompany } = item;
+    expect(isUserList({ items: [noCompany], nextCursor: null })).toBe(false);
+    expect(isUserList({ items: [{ ...item, company: { ...DOB, role: 'admin' } }], nextCursor: null })).toBe(false);
+    expect(isUserList({ items: [{ ...item, company: { ...DOB, grants: ['root'] } }], nextCursor: null })).toBe(false);
+    expect(isCompanyOptionList({ items: [{ workspaceId: 'w', code: 'DOB', name: 'PT Delta Omega Beta' }] })).toBe(true);
+    expect(isCompanyOptionList({ items: [{ workspaceId: 'w', code: 'DOB' }] })).toBe(false);
+    expect(isUserCompanySet({ user: { ...item, company: DOB }, changed: false, auditEventId: null })).toBe(true);
+    expect(isUserCompanySet({ user: { ...item, company: DOB }, changed: true })).toBe(false);
+
+    const { api, seen } = harness((req) => {
+      if (req.path === '/api/v1/platform/companies') {
+        return { status: 200, requestId: null, body: { items: [{ workspaceId: 'w-dob', code: 'DOB', name: 'PT Delta Omega Beta' }] } };
+      }
+      return { status: 200, requestId: null, body: { user: { ...item, company: DOB }, changed: true, auditEventId: 'a-1' } };
+    });
+    await api.login('admin', 'x');
+    expect((await api.listPlatformCompanies()).items[0]?.name).toBe('PT Delta Omega Beta');
+    const r = await api.setUserCompany('u/2', { workspaceId: 'w-dob', role: 'lead_cs', grants: ['admin.members'] });
+    expect(r.user.company?.code).toBe('DOB');
+    expect(seen[1]?.method).toBe('GET');
+    expect(seen[2]).toMatchObject({ method: 'PUT', path: '/api/v1/users/u%2F2/company',
+      body: { workspaceId: 'w-dob', role: 'lead_cs', grants: ['admin.members'] } });
+    expect(seen[2]?.headers['X-CSRF-Token']).toBe('tok');
+  });
+
+  it('CP5d: set-company refusals read clearly', () => {
+    const err = (status: number, code: string, field: string | null = null) =>
+      new ApiError(status, code as never, 'x', null, field);
+    expect(userWriteError(err(422, 'validation_failed', 'workspaceId'), 'company').text).toContain('Perusahaan tujuan');
+    expect(userWriteError(err(422, 'validation_failed', 'grants'), 'company').text).toContain('hak tambahan tidak valid');
+    expect(userWriteError(err(409, 'user_inactive'), 'company').reload).toBe(true);
+    expect(userWriteError(err(403, 'forbidden'), 'company').text).toContain('Hanya admin platform');
   });
 });

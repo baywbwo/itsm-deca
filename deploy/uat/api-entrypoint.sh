@@ -1,6 +1,7 @@
 #!/bin/sh
 # API container entrypoint: builds DATABASE_URL from the Docker secret (never logged),
-# migrates, then serves. "seed-uat" is a separate one-off command for the dummy DB only.
+# migrates, then serves. "worker" runs the outbox worker only (CP7b): no migrate, the api service
+# owns migrations. "seed-uat" is a separate one-off command for the dummy DB only.
 set -eu
 
 fail() { echo "api-entrypoint: $*" >&2; exit 64; }
@@ -21,11 +22,17 @@ case "$cmd" in
   serve)
     "$bin" migrate
     exec "$bin" serve ;;
+  worker)
+    exec "$bin" worker ;;
   migrate)
     exec "$bin" migrate ;;
+  reseal)
+    # Key rotation (deploy/RUNBOOK-keyring.md): reseal [--dry-run]
+    shift
+    exec "$bin" reseal "$@" ;;
   seed-uat)
     [ "${ITSM_SEED_CONFIRM_DB:-}" = "$ITSM_DB_NAME" ] || fail "seed-uat butuh ITSM_SEED_CONFIRM_DB=<nama DB dummy>"
     "$bin" migrate
     exec "$bin" seed-uat ;;
-  *) fail "perintah tidak dikenal (serve|migrate|seed-uat)" ;;
+  *) fail "perintah tidak dikenal (serve|worker|migrate|seed-uat|reseal)" ;;
 esac

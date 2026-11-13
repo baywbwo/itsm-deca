@@ -3,6 +3,7 @@ import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, s
 import type {
   Catalogs,
   CatalogItem,
+  DirectoryEntry,
   IntakeDirectory,
   IntegrationSync,
   Member,
@@ -46,6 +47,11 @@ const OPERATION_LABEL: Record<IntegrationSync['operation'], string> = {
   jira_create_issue: 'Jira · buat issue',
   jira_link_issue: 'Jira · tautkan issue',
   lark_ticket_created: 'Lark · notifikasi tiket dibuat',
+  jira_transition_issue: 'Jira · ubah status issue',
+};
+const TARGET_STATUS_LABEL: Record<string, string> = {
+  new: 'Baru', open: 'Dibuka', pending_customer: 'Menunggu nasabah', pending_engineering: 'Menunggu engineering',
+  resolved: 'Selesai', closed: 'Ditutup',
 };
 const OUTCOME_LABEL = { success: 'berhasil', failed: 'gagal', unknown: 'tidak pasti', transient: 'gangguan sementara (dicoba ulang otomatis)' } as const;
 /** Mirrors the server's bounded automatic retry budget (api/src/outbox.rs MAX_AUTO_ATTEMPTS). */
@@ -75,6 +81,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const [draft, setDraftState] = useState<IntakeDraft>(() => drafts.get(userId, workspace.id) ?? fresh(tz));
   const [errors, setErrors] = useState<IntakeFieldError[]>([]);
   const [assist, setAssist] = useState(false);
+  const [found, setFound] = useState<DirectoryEntry[]>([]);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -182,8 +189,10 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const ownerChoices = canAny ? activeMembers : canSelf ? activeMembers.filter((m) => m.userId === userId) : [];
   const jira = data?.directory.jira ?? null;
   const lark = data?.directory.lark ?? null;
-  const jiraUsable = !!jira && jira.state !== 'disabled';
-  const larkUsable = !!lark && lark.state !== 'disabled';
+  const jiraUsable = !!jira?.usable;
+  const larkUsable = !!lark?.usable;
+  const live = data?.directory.integrationsMode === 'live';
+  const assigneeChoices = mergeEntries(jira?.options ?? [], found);
 
   const select = (k: keyof IntakeForm, label: string, items: { id: string; label: string }[], opts: {
     required?: boolean; empty?: string; hint?: ReactNode; disabled?: boolean; full?: boolean;
@@ -345,9 +354,12 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
             <summary>Assignment & notifikasi <span>Pekerjaan Jira dan channel Lark (opsional)</span></summary>
             <fieldset className="plain-fieldset formgrid spaced" disabled={locked}>
               <legend className="sr-only">Assignment & notifikasi</legend>
-              <p className="tiny muted full"><Badge tone="waiting">Belum tersambung</Badge> PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait.
-                Jira dan Lark belum tersambung: tidak ada issue atau pesan yang benar-benar dikirim.
-                Tiket tetap tersimpan bila Jira/Lark gagal.</p>
+              <p className="tiny muted full">
+                {!live && <><Badge tone="neutral">Mode simulasi</Badge>{' '}</>}
+                PIC CS menangani tiket. Assignee Jira mengerjakan pekerjaan terkait.
+                {live
+                  ? ' Issue dan notifikasi dikirim ke Jira/Lark setelah tiket tersimpan; tiket tetap tersimpan bila pengiriman gagal.'
+                  : ' Server dalam mode simulasi: tidak ada issue atau pesan yang dikirim ke Jira/Lark. Tiket tetap tersimpan bila Jira/Lark gagal.'}</p>
               <div className="field">
                 <label htmlFor={fid('jiraMode')}>Pekerjaan Jira</label>
                 <select id={fid('jiraMode')} className="field-control" value={f.jiraMode} disabled={!jiraUsable}
@@ -357,7 +369,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                   {jiraUsable && <option value="create">Buat issue</option>}
                   {jiraUsable && <option value="link">Tautkan issue</option>}
                 </select>
-                <span id={`${fid('jiraMode')}-hint`} className="field-hint">{providerHint(jira)}</span>
+                <span id={`${fid('jiraMode')}-hint`} className="field-hint">{providerHint(jira, 'Jira')}</span>
                 {errorOf('jiraMode') && <span className="field-error">{errorOf('jiraMode')}</span>}
               </div>
               {f.jiraMode !== 'none' && (
@@ -366,11 +378,11 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                     <div className="field">
                       <label htmlFor={fid('jiraIssueKey')}>Kunci issue<Req /></label>
                       <input id={fid('jiraIssueKey')} className="field-control" value={f.jiraIssueKey} maxLength={64}
-                        placeholder={`mis. SIM-${workspace.code}-101`} aria-required
+                        placeholder={live ? 'mis. OPS-101' : `mis. SIM-${workspace.code}-101`} aria-required
                         aria-invalid={errorOf('jiraIssueKey') ? true : undefined}
                         aria-describedby={`${fid('jiraIssueKey')}-hint${errorOf('jiraIssueKey') ? ` ${fid('jiraIssueKey')}-error` : ''}`}
                         onChange={(e) => set('jiraIssueKey', e.target.value)} />
-                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">Issue yang dikenal direktori Jira perusahaan ini.</span>
+                      <span id={`${fid('jiraIssueKey')}-hint`} className="field-hint">{live ? 'Issue di proyek Jira koneksi ini; diperiksa ke Jira saat dikirim.' : 'Issue yang dikenal direktori Jira perusahaan ini.'}</span>
                       {errorOf('jiraIssueKey') && <span id={`${fid('jiraIssueKey')}-error`} className="field-error">{errorOf('jiraIssueKey')}</span>}
                     </div>
                   )}
@@ -378,17 +390,25 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
                     <label htmlFor={fid('jiraTitle')}>{f.jiraMode === 'create' ? <>Judul issue<Req /></> : 'Judul pekerjaan terkait'}</label>
                     <input id={fid('jiraTitle')} className="field-control" value={f.jiraTitle} maxLength={300}
                       aria-required={f.jiraMode === 'create' || undefined} aria-invalid={errorOf('jiraTitle') ? true : undefined}
-                      aria-describedby={errorOf('jiraTitle') ? `${fid('jiraTitle')}-error` : undefined}
+                      aria-describedby={`${fid('jiraTitle')}-hint${errorOf('jiraTitle') ? ` ${fid('jiraTitle')}-error` : ''}`}
                       placeholder="Tanpa identitas pelanggan" onChange={(e) => set('jiraTitle', e.target.value)} />
+                    <span id={`${fid('jiraTitle')}-hint`} className="field-hint">
+                      Hanya disimpan di ITSM. Jira menerima judul otomatis "[ITSM] nomor tiket — kategori"; jangan tulis data pribadi nasabah.
+                    </span>
                     {errorOf('jiraTitle') && <span id={`${fid('jiraTitle')}-error`} className="field-error">{errorOf('jiraTitle')}</span>}
                   </div>
-                  {select('jiraAssigneeId', 'Assignee Jira', (jira?.options ?? []).map((o) => ({ id: o.id, label: o.displayName })), {
+                  {live && (
+                    <JiraUserSearch api={api} workspaceId={workspace.id} inputId={`${id}-jira-user-search`}
+                      onFound={(items) => setFound((prev) => mergeEntries(prev, items))} />
+                  )}
+                  {select('jiraAssigneeId', 'Assignee Jira', assigneeChoices.map((o) => ({ id: o.id, label: o.displayName })), {
                     empty: 'Belum ditugaskan',
+                    hint: live ? 'Pengguna Jira dari pencarian di samping, atau yang pernah dipilih sebelumnya.' : undefined,
                   })}
                 </>
               )}
               {select('larkDestinationId', 'Channel Lark', larkUsable ? lark!.options.map((o) => ({ id: o.id, label: o.displayName })) : [], {
-                empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark),
+                empty: 'Tanpa notifikasi', disabled: !larkUsable, hint: providerHint(lark, 'Lark'),
               })}
             </fieldset>
           </details>
@@ -434,10 +454,52 @@ function fresh(tz: string): IntakeDraft {
   return { form, initial: form, key: newKey(), inFlight: null };
 }
 
-function providerHint(p: IntakeDirectory['jira']): string {
-  if (!p) return 'Belum dikonfigurasi untuk perusahaan ini.';
+function providerHint(p: IntakeDirectory['jira'], name: string): string {
+  if (!p) return `${name} belum dikonfigurasi untuk perusahaan ini.`;
   if (p.state === 'disabled') return `${p.displayName} dinonaktifkan.`;
+  if (!p.usable) return `${p.displayName} belum aktif; admin perlu mengatur, menguji, dan mengaktifkannya di Integrasi.`;
+  if (p.mode === 'live') return `${p.displayName} · tersambung.`;
   return `${p.displayName} · simulasi, hasil terkonfigurasi: ${OUTCOME_LABEL[p.simulatedOutcome]}.`;
+}
+
+function mergeEntries(a: DirectoryEntry[], b: DirectoryEntry[]): DirectoryEntry[] {
+  const seen = new Set(a.map((x) => x.id));
+  return [...a, ...b.filter((x) => !seen.has(x.id))];
+}
+
+/** Live mode: finds assignees in the connection's Jira (min. 2 characters, debounced); results join the Assignee list. */
+function JiraUserSearch({ api, workspaceId, inputId, onFound }: {
+  api: Api; workspaceId: string; inputId: string; onFound: (items: DirectoryEntry[]) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const found = useRef(onFound);
+  found.current = onFound;
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) { setStatus(''); return undefined; }
+    const ctl = new AbortController();
+    const t = window.setTimeout(() => {
+      setStatus('Mencari di Jira…');
+      api.searchJiraUsers(workspaceId, q, ctl.signal).then((r) => {
+        found.current(r.items);
+        setStatus(r.items.length ? `${r.items.length} pengguna Jira ditemukan; pilih di daftar Assignee Jira.` : 'Tidak ada pengguna Jira yang cocok.');
+      }, (e: unknown) => {
+        if (!isAbort(e)) setStatus(e instanceof ApiError ? `Pencarian gagal: ${e.message}` : 'Pencarian gagal.');
+      });
+    }, 350);
+    return () => { window.clearTimeout(t); ctl.abort(); };
+  }, [api, workspaceId, query]);
+  return (
+    <div className="field">
+      <label htmlFor={inputId}>Cari pengguna Jira</label>
+      <input id={inputId} type="search" className="field-control" value={query} maxLength={100} autoComplete="off"
+        placeholder="Nama atau email, min. 2 huruf" aria-describedby={`${inputId}-status`}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
+        onChange={(e) => setQuery(e.target.value)} />
+      <span id={`${inputId}-status`} className="field-hint" role="status" aria-live="polite">{status}</span>
+    </div>
+  );
 }
 
 type Outcome =
@@ -477,7 +539,7 @@ function fieldMessage(field: string): string {
     case 'receivedAt': return 'Waktu diterima tidak boleh lebih dari 5 menit ke depan atau sebelum tahun 2000.';
     case 'ownerUserId': return 'PIC harus anggota aktif perusahaan ini.';
     case 'merchantId': return 'Merchant tidak dikenal di perusahaan ini.';
-    case 'jira.issueKey': return 'Issue tidak dikenal di koneksi Jira (simulasi) perusahaan ini.';
+    case 'jira.issueKey': return 'Kunci issue tidak valid atau tidak dikenal di koneksi Jira perusahaan ini (format PROYEK-123).';
     case 'jira.assigneeId': return 'Assignee Jira tidak terdaftar di koneksi perusahaan ini.';
     case 'jira.mode': case 'jira': return 'Koneksi Jira perusahaan ini tidak tersedia.';
     case 'larkDestinationId': return 'Channel Lark tidak tersedia di perusahaan ini.';
@@ -528,7 +590,7 @@ function Receipt({ api, workspace, result, onClose, onAnother }: {
   );
 }
 
-/** Jira/Lark sync state per intent (SIMULASI). Failed → permissioned retry; unknown → reconcile with evidence. */
+/** Jira/Lark sync state per intent. Failed → permissioned retry; unknown → reconcile with evidence. */
 export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial }: {
   api: Api;
   workspaceId: string;
@@ -569,7 +631,7 @@ export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial
     try {
       const r = await api.retryOutbox(workspaceId, it.id, { attempt: it.attempt });
       replace(r.item);
-      setMsg(`Percobaan ulang ${OPERATION_LABEL[it.operation]}: ${SYNC_LABEL[r.item.state].toLowerCase()} (simulasi).`);
+      setMsg(`Percobaan ulang ${OPERATION_LABEL[it.operation]}: ${SYNC_LABEL[r.item.state].toLowerCase()}${r.item.mode === 'simulation' ? ' (simulasi)' : ''}.`);
     } catch (e) {
       setMsg(recoveryError(e));
       if (e instanceof ApiError && (e.status === 409 || e.status === 422)) void refresh();
@@ -582,7 +644,7 @@ export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial
   return (
     <section className="card integration-panel" aria-labelledby={`${ticketId}-int`}>
       <div className="row between">
-        <h3 id={`${ticketId}-int`}>Integrasi <Badge tone="waiting">Belum tersambung</Badge></h3>
+        <h3 id={`${ticketId}-int`}>Integrasi{items.every((it) => it.mode === 'simulation') && <> <Badge>Simulasi</Badge></>}</h3>
         <Button className="btn-small" onClick={() => void refresh()} disabled={loading} aria-busy={loading}>
           {loading ? 'Memuat…' : 'Muat ulang status'}
         </Button>
@@ -592,15 +654,16 @@ export function IntegrationPanel({ api, workspaceId, ticketId, timezone, initial
           <li key={it.id} className="sync-item">
             <div className="row between">
               <strong>{OPERATION_LABEL[it.operation]}</strong>
-              <Badge tone={SYNC_TONE[it.state]}>{`${SYNC_LABEL[it.state]} · simulasi`}</Badge>
+              <Badge tone={SYNC_TONE[it.state]}>{it.mode === 'simulation' ? `${SYNC_LABEL[it.state]} · simulasi` : SYNC_LABEL[it.state]}</Badge>
             </div>
             <p className="tiny muted">
-              {[it.targetLabel, it.issueKey && `Issue ${it.issueKey}`, `percobaan ${it.attempt}`, it.reconciled && 'direkonsiliasi'].filter(Boolean).join(' · ')}
+              {[it.targetLabel, it.targetStatus && `ikut tiket: ${TARGET_STATUS_LABEL[it.targetStatus] ?? it.targetStatus}`, it.issueKey && `Issue ${it.issueKey}`, `percobaan ${it.attempt}`, it.reconciled && 'direkonsiliasi'].filter(Boolean).join(' · ')}
             </p>
+            {it.issueUrl && <p className="tiny"><a href={it.issueUrl} target="_blank" rel="noopener noreferrer">Buka {it.issueKey ?? 'issue'} di Jira</a></p>}
             {it.safeError && <p className="tiny">{it.safeError}</p>}
             {it.state === 'pending' && <p className="tiny muted">{pendingNote(it, timezone)}</p>}
             {it.state === 'failed' && (canRecover
-              ? <Button className="btn-small" onClick={() => void retry(it)}>Coba kirim ulang</Button>
+              ? <Button className="btn-small" onClick={() => void retry(it)}>Kirim ulang</Button>
               : <p className="tiny muted">Pemulihan oleh pengelola integrasi berizin.</p>)}
             {it.state === 'unknown' && (canRecover
               ? (reconciling === it.id
@@ -671,7 +734,7 @@ function ReconcileForm({ api, workspaceId, item, onDone, onError, onCancel }: {
         <label htmlFor={`${id}-e`}>Bukti pemeriksaan *</label>
         <textarea id={`${id}-e`} className="field-control" value={evidence} maxLength={2000}
           aria-describedby={`${id}-eh`} onChange={(e) => setEvidence(e.target.value)} />
-        <span id={`${id}-eh`} className="field-hint">Mis. hasil cek di sisi penyedia (simulasi). Teks tidak disalin ke audit.</span>
+        <span id={`${id}-eh`} className="field-hint">{item.mode === 'live' ? 'Mis. hasil cek langsung di Jira/Lark.' : 'Mis. hasil cek di sisi penyedia (simulasi).'} Teks tidak disalin ke audit.</span>
       </div>
       {err && <p className="field-error full" role="alert">{err}</p>}
       <div className="row full">
@@ -695,7 +758,7 @@ function recoveryError(e: unknown): string {
 }
 
 function pendingNote(it: IntegrationSync, tz: string): string {
-  if (it.inFlight) return 'Sedang dikirim (simulasi). Muat ulang status untuk melihat hasil.';
+  if (it.inFlight) return `Sedang dikirim${it.mode === 'simulation' ? ' (simulasi)' : ''}. Muat ulang status untuk melihat hasil.`;
   if (it.nextAttemptAt) {
     return `Gangguan sementara; dicoba ulang otomatis sekitar ${instantLabel(it.nextAttemptAt, tz)} (percobaan otomatis ${it.autoAttempts} dari ${AUTO_ATTEMPT_LIMIT}).`;
   }

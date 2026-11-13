@@ -5,3 +5,8 @@
 
 # UAT deploy: operator-owned secrets
 /deploy/uat/secrets/
+
+# Production deploy (CP8): operator-owned secrets, TLS key and backup public keys
+/deploy/production/secrets/
+/deploy/production/tls/
+/deploy/production/backup-recipients

@@ -145,7 +145,19 @@ pub fn client_ip(peer: IpAddr, headers: &HeaderMap, trusted: &[IpAddr]) -> IpAdd
     peer
 }
 
-fn key_for(req: &Request, trusted: &[IpAddr]) -> Key {
+/// The resolved client address, stored on the request by [`layer`] for later layers
+/// (CP7d shared limits) so the trusted-proxy walk happens once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientIp(pub IpAddr);
+
+/// The client address of `req` ([`client_ip`] over the TCP peer), or `None` without a peer.
+pub fn resolve_client_ip(req: &Request, trusted: &[IpAddr]) -> Option<IpAddr> {
+    req.extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| client_ip(addr.ip(), req.headers(), trusted))
+}
+
+fn key_for(req: &Request, ip: Option<IpAddr>) -> Key {
     if let Some(session) = req.extensions().get::<Session>() {
         return if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
             Key::Read(session.user_id)
@@ -153,15 +165,23 @@ fn key_for(req: &Request, trusted: &[IpAddr]) -> Key {
             Key::Write(session.user_id)
         };
     }
-    match req.extensions().get::<ConnectInfo<SocketAddr>>() {
-        Some(ConnectInfo(addr)) => Key::Anon(client_ip(addr.ip(), req.headers(), trusted)),
+    match ip {
+        Some(ip) => Key::Anon(ip),
         None => Key::AnonUnknown,
     }
 }
 
 /// Runs after the session layer (so the user is known) and before any handler work.
-pub async fn layer(State(limiter): State<Arc<RateLimiter>>, req: Request, next: Next) -> Response {
-    let key = key_for(&req, &limiter.config.trusted_proxies);
+pub async fn layer(
+    State(limiter): State<Arc<RateLimiter>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    let ip = resolve_client_ip(&req, &limiter.config.trusted_proxies);
+    if let Some(ip) = ip {
+        req.extensions_mut().insert(ClientIp(ip));
+    }
+    let key = key_for(&req, ip);
     match limiter.check(key, Instant::now()) {
         Decision::Allow => next.run(req).await,
         Decision::Deny { retry_after_secs } => {
@@ -188,6 +208,7 @@ mod tests {
             anon_per_min: per_min,
             max_keys,
             trusted_proxies: Vec::new(),
+            shared: crate::config::SharedLimits::default(),
         }
     }
 

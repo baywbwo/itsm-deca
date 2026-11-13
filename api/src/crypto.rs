@@ -52,6 +52,14 @@ pub enum Purpose {
     McpAuth,
     ImapPassword,
     SmtpPassword,
+    /// CP5b: Jira Cloud API token (Basic auth with the configured account email).
+    JiraApiToken,
+    /// CP5b: Lark custom-app secret (exchanged for a tenant_access_token).
+    LarkAppSecret,
+    /// CP5c: OIDC client secret of a company IdP (client_secret_basic at the token endpoint).
+    OidcClientSecret,
+    /// CP6a: shared secret of the inbound Jira webhook (HMAC-SHA256 of the raw body).
+    JiraWebhookSecret,
 }
 
 impl Purpose {
@@ -62,6 +70,10 @@ impl Purpose {
             Self::McpAuth => "mcp_auth",
             Self::ImapPassword => "imap_password",
             Self::SmtpPassword => "smtp_password",
+            Self::JiraApiToken => "jira_api_token",
+            Self::LarkAppSecret => "lark_app_secret",
+            Self::OidcClientSecret => "oidc_client_secret",
+            Self::JiraWebhookSecret => "jira_webhook_secret",
         }
     }
 }
@@ -137,13 +149,6 @@ impl Keyring {
             .ok_or(KeyringError::ActiveMissing)?
             .to_owned();
         Ok(Self { keys, active })
-    }
-
-    pub fn from_env() -> Result<Self, KeyringError> {
-        Self::parse(
-            std::env::var("ITSM_KEYRING").ok().as_deref(),
-            std::env::var("ITSM_KEYRING_ACTIVE").ok().as_deref(),
-        )
     }
 
     pub fn active_key_id(&self) -> &str {
@@ -252,42 +257,125 @@ pub async fn load_secret(
 // id, workspace_id, purpose, key_id, nonce, ciphertext
 type StaleRow = (Uuid, Option<Uuid>, String, String, Vec<u8>, Vec<u8>);
 
-/// Re-encrypts rows sealed with a non-active key (rotation job). Returns the number re-sealed.
-pub async fn reseal_stale(pool: &PgPool, keyring: &Keyring) -> Result<u64, SecretError> {
-    let rows: Vec<StaleRow> = sqlx::query_as(
-        "SELECT id, workspace_id, purpose, key_id, nonce, ciphertext FROM encrypted_secrets \
-         WHERE key_id <> $1 AND algorithm = $2 ORDER BY id LIMIT 500",
+const RESEAL_BATCH: i64 = 500;
+
+/// Outcome of one rotation pass (CP5B-03). Counts only: never ids, keys or plaintext.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ResealReport {
+    /// Rows re-encrypted with the active key (on a dry run: rows that open and would be).
+    pub resealed: u64,
+    /// Stale rows that could not be opened (key not in the keyring, wrong tag, unknown purpose).
+    /// They are left untouched and logged by id and key_id.
+    pub failed: u64,
+    /// Rows still sealed with a non-active key after the pass.
+    pub remaining: u64,
+}
+
+impl ResealReport {
+    /// Operator verdict: a real pass succeeds only when no row is left on an old key (the old key
+    /// can then be removed); a dry run succeeds when every stale row can be re-sealed.
+    pub fn verdict(&self, dry_run: bool) -> Result<String, String> {
+        let line = format!(
+            "reseal{}: resealed={} failed={} remaining={}",
+            if dry_run { " --dry-run" } else { "" },
+            self.resealed,
+            self.failed,
+            self.remaining
+        );
+        let blocked = if dry_run {
+            self.failed > 0
+        } else {
+            self.remaining > 0
+        };
+        if blocked { Err(line) } else { Ok(line) }
+    }
+}
+
+fn purpose_from_db(s: &str) -> Option<Purpose> {
+    Some(match s {
+        "totp_seed" => Purpose::TotpSeed,
+        "llm_api_key" => Purpose::LlmApiKey,
+        "mcp_auth" => Purpose::McpAuth,
+        "imap_password" => Purpose::ImapPassword,
+        "smtp_password" => Purpose::SmtpPassword,
+        "jira_api_token" => Purpose::JiraApiToken,
+        "lark_app_secret" => Purpose::LarkAppSecret,
+        "oidc_client_secret" => Purpose::OidcClientSecret,
+        "jira_webhook_secret" => Purpose::JiraWebhookSecret,
+        _ => return None,
+    })
+}
+
+/// Rotation job (`itsm-api reseal [--dry-run]`): re-encrypts every row sealed with a non-active
+/// key, in id order and batches of 500. A row that cannot be opened is skipped with a warning so
+/// one bad row does not block the rest; it stays counted in `remaining`. A dry run writes nothing.
+pub async fn reseal(
+    pool: &PgPool,
+    keyring: &Keyring,
+    dry_run: bool,
+) -> Result<ResealReport, SecretError> {
+    let mut report = ResealReport::default();
+    let mut after = Uuid::nil();
+    loop {
+        let rows: Vec<StaleRow> = sqlx::query_as(
+            "SELECT id, workspace_id, purpose, key_id, nonce, ciphertext FROM encrypted_secrets \
+             WHERE key_id <> $1 AND algorithm = $2 AND id > $3 ORDER BY id LIMIT $4",
+        )
+        .bind(keyring.active_key_id())
+        .bind(ALGORITHM)
+        .bind(after)
+        .bind(RESEAL_BATCH)
+        .fetch_all(pool)
+        .await?;
+        let Some(last) = rows.last().map(|r| r.0) else {
+            break;
+        };
+        after = last;
+        for (id, ws, purpose, key_id, nonce, ct) in rows {
+            // The DB CHECK lists every purpose; an unknown one is never re-sealed under the wrong
+            // associated data.
+            let Some(purpose) = purpose_from_db(&purpose) else {
+                tracing::warn!(secret_id = %id, key_id = %key_id, "reseal: unknown purpose, skipped");
+                report.failed += 1;
+                continue;
+            };
+            let a = aad(id, ws, purpose);
+            let plain = match keyring.open(&key_id, &nonce, &ct, &a) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(secret_id = %id, key_id = %key_id, reason = %e, "reseal: cannot open, skipped");
+                    report.failed += 1;
+                    continue;
+                }
+            };
+            if dry_run {
+                report.resealed += 1;
+                continue;
+            }
+            let (new_key, new_nonce, new_ct) = keyring.seal(plain.expose(), &a)?;
+            report.resealed += sqlx::query(
+                "UPDATE encrypted_secrets SET key_id = $2, nonce = $3, ciphertext = $4, \
+                 version = version + 1, rotated_at = now() WHERE id = $1 AND key_id = $5",
+            )
+            .bind(id)
+            .bind(new_key)
+            .bind(new_nonce)
+            .bind(new_ct)
+            .bind(key_id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+        }
+    }
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM encrypted_secrets WHERE key_id <> $1 AND algorithm = $2",
     )
     .bind(keyring.active_key_id())
     .bind(ALGORITHM)
-    .fetch_all(pool)
+    .fetch_one(pool)
     .await?;
-    let mut n = 0;
-    for (id, ws, purpose, key_id, nonce, ct) in rows {
-        let purpose = match purpose.as_str() {
-            "totp_seed" => Purpose::TotpSeed,
-            "llm_api_key" => Purpose::LlmApiKey,
-            "mcp_auth" => Purpose::McpAuth,
-            "imap_password" => Purpose::ImapPassword,
-            _ => Purpose::SmtpPassword,
-        };
-        let a = aad(id, ws, purpose);
-        let plain = keyring.open(&key_id, &nonce, &ct, &a)?;
-        let (new_key, new_nonce, new_ct) = keyring.seal(plain.expose(), &a)?;
-        n += sqlx::query(
-            "UPDATE encrypted_secrets SET key_id = $2, nonce = $3, ciphertext = $4, \
-             version = version + 1, rotated_at = now() WHERE id = $1 AND key_id = $5",
-        )
-        .bind(id)
-        .bind(new_key)
-        .bind(new_nonce)
-        .bind(new_ct)
-        .bind(key_id)
-        .execute(pool)
-        .await?
-        .rows_affected();
-    }
-    Ok(n)
+    report.remaining = u64::try_from(remaining).unwrap_or(0);
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -344,5 +432,37 @@ mod tests {
             format!("{:?}", kr.open(&kid, &n1, &ct, b"ctx").unwrap()),
             "SecretBytes(<redacted>)"
         );
+    }
+
+    #[test]
+    fn cp5b03_reseal_verdict_blocks_while_old_key_rows_remain() {
+        let done = ResealReport {
+            resealed: 2,
+            failed: 0,
+            remaining: 0,
+        };
+        assert_eq!(
+            done.verdict(false).unwrap(),
+            "reseal: resealed=2 failed=0 remaining=0"
+        );
+        let stuck = ResealReport {
+            resealed: 2,
+            failed: 1,
+            remaining: 1,
+        };
+        assert!(stuck.verdict(false).unwrap_err().contains("remaining=1"));
+        assert!(
+            stuck
+                .verdict(true)
+                .unwrap_err()
+                .starts_with("reseal --dry-run:")
+        );
+        let plan = ResealReport {
+            resealed: 3,
+            failed: 0,
+            remaining: 3,
+        };
+        assert!(plan.verdict(true).is_ok());
+        assert!(plan.verdict(false).is_err());
     }
 }

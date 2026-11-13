@@ -3,6 +3,8 @@
 Stack: `ingress` (Caddy 2.11.7: TLS, allowlist IP, basic auth, web statis, proxy `/api` + `/health`)
 → `api` (itsm-api, migrate lalu serve) → `postgres` 18.4 di jaringan privat.
 Hanya `ingress` yang mem-publish port. `api` dan `postgres` tidak bisa dijangkau dari luar.
+Panggilan keluar (Jira/Lark, IdP) hanya lewat `egress-proxy` (Squid, CP6b): CONNECT ke host allowlist di 443
+dengan kredensial proxy. Lihat `deploy/RUNBOOK-egress.md`.
 
 **Lampiran di luar scope (keputusan owner, D13).** UI lampiran tidak ada dan `clamav` **tidak** dijalankan
 secara default (compose profile `attachments`). `ITSM_CLAMD_ADDR` kosong, jadi setiap unggahan lewat API
@@ -15,6 +17,23 @@ dependensi start dan bukan gerbang rilis. Data/skema lampiran historis dan kontr
 **Status verifikasi:** paket ini belum pernah dijalankan dengan Docker (host build tidak punya Docker).
 Yang sudah diuji native: guard, Caddyfile di depan API UAT live, entrypoint, dan cek statis compose.
 Lihat bukti kandidat. Image belum di-build, container belum dijalankan, compose belum dijalankan.
+
+## Header keamanan (CP7d)
+Caddy menambahkan header ini ke semua jawaban (web dan API):
+- `Strict-Transport-Security: max-age=31536000; includeSubDomains` (tanpa preload; hanya nama di bawah alamat UAT);
+- `X-Content-Type-Options`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`;
+- `Permissions-Policy` (kamera, mikrofon, lokasi, pembayaran dan USB mati);
+- `Cross-Origin-Opener-Policy: same-origin`.
+
+SPA mendapat CSP ketat: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; …;
+frame-ancestors 'none'`. Tidak ada inline script atau style, dan tidak ada origin pihak ketiga. API mengirim CSP-nya
+sendiri (`default-src 'none'; …; sandbox`), `X-Frame-Options`, `Referrer-Policy: no-referrer` dan
+`Cross-Origin-Resource-Policy`, juga tanpa Caddy.
+
+Build web dengan CSP ini diuji di Chromium lewat `evidence/i3/cp7d/csp/`: header dibaca langsung dari Caddyfile ini,
+10 halaman dibuka, 0 pelanggaran, dan inline script uji diblokir. Caddy sendiri belum dijalankan di sini.
+Bila nanti web memuat aset dari origin lain (font, peta, analitik), CSP harus diubah dulu. Kalau tidak, aset itu
+diblokir.
 
 ## Pembatasan akses (wajib, gagal tutup)
 Entri Superadmin UAT tidak boleh terbuka ke publik. Ada dua lapis, dan keduanya wajib:
@@ -46,7 +65,11 @@ install -d -m 700 secrets
 openssl rand -hex 32 > secrets/pg_password                        # alfanumerik, aman di URL
 docker run --rm caddy:2.11.7-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5 \
   caddy hash-password > secrets/ingress_basic_auth_hash           # prompt interaktif; password dibagikan lewat kanal aman
-chmod 444 secrets/pg_password secrets/ingress_basic_auth_hash     # dibaca uid container; direktori 700 membatasi host
+: > secrets/itsm_keyring                                          # kosong = tanpa keyring; isi: lihat deploy/RUNBOOK-keyring.md
+pw=$(openssl rand -hex 24)                                        # kredensial egress proxy (CP6b), tidak dicetak
+printf 'itsm-api:%s\n' "$pw" > secrets/egress_proxy_auth
+printf '%s' "$pw" | openssl passwd -6 -stdin | sed 's/^/itsm-api:/' > secrets/egress_proxy_htpasswd; unset pw
+chmod 444 secrets/*                                               # dibaca uid container; direktori 700 membatasi host
 ./check-config.sh                                                 # wajib OK sebelum up
 ```
 `.env` dan `secrets/` ada di `.gitignore` dan `.dockerignore`. Jangan di-commit, jangan dicetak.
@@ -68,10 +91,12 @@ git checkout <SHA>; docker compose -f deploy/uat/compose.yaml build
 docker compose -f deploy/uat/compose.yaml up -d postgres
 docker compose -f deploy/uat/compose.yaml run --rm -e ITSM_SEED_CONFIRM_DB=itsm_uat_dummy api seed-uat   # migrate + tandai dummy + tiket dummy
 docker compose -f deploy/uat/compose.yaml up -d
-docker compose -f deploy/uat/compose.yaml ps        # postgres, api, ingress healthy (clamav tidak ikut: profile attachments)
+docker compose -f deploy/uat/compose.yaml ps        # postgres, egress-proxy, api, worker, ingress healthy (clamav tidak ikut: profile attachments)
 ```
 - Urutan start: `api` menjalankan `migrate` lalu `serve`. Sebelum seed, `serve` menolak start karena DB belum bertanda. Itu disengaja, karena tidak ada auto-seed.
 - `ingress` menunggu `api` healthy (`/health/ready`).
+- `worker` (CP7b) menunggu `api` healthy, lalu menjalankan worker outbox Jira/Lark tanpa API dan tanpa migrasi.
+  Tambah replika dengan `--scale worker=N`. Ukuran pool dan topologi: `deploy/RUNBOOK-scaling.md`.
 - `seed-uat` hanya untuk DB dummy. Entrypoint dan binary sama-sama mewajibkan konfirmasi nama DB.
 
 ## 4. Verifikasi setelah start (dari IP di allowlist)
@@ -82,6 +107,9 @@ docker compose -f deploy/uat/compose.yaml ps        # postgres, api, ingress hea
 | `https://<site>/health/ready` | 200 `ready` |
 | dari IP di luar allowlist | 403 (tanpa prompt login) |
 | `docker compose ps` | tidak ada service `clamav` (profile `attachments` mati) |
+| `docker compose exec api bash -c 'exec 3<>/dev/tcp/1.1.1.1/443'` | gagal (api tanpa rute keluar, E1) |
+| `docker compose ps worker` | healthy (heartbeat tick ≤ 120 detik, `worker-healthcheck.sh`) |
+| `docker compose logs egress-proxy` setelah **Uji koneksi** | baris JSON per CONNECT, tanpa user/path/query |
 | unggah lampiran lewat API (tidak ada di UI) | 503 `scanner_unavailable` (gagal-tutup) |
 
 ## 5. Upgrade ke SHA baru
@@ -123,5 +151,16 @@ docker compose -f deploy/uat/compose.yaml exec -T postgres pg_restore -U itsm -d
   - Tanpa `ITSM_CLAMD_ADDR`, unggahan gagal-tutup: 503 `scanner_unavailable`, tidak ada bypass scanner.
   - Mengaktifkan lagi fitur lampiran butuh scope baru: UI, `ITSM_CLAMD_ADDR=tcp://clamav:3310`,
     `--profile attachments`, lalu uji runtime (PONG, EICAR, timeout, `StreamMaxLength` ≥ batas unggah API 10–25 MiB).
+- **Integrasi Jira/Lark (CP5b):** default UAT `ITSM_INTEGRATIONS` kosong = `simulation` (tanpa panggilan keluar).
+  - Mode `live` butuh keyring di `secrets/itsm_keyring` + `ITSM_KEYRING_ACTIVE` di `.env` (tanpa itu: 503 `keyring_missing`,
+    koneksi tidak bisa diaktifkan). Jaringan `backend` tetap `internal: true`; panggilan keluar hanya lewat
+    `egress-proxy` (CP6b) ke host di `deploy/egress/allowlist.regex`. Uji nyata Jira/Lark lewat proxy (E10) TUNGGU token owner.
+  - `ITSM_INTEGRATIONS_LAB=on` hanya untuk stub uji (http/alamat privat) tanpa proxy; di compose ini stub ditolak proxy.
+  - Keyring dibaca dari file secret (`ITSM_KEYRING_FILE`), bukan env, sehingga tidak terlihat lewat `docker inspect`.
+    Rotasi kunci: `deploy/RUNBOOK-keyring.md` (`docker compose run --rm api reseal --dry-run`, lalu `reseal`).
+  - Kredensial hanya-tulis (UI: "Tersimpan · diganti <tgl>", ganti/hapus); nilainya tidak pernah keluar dari API, log, atau audit.
+- **SSO perusahaan (CP5c)** butuh `ITSM_ACCESS_MODE=password`. Paket UAT ini memakai `uat_superadmin`, sehingga `check-config.sh`
+  menolak `ITSM_AUTH=sso|both`. Pendaftaran IdP (Entra ID, Google, Keycloak), mode `sso` (sandi hanya untuk admin platform break-glass),
+  dan rollback dijelaskan di `deploy/RUNBOOK-sso.md`.
 - **Rate limit per proses** (satu replika). Jangan scale-out `api` tanpa shared store.
 - **Basic auth** adalah gerbang ingress, bukan identitas pengguna. Semua tester tetap masuk sebagai Superadmin UAT, dan itu tidak membuktikan RBAC.

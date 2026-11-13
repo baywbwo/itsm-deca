@@ -1023,8 +1023,8 @@ async fn attachment_binds_only_when_clean_and_values_are_constrained(pool: PgPoo
             "real CIF source",
         ),
         (
-            "INSERT INTO integration_connections (workspace_id, provider, mode, display_name) VALUES ($1, 'jira', 'live', 'x')",
-            "live provider mode",
+            "INSERT INTO integration_connections (workspace_id, provider, mode, display_name) VALUES ($1, 'jira', 'production', 'x')",
+            "unknown provider mode",
         ),
         (
             "INSERT INTO report_runs (workspace_id, requested_by, report_type, period_start, period_end) \

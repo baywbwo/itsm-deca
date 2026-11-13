@@ -29,6 +29,7 @@ FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde
 COPY --from=api-build /itsm-api /usr/local/bin/itsm-api
 COPY deploy/uat/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
 COPY deploy/uat/api-healthcheck.sh /usr/local/bin/api-healthcheck.sh
+COPY deploy/uat/worker-healthcheck.sh /usr/local/bin/worker-healthcheck.sh
 RUN install -d -o 10001 -g 10001 -m 0750 /var/lib/itsm/attachments
 USER 10001:10001
 ENV ITSM_BIND=0.0.0.0:8080 ITSM_ATTACHMENT_DIR=/var/lib/itsm/attachments
@@ -45,3 +46,21 @@ COPY --from=web-build /src/web/dist /srv
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8099/ingress-health"]
 ENTRYPOINT ["/usr/local/bin/ingress-guard.sh"]
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+
+# --- Egress proxy (Squid, CP6b) ----------------------------------------------------------
+# The only way out of the backend network: HTTP CONNECT to allowlisted hosts on 443 with proxy
+# credentials, private addresses refused after DNS (deploy/RUNBOOK-egress.md). The Debian package
+# version is the one tested natively (Squid 5.7); a newer Debian security release replaces it in
+# the archive, so bump the pin and re-run the E1-E11 harness when the build stops resolving it.
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS egress
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends squid=5.7-2+deb12u6 squid-common=5.7-2+deb12u6 squid-langpack \
+ && rm -rf /var/lib/apt/lists/* /etc/squid/conf.d \
+ && install -d -o proxy -g proxy -m 0700 /run/squid
+COPY deploy/egress/squid.conf deploy/egress/allowlist.regex /etc/squid/itsm/
+COPY deploy/egress/entrypoint.sh /usr/local/bin/egress-entrypoint.sh
+COPY deploy/egress/healthcheck.sh /usr/local/bin/egress-healthcheck.sh
+USER proxy
+EXPOSE 3128
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/egress-healthcheck.sh"]
+ENTRYPOINT ["/usr/local/bin/egress-entrypoint.sh"]

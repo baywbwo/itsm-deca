@@ -8,13 +8,16 @@ pub mod followup;
 pub mod health;
 pub mod intake;
 pub mod integrations;
+pub mod jira_webhook;
 pub mod members;
 pub mod mfa;
+pub mod oidc;
 pub mod password;
 pub mod reports;
 pub mod saved_views;
 pub mod session;
 pub mod settings;
+pub mod sso_admin;
 pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
@@ -30,6 +33,7 @@ use crate::AppState;
 /// All `/api/v1` routes, declared with full paths so the session layer sees them as-is.
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
+    ("post", jira_webhook::PATH),
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("get", "/api/v1/workspaces/{workspace_id}/ai-settings"),
     (
@@ -54,6 +58,8 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ),
     ("post", "/api/v1/login"),
     ("post", "/api/v1/login/mfa"),
+    ("get", "/api/v1/auth/oidc/{company_code}/start"),
+    ("get", "/api/v1/auth/oidc/callback"),
     ("get", "/api/v1/meta"),
     ("post", "/api/v1/uat/session"),
     ("get", "/api/v1/session"),
@@ -73,6 +79,25 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("post", "/api/v1/users/{user_id}/password-reset"),
     ("post", "/api/v1/users/{user_id}/mfa-reset"),
     ("post", "/api/v1/users/{user_id}/unlock"),
+    ("put", "/api/v1/users/{user_id}/company"),
+    ("get", "/api/v1/platform/companies"),
+    ("get", "/api/v1/platform/sso"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso/secret"),
+    ("post", "/api/v1/platform/companies/{company_id}/sso/test"),
+    ("put", "/api/v1/platform/companies/{company_id}/sso/enabled"),
+    (
+        "get",
+        "/api/v1/platform/companies/{company_id}/sso/identities",
+    ),
+    (
+        "post",
+        "/api/v1/platform/companies/{company_id}/sso/identities",
+    ),
+    (
+        "delete",
+        "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}",
+    ),
     ("get", "/api/v1/ticket-statuses"),
     ("get", "/api/v1/permissions"),
     ("get", "/api/v1/workspaces"),
@@ -226,12 +251,46 @@ pub const API_ROUTES: &[(&str, &str)] = &[
         "post",
         "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
     ),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config",
+    ),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
+    ),
+    (
+        "delete",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
+    ),
+    (
+        "delete",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options",
+    ),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/intake/jira-users"),
 ];
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/login", post(password::login))
         .route("/api/v1/login/mfa", post(mfa::login_mfa))
+        .route(
+            "/api/v1/auth/oidc/{company_code}/start",
+            get(oidc::start),
+        )
+        .route("/api/v1/auth/oidc/callback", get(oidc::callback))
         .route("/api/v1/workspaces/{workspace_id}/ai-suggestions", post(ai_suggestions::suggest))
         .route(
             "/api/v1/workspaces/{workspace_id}/ai-settings",
@@ -285,6 +344,30 @@ pub fn api_router() -> Router<AppState> {
         .route("/api/v1/users/{user_id}/password-reset", post(users::reset_password))
         .route("/api/v1/users/{user_id}/mfa-reset", post(users::mfa_reset))
         .route("/api/v1/users/{user_id}/unlock", post(users::unlock))
+        .route("/api/v1/users/{user_id}/company", put(users::set_company))
+        .route("/api/v1/platform/companies", get(users::companies))
+        .route("/api/v1/platform/sso", get(sso_admin::overview))
+        .route("/api/v1/platform/companies/{company_id}/sso", put(sso_admin::save))
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/secret",
+            put(sso_admin::put_secret),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/test",
+            post(sso_admin::test),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/enabled",
+            put(sso_admin::set_enabled),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/identities",
+            get(sso_admin::identities).merge(post(sso_admin::link)),
+        )
+        .route(
+            "/api/v1/platform/companies/{company_id}/sso/identities/{identity_id}",
+            delete(sso_admin::unlink),
+        )
         .route("/api/v1/ticket-statuses", get(catalogs::statuses))
         .route("/api/v1/permissions", get(access::catalog))
         .route("/api/v1/workspaces", get(workspaces::list))
@@ -464,6 +547,31 @@ pub fn api_router() -> Router<AppState> {
         .route(
             "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/disable",
             post(integrations::disable),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/config",
+            put(integrations::configure),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/credential",
+            put(integrations::put_credential).merge(delete(integrations::delete_credential)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/webhook-secret",
+            post(integrations::rotate_webhook_secret)
+                .merge(delete(integrations::delete_webhook_secret)),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/options",
+            get(integrations::options),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/integrations/{connection_id}/directory/sync",
+            post(integrations::sync_directory),
+        )
+        .route(
+            "/api/v1/workspaces/{workspace_id}/intake/jira-users",
+            get(intake::jira_users),
         )
 }
 

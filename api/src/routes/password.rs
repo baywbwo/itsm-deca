@@ -1,6 +1,11 @@
 //! Temporary local authentication. Credentials and sessions are scoped to one deployment DB.
 use super::ticket_list::body;
-use crate::{AppState, config::AccessMode, error::AppError, session};
+use crate::{
+    AppState,
+    config::{AccessMode, AuthMethods},
+    error::AppError,
+    session,
+};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use axum::{
     Json,
@@ -70,6 +75,15 @@ pub(crate) async fn auth_event_by(
         .bind(user_id).bind(username_hash).bind(event).bind(outcome).bind(failure_code).bind(actor)
         .execute(tx).await?;
     Ok(())
+}
+/// A break-glass account may use its password while `ITSM_AUTH=sso`: a platform admin.
+async fn break_glass(tx: &mut sqlx::PgConnection, user_id: Uuid) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM platform_grants WHERE user_id = $1 AND grant_code = 'platform_admin')",
+    )
+    .bind(user_id)
+    .fetch_one(tx)
+    .await?)
 }
 pub async fn login(
     State(state): State<AppState>,
@@ -164,6 +178,21 @@ pub async fn login(
             )
             .await?;
         }
+        tx.commit().await?;
+        return Err(AppError::Unauthenticated);
+    }
+    // CP5c ITSM_AUTH=sso: the password form is break-glass only (platform admins). Everyone else
+    // signs in through the company IdP; the answer is the same 401 as a wrong password.
+    if state.config.auth.methods == AuthMethods::Sso && !break_glass(&mut tx, user_id).await? {
+        auth_event(
+            &mut tx,
+            Some(user_id),
+            &username,
+            "login",
+            "denied",
+            Some("sso_only"),
+        )
+        .await?;
         tx.commit().await?;
         return Err(AppError::Unauthenticated);
     }

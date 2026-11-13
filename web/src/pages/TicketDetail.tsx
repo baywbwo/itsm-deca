@@ -25,6 +25,7 @@ import {
 import { newKey } from '../app/drafts';
 import { ageLabel, instantLabel, num } from '../app/format';
 import { initials } from '../app/labels';
+import { noteByline } from '../app/integrations';
 import { priorityDot } from '../app/ticketView';
 import { Icon } from '../components/Icon';
 import { Badge } from '../components/Badge';
@@ -689,15 +690,21 @@ function FollowUp({ api, workspace, detail, onAdded }: { api: Api; workspace: Wo
         : !notes ? <LoadingState label="Memuat catatan…" rows={2} />
           : notes.length === 0 ? <p className="muted tiny">Belum ada catatan.</p> : (
             <ol className="plain notes" aria-label="Catatan internal">
-              {notes.map((n) => (
-                <li key={n.id} className="note">
-                  <span className="cell-av" aria-hidden="true">{initials(n.author.label)}</span>
-                  <div>
-                    <p className="note-by"><b>{n.author.label}</b> <span className="tiny muted">{instantLabel(n.createdAt, tz)}</span></p>
-                    <p className="prewrap">{n.body}</p>
-                  </div>
-                </li>
-              ))}
+              {notes.map((n) => {
+                const by = noteByline(n);
+                return (
+                  <li key={n.id} className="note">
+                    <span className="cell-av" aria-hidden="true">{initials(by.name)}</span>
+                    <div>
+                      <p className="note-by">
+                        <b>{by.name}</b>{by.source && <> <Badge tone="blue">{by.source}</Badge></>}{' '}
+                        <span className="tiny muted">{instantLabel(n.createdAt, tz)}</span>
+                      </p>
+                      <p className="prewrap">{n.body}</p>
+                    </div>
+                  </li>
+                );
+              })}
             </ol>
           )}
       {loadError && notes ? <p className="field-error" role="alert">{message(loadError)}</p> : null}

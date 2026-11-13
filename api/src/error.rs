@@ -86,6 +86,16 @@ pub enum AppError {
     /// (POST /session/step-up). Nothing was changed.
     #[error("step_up_required")]
     StepUpRequired,
+    /// CP5b: a credential cannot be stored or a live connection activated because the server
+    /// has no keyring (`ITSM_KEYRING_FILE`). Nothing was changed.
+    #[error("keyring_missing")]
+    KeyringMissing,
+    /// CP5b: a provider lookup (options, chat list, user search) needs `ITSM_INTEGRATIONS=live`.
+    #[error("integration_not_live")]
+    IntegrationNotLive,
+    /// CP5b: the provider lookup failed; the message is a fixed safe sentence, never provider text.
+    #[error("provider_error")]
+    Provider(&'static str),
     #[error("dependency_unavailable")]
     Unavailable,
     #[error("internal")]
@@ -95,6 +105,16 @@ pub enum AppError {
 impl AppError {
     pub fn internal(err: impl std::error::Error + Send + Sync + 'static) -> Self {
         AppError::Internal(Box::new(err))
+    }
+
+    /// CP7a: text for a log line. `Internal` shows its source's Display (for sqlx: the server
+    /// message, never the `detail` that `Debug` prints with row values such as
+    /// "Key (username)=(budi)"); every other variant is its stable code. Never log `{:?}`.
+    pub fn log_text(&self) -> String {
+        match self {
+            AppError::Internal(err) => err.to_string(),
+            other => other.to_string(),
+        }
     }
 
     fn parts(&self) -> (StatusCode, &'static str, &'static str) {
@@ -215,6 +235,17 @@ impl AppError {
                 "step_up_required",
                 "Masukkan ulang kode autentikator untuk melanjutkan tindakan ini.",
             ),
+            AppError::KeyringMissing => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "keyring_missing",
+                "Kunci enkripsi (ITSM_KEYRING_FILE) belum dipasang di server: kredensial tidak dapat disimpan dan koneksi live tidak dapat diaktifkan.",
+            ),
+            AppError::IntegrationNotLive => (
+                StatusCode::CONFLICT,
+                "integration_not_live",
+                "Server berjalan dalam mode simulasi (ITSM_INTEGRATIONS); data penyedia tidak diambil.",
+            ),
+            AppError::Provider(note) => (StatusCode::BAD_GATEWAY, "provider_error", note),
             AppError::Unavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "dependency_unavailable",
@@ -308,6 +339,17 @@ impl IntoResponse for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_text_is_the_code_or_the_source_display() {
+        assert_eq!(AppError::Conflict("username_taken").log_text(), "conflict");
+        assert_eq!(
+            AppError::Validation("email").log_text(),
+            "validation_failed"
+        );
+        let e = AppError::internal(sqlx::Error::PoolTimedOut);
+        assert_eq!(e.log_text(), sqlx::Error::PoolTimedOut.to_string());
+    }
 
     #[test]
     fn new_codes_have_safe_generic_messages() {

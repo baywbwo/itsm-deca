@@ -1,6 +1,6 @@
 import type { DashboardPeriodKey, PermissionCode, TicketFilter } from '../api/types';
 
-export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'users';
+export type PageId = 'dashboard' | 'tickets' | 'reports' | 'settings' | 'integrations' | 'users' | 'sso';
 
 export interface PageDef {
   id: PageId;
@@ -36,6 +36,7 @@ export const PAGES: readonly PageDef[] = [
     milestone: 'D09–D10',
   },
   { id: 'users', label: 'Pengguna', anyOf: [], platformAdmin: true, admin: true, milestone: 'CP3b' },
+  { id: 'sso', label: 'Login SSO', anyOf: [], platformAdmin: true, admin: true, milestone: 'CP5c' },
 ];
 
 export const pageDef = (id: PageId): PageDef => PAGES.find((p) => p.id === id) ?? PAGES[0]!;

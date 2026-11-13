@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::time::Duration;
+
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Environment {
@@ -17,8 +20,57 @@ pub enum AccessMode {
     /// Limited UAT: direct Superadmin entry with a persistent banner, dummy data only.
     UatSuperadmin,
     Password,
-    /// Office SSO. Not implemented yet, so it can never start.
+    /// Legacy value, refused at start: company SSO runs under `password` with `ITSM_AUTH=sso|both`.
     Sso,
+}
+
+/// CP5c `ITSM_AUTH=password|sso|both` (default `password`; only with `ITSM_ACCESS_MODE=password`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthMethods {
+    /// Local username + password only (current behaviour).
+    Password,
+    /// Company OIDC only; the password form stays open for break-glass platform admins.
+    Sso,
+    /// Company OIDC and local passwords.
+    Both,
+}
+
+impl AuthMethods {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AuthMethods::Password => "password",
+            AuthMethods::Sso => "sso",
+            AuthMethods::Both => "both",
+        }
+    }
+
+    pub fn oidc(self) -> bool {
+        self != AuthMethods::Password
+    }
+}
+
+/// CP5c sign-in configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthConfig {
+    pub methods: AuthMethods,
+    /// `ITSM_PUBLIC_URL`: the origin users open (`https://itsm.example.co.id`), required when OIDC
+    /// is on. The redirect URI registered at each IdP is `<origin>/api/v1/auth/oidc/callback`.
+    pub public_url: Option<String>,
+    /// `ITSM_OIDC_LAB=on|off` (default off, refused in production): allows `http://` and
+    /// loopback/private IdP addresses, for a local stub IdP only.
+    pub oidc_lab: bool,
+}
+
+/// Path of the OIDC redirect URI under [`AuthConfig::public_url`].
+pub const OIDC_CALLBACK_PATH: &str = "/api/v1/auth/oidc/callback";
+
+impl AuthConfig {
+    /// The redirect URI sent to the IdP; `None` when OIDC is off.
+    pub fn redirect_uri(&self) -> Option<String> {
+        self.public_url
+            .as_deref()
+            .map(|origin| format!("{origin}{OIDC_CALLBACK_PATH}"))
+    }
 }
 
 impl AccessMode {
@@ -39,8 +91,14 @@ pub enum ConfigError {
     Invalid { name: &'static str },
     #[error("production tidak boleh memakai mode uji Superadmin")]
     UatInProduction,
-    #[error("mode akses SSO belum tersedia; server menolak start")]
+    #[error(
+        "ITSM_ACCESS_MODE=sso tidak dipakai lagi; pakai ITSM_ACCESS_MODE=password dengan ITSM_AUTH=sso"
+    )]
     SsoUnavailable,
+    /// CP5B-04: a key secret given as a plain env var in production (visible to `docker
+    /// inspect`, `/proc/<pid>/environ` and crash dumps).
+    #[error("{0} tidak boleh lewat env di production; pakai {0}_FILE (file secret)")]
+    SecretFromEnv(&'static str),
 }
 
 /// Database URL wrapper that never prints its value (it may contain credentials).
@@ -96,10 +154,123 @@ pub struct Config {
     /// challenge, no pre-MFA session, no step-up, MFA endpoints answer 404 and the keys below are
     /// neither required nor loaded. Stored factors stay in the database for a later re-enable.
     pub mfa_enabled: bool,
-    /// US-1.2 MFA keys (only with `ITSM_MFA=on`): `ITSM_KEYRING` + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
-    /// `ITSM_MFA_RECOVERY_PEPPER` (recovery-code HMAC). Required in production; absent in UAT
+    /// US-1.2 MFA keys (only with `ITSM_MFA=on`): the keyring + `ITSM_KEYRING_ACTIVE` (TOTP seeds) and
+    /// the recovery-code HMAC pepper, each read by [`secret_input`]. Required in production; absent in UAT
     /// = MFA endpoints answer 503 and users who must use MFA cannot finish signing in.
     pub mfa: Option<std::sync::Arc<crate::mfa::MfaKeys>>,
+    /// CP5b provider integrations (see [`IntegrationsConfig`]).
+    pub integrations: IntegrationsConfig,
+    /// Secret keyring for stored provider credentials: `ITSM_KEYRING_FILE` (or, outside production,
+    /// `ITSM_KEYRING`) + `ITSM_KEYRING_ACTIVE`, loaded whenever set (independent of MFA). Absent = credentials cannot be saved and live
+    /// connections cannot be activated (clear 503 `keyring_missing`); set but malformed = no start.
+    pub keyring: Option<std::sync::Arc<crate::crypto::Keyring>>,
+    /// CP5c sign-in methods (see [`AuthConfig`]).
+    pub auth: AuthConfig,
+    /// CP6b forward proxy for every outbound call (providers and IdPs), see [`EgressProxy`].
+    pub egress_proxy: Option<EgressProxy>,
+    /// CP7a: `ITSM_METRICS_BIND` (e.g. `0.0.0.0:9464`) serves `/metrics` on its own listener,
+    /// for the internal network only (never routed by the ingress). Absent = no metrics endpoint.
+    pub metrics_bind: Option<SocketAddr>,
+    /// CP7b: database pool of this process (`ITSM_DB_MAX_CONNECTIONS`, `ITSM_DB_ACQUIRE_TIMEOUT_MS`).
+    pub db_pool: DbPoolConfig,
+}
+
+/// Size the pool per process: replicas × max_connections (API and workers together) must stay
+/// below the server's `max_connections` minus a reserve for admin and migrations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DbPoolConfig {
+    /// 1–200, default 10.
+    pub max_connections: u32,
+    /// How long a request waits for a free connection before failing (100–30000 ms, default 3000).
+    pub acquire_timeout: Duration,
+}
+
+impl Default for DbPoolConfig {
+    fn default() -> Self {
+        DbPoolConfig {
+            max_connections: 10,
+            acquire_timeout: Duration::from_millis(3000),
+        }
+    }
+}
+
+/// CP6b: `ITSM_EGRESS_PROXY=http://host:port` (+ `ITSM_EGRESS_PROXY_AUTH_FILE` holding
+/// `user:password`). When set, provider and IdP requests are tunnelled through it with CONNECT
+/// and the proxy resolves names and refuses private addresses; the app keeps its own host,
+/// port and scheme rules. Required in production (integrations are always live there).
+#[derive(Clone)]
+pub struct EgressProxy {
+    url: String,
+    credentials: Option<(String, Zeroizing<String>)>,
+}
+
+impl EgressProxy {
+    /// Same rules as the env variables: `http://host:port` and an optional `user:password`.
+    pub fn parse(url: &str, credentials: Option<&str>) -> Option<Self> {
+        Some(Self {
+            url: parse_proxy_url(url)?,
+            credentials: match credentials {
+                None => None,
+                Some(c) => Some(parse_proxy_credentials(c)?),
+            },
+        })
+    }
+
+    /// `http://host:port`, no credentials in it (safe to log).
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn credentials(&self) -> Option<(&str, &str)> {
+        self.credentials
+            .as_ref()
+            .map(|(u, p)| (u.as_str(), p.as_str()))
+    }
+}
+
+impl fmt::Debug for EgressProxy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EgressProxy")
+            .field("url", &self.url)
+            .field(
+                "credentials",
+                &self.credentials.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegrationsMode {
+    /// Real Jira Cloud / Lark requests (default in production).
+    Live,
+    /// No network request at all; outcomes are configured per connection (tests, CI, UAT only).
+    Simulation,
+}
+
+impl IntegrationsMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IntegrationsMode::Live => "live",
+            IntegrationsMode::Simulation => "simulation",
+        }
+    }
+}
+
+/// Default budget for one provider operation (DNS + every request of a connection test).
+pub const DEFAULT_INTEGRATIONS_TIMEOUT_MS: u64 = 5000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntegrationsConfig {
+    /// `ITSM_INTEGRATIONS=live|simulation`. Unset = `simulation` in UAT, `live` in production;
+    /// production refuses `simulation`; any other value refuses to start.
+    pub mode: IntegrationsMode,
+    /// `ITSM_INTEGRATIONS_LAB=on|off` (default off, refused in production): allows `http://` and
+    /// loopback/private provider addresses, for local stubs only. Off = https to public IPs only.
+    pub lab: bool,
+    /// `ITSM_INTEGRATIONS_TIMEOUT_MS` (500–8000, default 5000): budget of one provider operation,
+    /// kept below the 10 s request timeout so a connection test always answers.
+    pub timeout_ms: u64,
 }
 
 /// Token-bucket limits per minute. Each bucket holds up to one minute of requests and refills
@@ -118,6 +289,45 @@ pub struct RateLimitConfig {
     /// `ITSM_TRUSTED_PROXIES`: comma-separated exact IPs whose `X-Forwarded-For` is honoured
     /// (at most 16). Empty (default) = `X-Forwarded-For` is ignored.
     pub trusted_proxies: Vec<IpAddr>,
+    /// CP7d limits shared by every replica (Postgres, see `shared_limit`).
+    pub shared: SharedLimits,
+}
+
+/// CP7d: fixed-window limits kept in Postgres, so they hold whatever the number of API
+/// replicas. Each value is requests per window (1–1000000).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SharedLimits {
+    /// `ITSM_LIMIT_AUTH_PER_IP_10MIN`: sign-in requests (password, MFA code, OIDC start and
+    /// callback, UAT entry) per client address per 10 minutes (default 100). Offices behind one
+    /// NAT address share it; raise it for large sites rather than trusting forwarded headers.
+    pub auth_per_ip_10min: u32,
+    /// `ITSM_LIMIT_AI_PER_USER_MIN`: AI suggestions per user per minute (default 10).
+    pub ai_per_user_min: u32,
+    /// `ITSM_LIMIT_AI_PER_WORKSPACE_DAY`: AI suggestions per workspace per UTC day (default 2000),
+    /// the provider cost ceiling of one company.
+    pub ai_per_workspace_day: u32,
+    /// `ITSM_LIMIT_OUTBOUND_PER_USER_10MIN`: connection tests (integrations, AI providers, MCP),
+    /// directory sync and manual retries per user per 10 minutes (default 30).
+    pub outbound_per_user_10min: u32,
+    /// `ITSM_LIMIT_LOOKUP_PER_USER_MIN`: live Jira look-ups (field options, user search) per user
+    /// per minute (default 60).
+    pub lookup_per_user_min: u32,
+    /// `ITSM_LIMIT_WEBHOOK_PER_IP_MIN`: Jira webhook deliveries per client address per minute
+    /// (default 600), counted before the signature is checked.
+    pub webhook_per_ip_min: u32,
+}
+
+impl Default for SharedLimits {
+    fn default() -> Self {
+        SharedLimits {
+            auth_per_ip_10min: 100,
+            ai_per_user_min: 10,
+            ai_per_workspace_day: 2000,
+            outbound_per_user_10min: 30,
+            lookup_per_user_min: 60,
+            webhook_per_ip_min: 600,
+        }
+    }
 }
 
 impl Default for RateLimitConfig {
@@ -128,6 +338,7 @@ impl Default for RateLimitConfig {
             anon_per_min: 30,
             max_keys: 10_000,
             trusted_proxies: Vec::new(),
+            shared: SharedLimits::default(),
         }
     }
 }
@@ -174,6 +385,14 @@ impl Config {
             Some(v) => v
                 .parse()
                 .map_err(|_| ConfigError::Invalid { name: "ITSM_BIND" })?,
+        };
+        let metrics_bind = match vars.get("ITSM_METRICS_BIND").map(|v| v.trim()) {
+            None | Some("") => None,
+            Some(v) => Some(v.parse::<SocketAddr>().ok().filter(|m| *m != bind).ok_or(
+                ConfigError::Invalid {
+                    name: "ITSM_METRICS_BIND",
+                },
+            )?),
         };
         let cookie_secure = match vars.get("ITSM_COOKIE_SECURE").map(|v| v.trim()) {
             None | Some("") | Some("true") => true,
@@ -244,6 +463,30 @@ impl Config {
                 })?,
         };
 
+        let bounded = |name: &'static str, range: std::ops::RangeInclusive<u64>, default: u64| {
+            match optional(name) {
+                None => Ok(default),
+                Some(v) => v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| range.contains(n))
+                    .ok_or(ConfigError::Invalid { name }),
+            }
+        };
+        let defaults = DbPoolConfig::default();
+        let db_pool = DbPoolConfig {
+            max_connections: bounded(
+                "ITSM_DB_MAX_CONNECTIONS",
+                1..=200,
+                u64::from(defaults.max_connections),
+            )? as u32,
+            acquire_timeout: Duration::from_millis(bounded(
+                "ITSM_DB_ACQUIRE_TIMEOUT_MS",
+                100..=30_000,
+                defaults.acquire_timeout.as_millis() as u64,
+            )?),
+        };
+
         let report_max_rows = match optional("ITSM_REPORT_MAX_ROWS") {
             None => 50_000,
             Some(v) => v
@@ -264,7 +507,43 @@ impl Config {
                 .filter(|n| (1..=100_000).contains(n))
                 .ok_or(ConfigError::Invalid { name }),
         };
+        let shared_defaults = SharedLimits::default();
+        let shared_limit = |name: &'static str, default: u32| match optional(name) {
+            None => Ok(default),
+            Some(v) => v
+                .parse::<u32>()
+                .ok()
+                .filter(|n| (1..=1_000_000).contains(n))
+                .ok_or(ConfigError::Invalid { name }),
+        };
+        let shared = SharedLimits {
+            auth_per_ip_10min: shared_limit(
+                "ITSM_LIMIT_AUTH_PER_IP_10MIN",
+                shared_defaults.auth_per_ip_10min,
+            )?,
+            ai_per_user_min: shared_limit(
+                "ITSM_LIMIT_AI_PER_USER_MIN",
+                shared_defaults.ai_per_user_min,
+            )?,
+            ai_per_workspace_day: shared_limit(
+                "ITSM_LIMIT_AI_PER_WORKSPACE_DAY",
+                shared_defaults.ai_per_workspace_day,
+            )?,
+            outbound_per_user_10min: shared_limit(
+                "ITSM_LIMIT_OUTBOUND_PER_USER_10MIN",
+                shared_defaults.outbound_per_user_10min,
+            )?,
+            lookup_per_user_min: shared_limit(
+                "ITSM_LIMIT_LOOKUP_PER_USER_MIN",
+                shared_defaults.lookup_per_user_min,
+            )?,
+            webhook_per_ip_min: shared_limit(
+                "ITSM_LIMIT_WEBHOOK_PER_IP_MIN",
+                shared_defaults.webhook_per_ip_min,
+            )?,
+        };
         let rate_limit = RateLimitConfig {
+            shared,
             read_per_min: per_min("ITSM_RATE_LIMIT_READ_PER_MIN", defaults.read_per_min)?,
             write_per_min: per_min("ITSM_RATE_LIMIT_WRITE_PER_MIN", defaults.write_per_min)?,
             anon_per_min: per_min("ITSM_RATE_LIMIT_ANON_PER_MIN", defaults.anon_per_min)?,
@@ -291,33 +570,74 @@ impl Config {
             Some("on") => true,
             Some(_) => return Err(ConfigError::Invalid { name: "ITSM_MFA" }),
         };
-        let mfa = match (
-            optional("ITSM_KEYRING"),
-            optional("ITSM_KEYRING_ACTIVE"),
-            optional("ITSM_MFA_RECOVERY_PEPPER"),
-        ) {
-            _ if !mfa_enabled => None,
-            (None, None, None) if environment == Environment::Uat => None,
-            (keyring, active, pepper) => {
-                let keyring = crate::crypto::Keyring::parse(keyring.as_deref(), active.as_deref())
-                    .map_err(|e| match e {
-                        crate::crypto::KeyringError::Missing => {
-                            ConfigError::Missing("ITSM_KEYRING")
-                        }
-                        crate::crypto::KeyringError::ActiveMissing => {
-                            ConfigError::Missing("ITSM_KEYRING_ACTIVE")
-                        }
-                        _ => ConfigError::Invalid {
-                            name: "ITSM_KEYRING",
-                        },
-                    })?;
-                let pepper = pepper.ok_or(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))?;
-                Some(std::sync::Arc::new(
-                    crate::mfa::MfaKeys::new(keyring, &pepper).ok_or(ConfigError::Invalid {
-                        name: "ITSM_MFA_RECOVERY_PEPPER",
-                    })?,
-                ))
+        let (keyring_raw, keyring_src) =
+            secret_input(vars, "ITSM_KEYRING", "ITSM_KEYRING_FILE", environment)?;
+        let keyring_raw = keyring_raw.as_ref().map(|s| s.as_str());
+        let keyring_active = optional("ITSM_KEYRING_ACTIVE");
+        let mfa = match mfa_enabled {
+            false => None,
+            true => {
+                let (pepper, pepper_src) = secret_input(
+                    vars,
+                    "ITSM_MFA_RECOVERY_PEPPER",
+                    "ITSM_MFA_RECOVERY_PEPPER_FILE",
+                    environment,
+                )?;
+                match (keyring_raw, keyring_active.as_deref(), pepper) {
+                    (None, None, None) if environment == Environment::Uat => None,
+                    (keyring, active, pepper) => {
+                        let keyring = crate::crypto::Keyring::parse(keyring, active)
+                            .map_err(|e| keyring_error(e, keyring_src))?;
+                        let pepper = pepper.ok_or(ConfigError::Missing(pepper_src))?;
+                        Some(std::sync::Arc::new(
+                            crate::mfa::MfaKeys::new(keyring, &pepper)
+                                .ok_or(ConfigError::Invalid { name: pepper_src })?,
+                        ))
+                    }
+                }
             }
+        };
+
+        let integrations = IntegrationsConfig {
+            mode: match (optional("ITSM_INTEGRATIONS").as_deref(), environment) {
+                (None, Environment::Uat) | (Some("simulation"), Environment::Uat) => {
+                    IntegrationsMode::Simulation
+                }
+                (None, Environment::Production) | (Some("live"), _) => IntegrationsMode::Live,
+                _ => {
+                    return Err(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS",
+                    });
+                }
+            },
+            lab: match (optional("ITSM_INTEGRATIONS_LAB").as_deref(), environment) {
+                (None | Some("off"), _) => false,
+                (Some("on"), Environment::Uat) => true,
+                _ => {
+                    return Err(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS_LAB",
+                    });
+                }
+            },
+            timeout_ms: match optional("ITSM_INTEGRATIONS_TIMEOUT_MS") {
+                None => DEFAULT_INTEGRATIONS_TIMEOUT_MS,
+                Some(v) => v
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (500..=8000).contains(n))
+                    .ok_or(ConfigError::Invalid {
+                        name: "ITSM_INTEGRATIONS_TIMEOUT_MS",
+                    })?,
+            },
+        };
+        let auth = parse_auth(&optional, environment, access_mode)?;
+        let egress_proxy = parse_egress_proxy(vars, &optional, environment, integrations.mode)?;
+        let keyring = match (keyring_raw, keyring_active.as_deref()) {
+            (None, None) => None,
+            (keyring, active) => Some(std::sync::Arc::new(
+                crate::crypto::Keyring::parse(keyring, active)
+                    .map_err(|e| keyring_error(e, keyring_src))?,
+            )),
         };
 
         Ok(Config {
@@ -335,8 +655,193 @@ impl Config {
             rate_limit,
             mfa_enabled,
             mfa,
+            integrations,
+            keyring,
+            auth,
+            egress_proxy,
+            metrics_bind,
+            db_pool,
         })
     }
+}
+
+/// CP6b. Production runs integrations live, so it refuses to start without the proxy and its
+/// credentials (fail closed: no direct internet path is ever assumed).
+fn parse_egress_proxy(
+    vars: &HashMap<String, String>,
+    optional: &dyn Fn(&str) -> Option<String>,
+    environment: Environment,
+    mode: IntegrationsMode,
+) -> Result<Option<EgressProxy>, ConfigError> {
+    const URL: &str = "ITSM_EGRESS_PROXY";
+    const AUTH: &str = "ITSM_EGRESS_PROXY_AUTH_FILE";
+    let credentials = match vars.get(AUTH).map(|p| p.trim()).filter(|p| !p.is_empty()) {
+        None => None,
+        Some(path) => match read_secret_file(path) {
+            None => return Err(ConfigError::Invalid { name: AUTH }),
+            Some(None) => None,
+            Some(Some(text)) => {
+                Some(parse_proxy_credentials(&text).ok_or(ConfigError::Invalid { name: AUTH })?)
+            }
+        },
+    };
+    let url = match optional(URL) {
+        None => None,
+        Some(v) => Some(parse_proxy_url(&v).ok_or(ConfigError::Invalid { name: URL })?),
+    };
+    let production_live = environment == Environment::Production && mode == IntegrationsMode::Live;
+    match (url, credentials) {
+        (None, Some(_)) => Err(ConfigError::Invalid { name: AUTH }),
+        (None, None) if production_live => Err(ConfigError::Missing(URL)),
+        (None, None) => Ok(None),
+        (Some(_), None) if production_live => Err(ConfigError::Missing(AUTH)),
+        (Some(url), credentials) => Ok(Some(EgressProxy { url, credentials })),
+    }
+}
+
+/// `http://host:port` (one trailing `/` dropped): lower-case DNS name or IPv4 address, explicit
+/// port, nothing else. The proxy sits on the internal network, so plain http to it is expected.
+fn parse_proxy_url(v: &str) -> Option<String> {
+    let v = v.strip_suffix('/').unwrap_or(v);
+    let rest = v.strip_prefix("http://")?;
+    let (host, port) = rest.rsplit_once(':')?;
+    port.parse::<u16>().ok().filter(|p| *p > 0)?;
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-'))
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-']);
+    host_ok.then(|| v.to_owned())
+}
+
+/// `user:password`: user 1–64 of `A-Za-z0-9._-`, password 16–256 printable ASCII (no spaces).
+fn parse_proxy_credentials(text: &str) -> Option<(String, Zeroizing<String>)> {
+    let (user, password) = text.split_once(':')?;
+    let user_ok = (1..=64).contains(&user.len())
+        && user
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'));
+    let password_ok =
+        (16..=256).contains(&password.len()) && password.bytes().all(|c| c.is_ascii_graphic());
+    (user_ok && password_ok).then(|| (user.to_owned(), Zeroizing::new(password.to_owned())))
+}
+
+fn parse_auth(
+    optional: &dyn Fn(&str) -> Option<String>,
+    environment: Environment,
+    access_mode: AccessMode,
+) -> Result<AuthConfig, ConfigError> {
+    let methods = match (optional("ITSM_AUTH").as_deref(), access_mode) {
+        (None | Some("password"), _) => AuthMethods::Password,
+        (Some("sso"), AccessMode::Password) => AuthMethods::Sso,
+        (Some("both"), AccessMode::Password) => AuthMethods::Both,
+        _ => return Err(ConfigError::Invalid { name: "ITSM_AUTH" }),
+    };
+    let oidc_lab = match (optional("ITSM_OIDC_LAB").as_deref(), environment) {
+        (None | Some("off"), _) => false,
+        (Some("on"), Environment::Uat) => true,
+        _ => {
+            return Err(ConfigError::Invalid {
+                name: "ITSM_OIDC_LAB",
+            });
+        }
+    };
+    let public_url = match (optional("ITSM_PUBLIC_URL"), methods.oidc()) {
+        (None, false) => None,
+        (None, true) => return Err(ConfigError::Missing("ITSM_PUBLIC_URL")),
+        (Some(v), _) => Some(parse_public_url(&v, oidc_lab).ok_or(ConfigError::Invalid {
+            name: "ITSM_PUBLIC_URL",
+        })?),
+    };
+    Ok(AuthConfig {
+        methods,
+        public_url,
+        oidc_lab,
+    })
+}
+
+/// An origin only: `https://host[:port]` (one trailing `/` is dropped), lower-case DNS host, no
+/// user info, path, query or fragment. `http://` only with the OIDC lab flag (UAT).
+fn parse_public_url(v: &str, lab: bool) -> Option<String> {
+    let v = v.strip_suffix('/').unwrap_or(v);
+    let (scheme, rest) = v.split_once("://")?;
+    match scheme {
+        "https" => {}
+        "http" if lab => {}
+        _ => return None,
+    }
+    let host = match rest.rsplit_once(':') {
+        Some((h, p)) => {
+            p.parse::<u16>().ok().filter(|p| *p > 0)?;
+            h
+        }
+        None => rest,
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'.' | b'-'))
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-']);
+    host_ok.then(|| v.to_owned())
+}
+
+fn keyring_error(e: crate::crypto::KeyringError, source: &'static str) -> ConfigError {
+    match e {
+        crate::crypto::KeyringError::Missing => ConfigError::Missing(source),
+        crate::crypto::KeyringError::ActiveMissing => ConfigError::Missing("ITSM_KEYRING_ACTIVE"),
+        _ => ConfigError::Invalid { name: source },
+    }
+}
+
+/// Largest secret file accepted; a keyring of many keys is a few KB.
+const MAX_SECRET_FILE_BYTES: u64 = 64 * 1024;
+
+/// CP5B-04: a key secret comes from `<name>_FILE` (a mounted Docker/compose secret, read once at
+/// start and wiped from memory) or, outside production, from `<name>` itself. Production refuses
+/// the plain variable; setting both is ambiguous and refused everywhere. An empty file counts as
+/// unset. Also returns the variable name to report in errors.
+fn secret_input(
+    vars: &HashMap<String, String>,
+    name: &'static str,
+    file_name: &'static str,
+    environment: Environment,
+) -> Result<(Option<Zeroizing<String>>, &'static str), ConfigError> {
+    let set = |n: &str| vars.get(n).filter(|v| !v.trim().is_empty());
+    match (set(file_name), set(name)) {
+        (Some(_), Some(_)) => Err(ConfigError::Invalid { name: file_name }),
+        (Some(path), None) => read_secret_file(path.trim())
+            .map(|v| (v, file_name))
+            .ok_or(ConfigError::Invalid { name: file_name }),
+        (None, Some(_)) if environment == Environment::Production => {
+            Err(ConfigError::SecretFromEnv(name))
+        }
+        (None, Some(v)) => Ok((Some(Zeroizing::new(v.trim().to_owned())), name)),
+        (None, None) if environment == Environment::Production => Ok((None, file_name)),
+        (None, None) => Ok((None, name)),
+    }
+}
+
+/// Reads a secret file: a regular file, at most 64 KB, UTF-8, not writable by other users.
+/// `None` = unusable (reported as an invalid `_FILE`); `Some(None)` = empty.
+fn read_secret_file(path: &str) -> Option<Option<Zeroizing<String>>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_SECRET_FILE_BYTES {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o002 != 0 {
+            return None;
+        }
+    }
+    let bytes = Zeroizing::new(std::fs::read(path).ok()?);
+    let text = std::str::from_utf8(&bytes).ok()?.trim();
+    Some((!text.is_empty()).then(|| Zeroizing::new(text.to_owned())))
 }
 
 /// Comma-separated exact IP addresses (no ranges), 1–16 entries, no blanks.
@@ -424,38 +929,61 @@ mod tests {
     const KEY: &str = "k1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     const PEPPER: &str = "cGVwcGVyLXBlcHBlci1wZXBwZXItcGVwcGVyLXBlcHBlcg==";
 
+    /// Writes a 0600 secret file unique to this test process and tag; returns its path.
+    fn secret_file(tag: &str, content: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("itsm-cfg-{}-{tag}", std::process::id()));
+        assert!(std::fs::write(&path, content).is_ok());
+        assert!(std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).is_ok());
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Production calls out only through the egress proxy (CP6b); one shared credentials file.
+    fn egress_auth() -> &'static str {
+        static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        PATH.get_or_init(|| secret_file("egress-auth", "itsm-api:synthetic-egress-pass-01\n"))
+    }
+
     #[test]
     fn production_password_mode_requires_mfa_keys() {
         let prod = vec![
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
             ("ITSM_MFA", "on"),
         ];
         assert_eq!(
             Config::from_map(&vars(&prod)).err(),
-            Some(ConfigError::Missing("ITSM_KEYRING"))
+            Some(ConfigError::Missing("ITSM_KEYRING_FILE"))
         );
+        let key_file = secret_file("mfa-key", KEY);
+        let short_file = secret_file("mfa-short", "c2hvcnQ=");
+        let pepper_file = secret_file("mfa-pepper", PEPPER);
         let mut v = prod.clone();
-        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_FILE", &key_file));
         v.push(("ITSM_KEYRING_ACTIVE", "k1"));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
-            Some(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER"))
+            Some(ConfigError::Missing("ITSM_MFA_RECOVERY_PEPPER_FILE"))
         );
-        v.push(("ITSM_MFA_RECOVERY_PEPPER", "c2hvcnQ="));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER_FILE", &short_file));
         assert_eq!(
             Config::from_map(&vars(&v)).err(),
             Some(ConfigError::Invalid {
-                name: "ITSM_MFA_RECOVERY_PEPPER"
+                name: "ITSM_MFA_RECOVERY_PEPPER_FILE"
             })
         );
         v.pop();
-        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER_FILE", &pepper_file));
         let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if c.mfa.is_some()));
         let printed = format!("{cfg:?}");
         assert!(!printed.contains(PEPPER) && !printed.contains("AAAAAAAA"));
+        for f in [key_file, short_file, pepper_file] {
+            let _ = std::fs::remove_file(f);
+        }
     }
 
     #[test]
@@ -487,12 +1015,13 @@ mod tests {
             ("ITSM_ENV", "production"),
             ("ITSM_ACCESS_MODE", "password"),
             ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
         ];
         let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
         let mut v = prod.clone();
         v.push(("ITSM_MFA", "off"));
-        v.push(("ITSM_KEYRING", "k1:bad"));
         let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
         assert!(matches!(&cfg, Ok(c) if !c.mfa_enabled && c.mfa.is_none()));
         let mut v = prod.clone();
@@ -529,6 +1058,124 @@ mod tests {
     }
 
     #[test]
+    fn auth_methods_default_to_password_and_oidc_needs_a_public_origin() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.auth.methods == AuthMethods::Password
+            && c.auth.public_url.is_none() && !c.auth.oidc_lab && c.auth.redirect_uri().is_none())
+        );
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
+        ];
+        for (value, want) in [("sso", AuthMethods::Sso), ("both", AuthMethods::Both)] {
+            let mut v = prod.clone();
+            v.push(("ITSM_AUTH", value));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Missing("ITSM_PUBLIC_URL"))
+            );
+            v.push(("ITSM_PUBLIC_URL", "https://itsm.example.co.id/"));
+            let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+            assert!(
+                matches!(&cfg, Ok(c) if c.auth.methods == want && c.auth.methods.oidc()
+                && c.auth.public_url.as_deref() == Some("https://itsm.example.co.id")
+                && c.auth.redirect_uri().as_deref()
+                    == Some("https://itsm.example.co.id/api/v1/auth/oidc/callback"))
+            );
+        }
+        // The lab flag (UAT only) allows a plain-http origin for a local stub IdP.
+        let mut v = base();
+        v[1] = ("ITSM_ACCESS_MODE", "password");
+        v.push(("ITSM_AUTH", "both"));
+        v.push(("ITSM_OIDC_LAB", "on"));
+        v.push(("ITSM_PUBLIC_URL", "http://127.0.0.1:8080"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.auth.oidc_lab));
+
+        let uat_pw = {
+            let mut v = base();
+            v[1] = ("ITSM_ACCESS_MODE", "password");
+            v
+        };
+        for (env, extra, name) in [
+            // OIDC is a password-mode feature; the UAT Superadmin entry stays as it is.
+            (&base(), vec![("ITSM_AUTH", "sso")], "ITSM_AUTH"),
+            (&uat_pw, vec![("ITSM_AUTH", "oidc")], "ITSM_AUTH"),
+            (&uat_pw, vec![("ITSM_AUTH", "SSO")], "ITSM_AUTH"),
+            (&prod, vec![("ITSM_OIDC_LAB", "on")], "ITSM_OIDC_LAB"),
+            (&uat_pw, vec![("ITSM_OIDC_LAB", "yes")], "ITSM_OIDC_LAB"),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "http://itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &uat_pw,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "http://itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example/app"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://u@itsm.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://ITSM.example"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example:0"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+            (
+                &prod,
+                vec![
+                    ("ITSM_AUTH", "sso"),
+                    ("ITSM_PUBLIC_URL", "https://itsm.example?x=1"),
+                ],
+                "ITSM_PUBLIC_URL",
+            ),
+        ] {
+            let mut v = env.clone();
+            v.extend(extra);
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{v:?}"
+            );
+        }
+    }
+
+    #[test]
     fn unknown_values_are_rejected() {
         let mut v = base();
         v[1] = ("ITSM_ACCESS_MODE", "open");
@@ -544,6 +1191,58 @@ mod tests {
         let printed = format!("{cfg:?}");
         assert!(!printed.contains("secret"));
         assert!(printed.contains("<redacted>"));
+    }
+
+    #[test]
+    fn cp7b_pool_size_and_acquire_timeout_come_from_env_within_bounds() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.db_pool == DbPoolConfig::default()));
+        let mut v = base();
+        v.push(("ITSM_DB_MAX_CONNECTIONS", "40"));
+        v.push(("ITSM_DB_ACQUIRE_TIMEOUT_MS", "750"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.db_pool == DbPoolConfig {
+            max_connections: 40,
+            acquire_timeout: Duration::from_millis(750),
+        }));
+        for (name, bad) in [
+            ("ITSM_DB_MAX_CONNECTIONS", "0"),
+            ("ITSM_DB_MAX_CONNECTIONS", "201"),
+            ("ITSM_DB_MAX_CONNECTIONS", "-1"),
+            ("ITSM_DB_MAX_CONNECTIONS", "ten"),
+            ("ITSM_DB_ACQUIRE_TIMEOUT_MS", "99"),
+            ("ITSM_DB_ACQUIRE_TIMEOUT_MS", "30001"),
+        ] {
+            let mut v = base();
+            v.push((name, bad));
+            assert!(
+                matches!(Config::from_map(&vars(&v)), Err(ConfigError::Invalid { name: n }) if n == name),
+                "{name}={bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn cp7a_metrics_listener_is_optional_and_separate_from_the_api() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.metrics_bind.is_none()));
+        let mut v = base();
+        v.push(("ITSM_METRICS_BIND", "0.0.0.0:9464"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.metrics_bind == Some(SocketAddr::from(([0, 0, 0, 0], 9464))))
+        );
+        for bad in ["9464", "metrics:9464", "127.0.0.1:8080"] {
+            let mut v = base();
+            v.push(("ITSM_METRICS_BIND", bad));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid {
+                    name: "ITSM_METRICS_BIND"
+                }),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
@@ -612,7 +1311,33 @@ mod tests {
             && c.rate_limit.max_keys == 500
             && c.rate_limit.trusted_proxies.len() == 2));
 
+        let mut v = base();
+        v.push(("ITSM_LIMIT_AUTH_PER_IP_10MIN", "40"));
+        v.push(("ITSM_LIMIT_AI_PER_USER_MIN", "3"));
+        v.push(("ITSM_LIMIT_AI_PER_WORKSPACE_DAY", "500"));
+        v.push(("ITSM_LIMIT_OUTBOUND_PER_USER_10MIN", "7"));
+        v.push(("ITSM_LIMIT_LOOKUP_PER_USER_MIN", "20"));
+        v.push(("ITSM_LIMIT_WEBHOOK_PER_IP_MIN", "1000000"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert_eq!(
+            cfg.map(|c| c.rate_limit.shared),
+            Ok(SharedLimits {
+                auth_per_ip_10min: 40,
+                ai_per_user_min: 3,
+                ai_per_workspace_day: 500,
+                outbound_per_user_10min: 7,
+                lookup_per_user_min: 20,
+                webhook_per_ip_min: 1_000_000,
+            })
+        );
+
         for (name, bad) in [
+            ("ITSM_LIMIT_AUTH_PER_IP_10MIN", "0"),
+            ("ITSM_LIMIT_AI_PER_USER_MIN", "1000001"),
+            ("ITSM_LIMIT_AI_PER_WORKSPACE_DAY", "-5"),
+            ("ITSM_LIMIT_OUTBOUND_PER_USER_10MIN", "many"),
+            ("ITSM_LIMIT_LOOKUP_PER_USER_MIN", "0x10"),
+            ("ITSM_LIMIT_WEBHOOK_PER_IP_MIN", "1.5"),
             ("ITSM_RATE_LIMIT_READ_PER_MIN", "0"),
             ("ITSM_RATE_LIMIT_READ_PER_MIN", "100001"),
             ("ITSM_RATE_LIMIT_WRITE_PER_MIN", "-1"),
@@ -630,6 +1355,224 @@ mod tests {
                 Some(ConfigError::Invalid { name }),
                 "{name}={bad}"
             );
+        }
+    }
+
+    #[test]
+    fn integrations_mode_defaults_per_environment_and_fails_closed() {
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Simulation
+            && !c.integrations.lab
+            && c.integrations.timeout_ms == DEFAULT_INTEGRATIONS_TIMEOUT_MS
+            && c.keyring.is_none())
+        );
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
+        ];
+        let cfg = Config::from_map(&vars(&prod)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Live));
+        let mut v = base();
+        v.push(("ITSM_INTEGRATIONS", "live"));
+        v.push(("ITSM_INTEGRATIONS_LAB", "on"));
+        v.push(("ITSM_INTEGRATIONS_TIMEOUT_MS", "800"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.integrations.mode == IntegrationsMode::Live
+            && c.integrations.lab && c.integrations.timeout_ms == 800)
+        );
+
+        for (env, name, bad) in [
+            (&prod, "ITSM_INTEGRATIONS", "simulation"),
+            (&prod, "ITSM_INTEGRATIONS_LAB", "on"),
+            (&base(), "ITSM_INTEGRATIONS", "off"),
+            (&base(), "ITSM_INTEGRATIONS", "LIVE"),
+            (&base(), "ITSM_INTEGRATIONS_LAB", "yes"),
+            (&base(), "ITSM_INTEGRATIONS_TIMEOUT_MS", "499"),
+            (&base(), "ITSM_INTEGRATIONS_TIMEOUT_MS", "8001"),
+            (&base(), "ITSM_KEYRING", "k1:bad"),
+        ] {
+            let mut v = env.clone();
+            v.push((name, bad));
+            if name == "ITSM_KEYRING" {
+                v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+            }
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={bad}"
+            );
+        }
+
+        // The credential keyring loads without MFA and never prints its key material.
+        let key_file = secret_file("integrations-key", KEY);
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING_FILE", &key_file));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_KEYRING_ACTIVE"))
+        );
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_some() && c.mfa.is_none()));
+        assert!(!format!("{cfg:?}").contains("AAAAAAAA"));
+        let _ = std::fs::remove_file(key_file);
+    }
+
+    #[test]
+    fn cp5b04_production_takes_key_secrets_only_from_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()),
+            ("ITSM_KEYRING_ACTIVE", "k1"),
+        ];
+        // Plain env vars are visible through docker inspect and /proc: refused in production.
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING", KEY));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::SecretFromEnv("ITSM_KEYRING"))
+        );
+        let mut v = prod.clone();
+        v.push(("ITSM_MFA", "on"));
+        v.push(("ITSM_MFA_RECOVERY_PEPPER", PEPPER));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::SecretFromEnv("ITSM_MFA_RECOVERY_PEPPER"))
+        );
+
+        // A mounted secret file loads (surrounding whitespace ignored) and never prints.
+        let good = secret_file("cp5b04-good", &format!("  {KEY}\n"));
+        let mut v = prod.clone();
+        v.push(("ITSM_KEYRING_FILE", &good));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.keyring.as_ref().is_some_and(|k| k.active_key_id() == "k1"))
+        );
+        assert!(!format!("{cfg:?}").contains("AAAAAAAA"));
+
+        // Empty file = unset (live integrations then answer keyring_missing).
+        let empty = secret_file("cp5b04-empty", "\n");
+        let mut v = prod.clone();
+        v.pop();
+        v.push(("ITSM_KEYRING_FILE", &empty));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_none()));
+
+        // Unusable files refuse to start, named by the _FILE variable.
+        let bad = secret_file("cp5b04-bad", "k1:bad");
+        let open = secret_file("cp5b04-open", KEY);
+        assert!(std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o666)).is_ok());
+        let missing = format!("{}-missing", good);
+        let dir = std::env::temp_dir().to_string_lossy().into_owned();
+        for path in [&bad, &open, &missing, &dir] {
+            let mut v = prod.clone();
+            v.push(("ITSM_KEYRING_FILE", path));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid {
+                    name: "ITSM_KEYRING_FILE"
+                }),
+                "{path}"
+            );
+        }
+
+        // UAT still accepts the env var, but never both sources at once.
+        let mut v = base();
+        v.push(("ITSM_KEYRING", KEY));
+        v.push(("ITSM_KEYRING_ACTIVE", "k1"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.keyring.is_some()));
+        v.push(("ITSM_KEYRING_FILE", &good));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_KEYRING_FILE"
+            })
+        );
+        for f in [good, empty, bad, open] {
+            let _ = std::fs::remove_file(f);
+        }
+    }
+
+    /// CP6b E9: production (always live integrations) refuses to start without the egress proxy
+    /// and its credentials; the URL is http://host:port only and the password never prints.
+    #[test]
+    fn cp6b_production_requires_the_egress_proxy() {
+        let prod = vec![
+            ("ITSM_ENV", "production"),
+            ("ITSM_ACCESS_MODE", "password"),
+            ("DATABASE_URL", "postgres://x"),
+        ];
+        assert_eq!(
+            Config::from_map(&vars(&prod)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY"))
+        );
+        let mut v = prod.clone();
+        v.push(("ITSM_EGRESS_PROXY", "http://egress-proxy:3128/"));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY_AUTH_FILE"))
+        );
+        let empty = secret_file("egress-empty", "\n");
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", &empty));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Missing("ITSM_EGRESS_PROXY_AUTH_FILE"))
+        );
+        v.pop();
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(
+            matches!(&cfg, Ok(c) if c.egress_proxy.as_ref().is_some_and(|p|
+            p.url() == "http://egress-proxy:3128" && p.credentials().map(|(u, _)| u) == Some("itsm-api")))
+        );
+        assert!(!format!("{cfg:?}").contains("synthetic-egress-pass"));
+
+        let bad_auth = secret_file("egress-bad", "itsm-api:short\n");
+        for (name, value) in [
+            ("ITSM_EGRESS_PROXY", "https://egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY", "http://egress-proxy"),
+            ("ITSM_EGRESS_PROXY", "http://user:pass@egress-proxy:3128"),
+            ("ITSM_EGRESS_PROXY_AUTH_FILE", bad_auth.as_str()),
+            (
+                "ITSM_EGRESS_PROXY_AUTH_FILE",
+                "/nonexistent/itsm-egress-auth",
+            ),
+        ] {
+            let mut v: Vec<_> = v.iter().copied().filter(|(k, _)| *k != name).collect();
+            v.push((name, value));
+            assert_eq!(
+                Config::from_map(&vars(&v)).err(),
+                Some(ConfigError::Invalid { name }),
+                "{name}={value}"
+            );
+        }
+
+        // UAT may run without a proxy (direct guarded calls); credentials without a proxy are a mistake.
+        let cfg = Config::from_map(&vars(&base())).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.egress_proxy.is_none()));
+        let mut v = base();
+        v.push(("ITSM_EGRESS_PROXY_AUTH_FILE", egress_auth()));
+        assert_eq!(
+            Config::from_map(&vars(&v)).err(),
+            Some(ConfigError::Invalid {
+                name: "ITSM_EGRESS_PROXY_AUTH_FILE"
+            })
+        );
+        v.push(("ITSM_EGRESS_PROXY", "http://10.0.0.5:3128"));
+        let cfg = Config::from_map(&vars(&v)).map_err(|e| e.to_string());
+        assert!(matches!(&cfg, Ok(c) if c.egress_proxy.is_some()));
+        for f in [empty, bad_auth] {
+            let _ = std::fs::remove_file(f);
         }
     }
 }

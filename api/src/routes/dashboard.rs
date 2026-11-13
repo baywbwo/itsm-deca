@@ -183,6 +183,9 @@ macro_rules! utc {
 /// identical for every query of one request; tests pin it), then per dimension a UUID and an
 /// "unset" flag: `$4/$5` owner, `$6/$7` channel, `$8/$9` category, `$10/$11` priority.
 /// `p` = period bounds (+ `at`), `ft` = the workspace's tickets after the shared filters.
+/// `ft` is NOT MATERIALIZED: each use is planned with its own predicates (active status,
+/// received range, event join) on the indexes, instead of copying every ticket of the
+/// workspace into a temporary result first (CP7c: 500k rows, 140 MB on disk, ~3 s).
 macro_rules! base {
     () => {
         "WITH d AS ( \
@@ -201,12 +204,26 @@ macro_rules! base {
              (start_date::timestamp AT TIME ZONE tz) AS start_at, \
              (end_date::timestamp AT TIME ZONE tz) AS end_at \
            FROM b), \
-         ft AS ( \
+         ft AS NOT MATERIALIZED ( \
            SELECT t.* FROM tickets t WHERE t.workspace_id = $1 \
              AND ($4::uuid IS NULL OR t.owner_user_id = $4) AND (NOT $5::bool OR t.owner_user_id IS NULL) \
              AND ($6::uuid IS NULL OR t.intake_channel_id = $6) AND (NOT $7::bool OR t.intake_channel_id IS NULL) \
              AND ($8::uuid IS NULL OR t.category_id = $8) AND (NOT $9::bool OR t.category_id IS NULL) \
              AND ($10::uuid IS NULL OR t.priority_id = $10) AND (NOT $11::bool OR t.priority_id IS NULL)) "
+    };
+}
+
+/// Resolve events of the period whose ticket is in `ft` (alias `e`, needs `p`). The composite
+/// foreign key (workspace_id, ticket_id) already puts every event's ticket in `$1`, so the
+/// `ft` probe only matters when a filter is set; with no filter (custom plans, see `load`)
+/// the planner folds it away instead of probing one ticket per event (CP7c).
+macro_rules! resolved_in_scope {
+    () => {
+        "e.workspace_id = $1 AND e.action = 'resolve' \
+         AND e.occurred_at >= p.start_at AND e.occurred_at < p.end_at \
+         AND (($4::uuid IS NULL AND NOT $5::bool AND $6::uuid IS NULL AND NOT $7::bool \
+               AND $8::uuid IS NULL AND NOT $9::bool AND $10::uuid IS NULL AND NOT $11::bool) \
+              OR EXISTS (SELECT 1 FROM ft WHERE ft.id = e.ticket_id))"
     };
 }
 
@@ -520,8 +537,6 @@ struct PeriodRow {
 
 #[derive(sqlx::FromRow)]
 struct CountRow {
-    tickets: i64,
-    active: i64,
     unassigned: i64,
     received_in_period: i64,
     age_lt_1d: i64,
@@ -587,27 +602,28 @@ const PERIOD_SQL: &str = concat!(
     " AS as_of FROM p"
 );
 
+/// Totals and active counts come from `STATUS_SQL` (same snapshot and scope); this query
+/// only reads the active tickets, the period's receipts and the period's resolve events.
 fn counts_sql() -> String {
     format!(
         concat!(
             base!(),
-            "SELECT \
-               count(t.id) AS tickets, \
-               count(t.id) FILTER (WHERE t.workflow_status IN {a}) AS active, \
-               count(t.id) FILTER (WHERE t.workflow_status IN {a} AND t.owner_user_id IS NULL) AS unassigned, \
-               count(t.id) FILTER (WHERE t.received_at >= p.start_at AND t.received_at < p.end_at) AS received_in_period, \
-               count(t.id) FILTER (WHERE t.workflow_status IN {a} AND p.at - t.received_at < interval '1 day') AS age_lt_1d, \
-               count(t.id) FILTER (WHERE t.workflow_status IN {a} AND p.at - t.received_at >= interval '1 day' \
-                                 AND p.at - t.received_at < interval '2 days') AS age_1_2d, \
-               count(t.id) FILTER (WHERE t.workflow_status IN {a} AND p.at - t.received_at >= interval '2 days') AS age_gt_2d, \
-               (SELECT count(*) FROM ticket_resolution_events e JOIN ft ON ft.id = e.ticket_id \
-                  WHERE e.workspace_id = $1 AND e.action = 'resolve' \
-                  AND e.occurred_at >= p.start_at AND e.occurred_at < p.end_at) AS resolved_in_period, \
-               (SELECT count(DISTINCT e.ticket_id) FROM ticket_resolution_events e JOIN ft ON ft.id = e.ticket_id \
-                  WHERE e.workspace_id = $1 AND e.action = 'resolve' \
-                  AND e.occurred_at >= p.start_at AND e.occurred_at < p.end_at) AS resolved_tickets_in_period \
-             FROM p LEFT JOIN ft t ON true \
-             GROUP BY p.start_at, p.end_at, p.at"
+            ", a AS (SELECT \
+                 count(*) FILTER (WHERE t.owner_user_id IS NULL) AS unassigned, \
+                 count(*) FILTER (WHERE p.at - t.received_at < interval '1 day') AS age_lt_1d, \
+                 count(*) FILTER (WHERE p.at - t.received_at >= interval '1 day' \
+                                    AND p.at - t.received_at < interval '2 days') AS age_1_2d, \
+                 count(*) FILTER (WHERE p.at - t.received_at >= interval '2 days') AS age_gt_2d \
+               FROM ft t, p WHERE t.workflow_status IN {a}), \
+             r AS (SELECT count(*) AS n FROM ft t, p \
+               WHERE t.received_at >= p.start_at AND t.received_at < p.end_at), \
+             rs AS (SELECT count(*) AS n, count(DISTINCT e.ticket_id) AS tickets \
+               FROM ticket_resolution_events e, p WHERE ",
+            resolved_in_scope!(),
+            ") \
+             SELECT a.unassigned, r.n AS received_in_period, a.age_lt_1d, a.age_1_2d, a.age_gt_2d, \
+               rs.n AS resolved_in_period, rs.tickets AS resolved_tickets_in_period \
+             FROM a, r, rs"
         ),
         a = ACTIVE_SQL
     )
@@ -671,14 +687,15 @@ const TREND_SQL: &str = concat!(
        WHERE t.received_at >= p.start_at AND t.received_at < p.end_at GROUP BY 1), \
      res AS ( \
        SELECT (e.occurred_at AT TIME ZONE p.tz)::date AS day, count(*) AS n \
-       FROM ticket_resolution_events e JOIN ft ON ft.id = e.ticket_id, p \
-       WHERE e.workspace_id = $1 AND e.action = 'resolve' \
-         AND e.occurred_at >= p.start_at AND e.occurred_at < p.end_at GROUP BY 1) \
+       FROM ticket_resolution_events e, p WHERE ",
+    resolved_in_scope!(),
+    " GROUP BY 1) \
      SELECT days.day::text, COALESCE(rec.n, 0), COALESCE(res.n, 0) \
      FROM days LEFT JOIN rec USING (day) LEFT JOIN res USING (day) ORDER BY days.day"
 );
 
-/// `$12` = attention priority codes in order, `$13` = limit.
+/// `$12` = attention priority codes in order, `$13` = limit. Per priority, the oldest active
+/// tickets are read in index order (`tickets_active_priority_idx`, 0030) up to the limit.
 fn attention_sql() -> String {
     format!(
         concat!(
@@ -691,13 +708,16 @@ fn attention_sql() -> String {
             utc!("t.received_at"),
             " AS received_at, \
                GREATEST(0, floor(extract(epoch FROM p.at - t.received_at)))::bigint AS age_seconds \
-             FROM ft t CROSS JOIN p \
-             JOIN priorities pr ON pr.workspace_id = t.workspace_id AND pr.id = t.priority_id \
+             FROM unnest($12::text[]) WITH ORDINALITY AS pc (code, ord) \
+             JOIN priorities pr ON pr.workspace_id = $1 AND pr.code = pc.code \
+             CROSS JOIN LATERAL ( \
+               SELECT t.* FROM ft t WHERE t.priority_id = pr.id AND t.workflow_status IN {a} \
+               ORDER BY t.received_at, t.number LIMIT $13) t \
+             CROSS JOIN p \
              LEFT JOIN users u ON u.id = t.owner_user_id \
              LEFT JOIN intake_channels ic ON ic.workspace_id = t.workspace_id AND ic.id = t.intake_channel_id \
              LEFT JOIN categories cat ON cat.workspace_id = t.workspace_id AND cat.id = t.category_id \
-             WHERE t.workflow_status IN {a} AND pr.code = ANY($12) \
-             ORDER BY array_position($12, pr.code), t.received_at, t.number \
+             ORDER BY pc.ord, t.received_at, t.number \
              LIMIT $13"
         ),
         a = ACTIVE_SQL
@@ -815,6 +835,12 @@ pub async fn load(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
         .execute(&mut *tx)
         .await?;
+    // The shared filters are "$n IS NULL OR column = $n" catch-alls. A cached generic plan
+    // cannot drop the unused ones and loses the index paths above, so plan each execution
+    // with its actual values (cheap next to the reads; CP7c).
+    sqlx::query("SET LOCAL plan_cache_mode = force_custom_plan")
+        .execute(&mut *tx)
+        .await?;
 
     let valid: Option<bool> = bind_base!(sqlx::query_scalar(VALID_SQL), args)
         .fetch_one(&mut *tx)
@@ -829,12 +855,16 @@ pub async fn load(
     let c: CountRow = bind_base!(sqlx::query_as(&counts_sql()), args)
         .fetch_one(&mut *tx)
         .await?;
-    let by_status: HashMap<String, i64> =
+    // Without filters the counts come from the per-status counters (same snapshot).
+    let by_status: HashMap<String, i64> = if args.filters == Filters::default() {
+        super::ticket_list::workspace_status_counts(&mut tx, workspace_id).await?
+    } else {
         bind_base!(sqlx::query_as::<_, (String, i64)>(STATUS_SQL), args)
             .fetch_all(&mut *tx)
             .await?
-            .into_iter()
-            .collect();
+    }
+    .into_iter()
+    .collect();
     let pics: Vec<(Uuid, String, bool, i64)> = bind_base!(sqlx::query_as(&pic_sql()), args)
         .fetch_all(&mut *tx)
         .await?;
@@ -1007,8 +1037,11 @@ pub async fn load(
         metric_basis: METRIC_BASIS,
         sla_configured: false,
         totals: Totals {
-            tickets: c.tickets,
-            active: c.active,
+            tickets: by_status.values().sum(),
+            active: ACTIVE
+                .iter()
+                .map(|s| by_status.get(s.code()).copied().unwrap_or(0))
+                .sum(),
             unassigned: c.unassigned,
             pending_customer: by_status.get("pending_customer").copied().unwrap_or(0),
             received_in_period: c.received_in_period,
