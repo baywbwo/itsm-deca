@@ -569,6 +569,9 @@ export function createApi(transport: Transport) {
         clearTimeout(timer);
       }
     },
+    escalateTicket: async (id: string, ticket: string, body: Pick<TicketCreateRequest, 'jira' | 'larkDestinationId'> & {version: number}) => {
+      await call({method: 'POST', path: `${ws(id)}/tickets/${encodeURIComponent(ticket)}/escalation`, headers: csrf(), body}, isEmpty, 204);
+    },
     getIntakeDirectory: (id: string, signal?: AbortSignal): Promise<IntakeDirectory> =>
       get(`${ws(id)}/intake-directory`, isIntakeDirectory, signal),
     getAssignmentHistory: (id: string, ticketId: string, signal?: AbortSignal): Promise<AssignmentHistory> =>
@@ -684,6 +687,10 @@ export function createApi(transport: Transport) {
       call({
         method: 'POST', path: `${ws(id)}/members/${encodeURIComponent(membershipId)}/grants/revoke`, headers: csrf(), body,
       }, isMemberResult),
+    customerEmail: (id: string, signal?: AbortSignal) =>
+      get(`${ws(id)}/customer-email`, isCustomerEmailDelivery, signal),
+    setCustomerEmail: (id: string, paused: boolean) =>
+      call({method: 'PUT', path: `${ws(id)}/customer-email`, headers: csrf(), body: {paused}}, isCustomerEmailDelivery),
     /** Jira/Lark connections. `integrationsMode` says whether the server talks to the providers (live). */
     listIntegrations: (id: string, signal?: AbortSignal): Promise<IntegrationList> =>
       get(`${ws(id)}/integrations`, isIntegrationList, signal),
@@ -820,4 +827,8 @@ function withParam(query: string, key: string, value: string | null): string {
   if (value !== null) q.set(key, value);
   const s = q.toString();
   return s ? `?${s}` : '';
+}
+
+function isCustomerEmailDelivery(value: unknown): value is {paused: boolean} {
+  return typeof value === 'object' && value !== null && 'paused' in value && typeof value.paused === 'boolean';
 }

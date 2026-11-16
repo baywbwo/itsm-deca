@@ -99,6 +99,13 @@ struct Normalized {
     region_id: Option<Uuid>,
     merchant_id: Option<Uuid>,
     owner_user_id: Option<Uuid>,
+    #[serde(flatten)]
+    assignment: Assignment,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Assignment {
     jira_mode: JiraMode,
     jira_title: Option<String>,
     jira_issue_key: Option<String>,
@@ -158,7 +165,25 @@ fn normalize(b: CreateBody, received_at: String) -> Result<Normalized, AppError>
     let intake_channel_id = b
         .intake_channel_id
         .ok_or(AppError::Validation("intakeChannelId"))?;
-    let (jira_mode, jira_title, jira_issue_key, jira_assignee_id) = match b.jira {
+    Ok(Normalized {
+        v: "d07-create-v1",
+        subject,
+        chronology,
+        received_at,
+        intake_channel_id,
+        priority_id: b.priority_id,
+        category_id: b.category_id,
+        product_id: b.product_id,
+        receiving_unit_id: b.receiving_unit_id,
+        region_id: b.region_id,
+        merchant_id: b.merchant_id,
+        owner_user_id: b.owner_user_id,
+        assignment: assignment(b.jira, b.lark_destination_id)?,
+    })
+}
+
+fn assignment(jira: Option<JiraBody>, lark_destination_id: Option<Uuid>) -> Result<Assignment, AppError> {
+    let (jira_mode, jira_title, jira_issue_key, jira_assignee_id) = match jira {
         None => (JiraMode::None, None, None, None),
         Some(j) => match j.mode {
             JiraMode::None => {
@@ -183,24 +208,7 @@ fn normalize(b: CreateBody, received_at: String) -> Result<Normalized, AppError>
             }
         },
     };
-    Ok(Normalized {
-        v: "d07-create-v1",
-        subject,
-        chronology,
-        received_at,
-        intake_channel_id,
-        priority_id: b.priority_id,
-        category_id: b.category_id,
-        product_id: b.product_id,
-        receiving_unit_id: b.receiving_unit_id,
-        region_id: b.region_id,
-        merchant_id: b.merchant_id,
-        owner_user_id: b.owner_user_id,
-        jira_mode,
-        jira_title,
-        jira_issue_key,
-        jira_assignee_id,
-        lark_destination_id: b.lark_destination_id,
+    Ok(Assignment { jira_mode, jira_title, jira_issue_key, jira_assignee_id, lark_destination_id
     })
 }
 
@@ -412,6 +420,76 @@ pub async fn create(
         }
     }
 
+    let (ticket_id, number): (Uuid, i64) = sqlx::query_as(
+        "INSERT INTO tickets (workspace_id, number, subject, chronology, received_at, \
+           intake_channel_id, priority_id, category_id, product_id, receiving_unit_id, region_id, \
+           merchant_id, owner_user_id, created_by, create_idempotency_key, create_request_hash) \
+         VALUES ($1, 1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+         RETURNING id, number",
+    )
+    .bind(ws)
+    .bind(&n.subject)
+    .bind(&n.chronology)
+    .bind(&n.received_at)
+    .bind(n.intake_channel_id)
+    .bind(n.priority_id)
+    .bind(n.category_id)
+    .bind(n.product_id)
+    .bind(n.receiving_unit_id)
+    .bind(n.region_id)
+    .bind(n.merchant_id)
+    .bind(owner_user_id)
+    .bind(access.user_id)
+    .bind(&key)
+    .bind(&hash)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    enqueue_assignment(&mut tx, &state, &access, ticket_id, &n.assignment, &corr, "").await?;
+    // Ids and flags only: subject, chronology and merchant data stay out of the audit row.
+    ticket_list::audit(
+        &mut tx,
+        &access,
+        "ticket.create",
+        ticket_id,
+        serde_json::json!({
+            "number": number,
+            "kind": "initial",
+            "to": owner_user_id,
+            "intakeChannelId": n.intake_channel_id,
+            "priorityId": n.priority_id,
+            "categoryId": n.category_id,
+            "merchant": n.merchant_id.is_some(),
+            "jira": n.assignment.jira_mode,
+            "lark": n.assignment.lark_destination_id.is_some(),
+            "version": 1,
+        }),
+        corr.clone(),
+    )
+    .await?;
+    tx.commit().await?;
+    tracing::info!(workspace_id = %ws, ticket_id = %ticket_id, number, "ticket created");
+
+    // Simulated delivery after commit: a failure here leaves honest outbox states and never
+    // touches the committed ticket.
+    sync::dispatch_ticket(&state, ws, ticket_id, access.user_id, corr).await;
+
+    let mut conn = state.pool.acquire().await?;
+    let ticket = ticket_list::reload(&mut conn, &access, ticket_id).await?;
+    let integrations = sync::for_ticket(&mut conn, ws, ticket_id).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateResult {
+            ticket,
+            replayed: false,
+            integrations,
+        }),
+    ))
+}
+
+async fn enqueue_assignment(tx: &mut PgConnection, state: &AppState, access: &WorkspaceAccess,
+    ticket_id: Uuid, n: &Assignment, corr: &Option<String>, suffix: &str) -> Result<(), AppError> {
+    let ws = access.workspace_id;
     // Jira: connection, assignee and (link) the existing issue, all in this workspace. Only a
     // connection active in the server's mode is used; live mode never takes a dummy entry.
     let mode = state.config.integrations.mode.as_str();
@@ -419,7 +497,7 @@ pub async fn create(
     let jira_conn = match n.jira_mode {
         JiraMode::None => None,
         _ => Some(
-            connection(&mut tx, ws, "jira", mode)
+            connection(&mut *tx, ws, "jira", mode)
                 .await?
                 .ok_or(AppError::Validation("jira.mode"))?,
         ),
@@ -488,31 +566,6 @@ pub async fn create(
         }
     };
 
-    let (ticket_id, number): (Uuid, i64) = sqlx::query_as(
-        "INSERT INTO tickets (workspace_id, number, subject, chronology, received_at, \
-           intake_channel_id, priority_id, category_id, product_id, receiving_unit_id, region_id, \
-           merchant_id, owner_user_id, created_by, create_idempotency_key, create_request_hash) \
-         VALUES ($1, 1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-         RETURNING id, number",
-    )
-    .bind(ws)
-    .bind(&n.subject)
-    .bind(&n.chronology)
-    .bind(&n.received_at)
-    .bind(n.intake_channel_id)
-    .bind(n.priority_id)
-    .bind(n.category_id)
-    .bind(n.product_id)
-    .bind(n.receiving_unit_id)
-    .bind(n.region_id)
-    .bind(n.merchant_id)
-    .bind(owner_user_id)
-    .bind(access.user_id)
-    .bind(&key)
-    .bind(&hash)
-    .fetch_one(&mut *tx)
-    .await?;
-
     if let Some(conn) = jira_conn {
         let title = match (&n.jira_title, &n.jira_issue_key) {
             (Some(t), _) => t.clone(),
@@ -537,7 +590,7 @@ pub async fn create(
             "jira_link_issue"
         };
         sync::enqueue(
-            &mut tx,
+            &mut *tx,
             ws,
             ticket_id,
             conn,
@@ -546,13 +599,14 @@ pub async fn create(
             Some(related),
             None,
             requested_key.as_deref(),
-            &corr,
+            corr,
+            suffix,
         )
         .await?;
     }
     if let Some((conn, dest)) = lark {
         sync::enqueue(
-            &mut tx,
+            &mut *tx,
             ws,
             ticket_id,
             conn,
@@ -561,49 +615,49 @@ pub async fn create(
             None,
             Some(dest),
             None,
-            &corr,
+            corr,
+            suffix,
         )
         .await?;
     }
-    // Ids and flags only: subject, chronology and merchant data stay out of the audit row.
-    ticket_list::audit(
-        &mut tx,
-        &access,
-        "ticket.create",
-        ticket_id,
-        serde_json::json!({
-            "number": number,
-            "kind": "initial",
-            "to": owner_user_id,
-            "intakeChannelId": n.intake_channel_id,
-            "priorityId": n.priority_id,
-            "categoryId": n.category_id,
-            "merchant": n.merchant_id.is_some(),
-            "jira": n.jira_mode,
-            "lark": n.lark_destination_id.is_some(),
-            "version": 1,
-        }),
-        corr.clone(),
-    )
-    .await?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EscalationBody {
+    version: i32,
+    jira: Option<JiraBody>,
+    lark_destination_id: Option<Uuid>,
+}
+
+pub async fn escalate(State(state): State<AppState>, session: Session, headers: HeaderMap,
+    Path((raw_ws, raw_ticket)): Path<(String,String)>, payload: Result<Json<EscalationBody>, JsonRejection>)
+    -> Result<StatusCode, AppError> {
+    let ws = parse_id(&raw_ws)?;
+    let id = parse_id(&raw_ticket)?;
+    let access = authz::resolve(&state, &session, ws).await?;
+    access.require(Permission::RelatedWorkManage)?;
+    let b = body(payload)?;
+    let selection = assignment(b.jira, b.lark_destination_id)?;
+    if selection.jira_mode == JiraMode::None && selection.lark_destination_id.is_none() {
+        return Err(AppError::InvalidRequest);
+    }
+    let corr = correlation(&headers);
+    let mut tx = state.pool.begin().await?;
+    let (version, status): (i32,String) = sqlx::query_as(
+        "SELECT version, workflow_status FROM tickets WHERE workspace_id=$1 AND id=$2 FOR UPDATE")
+        .bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or(AppError::NotFound)?;
+    if version != b.version { return Err(AppError::VersionConflict); }
+    if status == "closed" || status == "resolved" { return Err(AppError::RuleViolation); }
+    enqueue_assignment(&mut tx, &state, &access, id, &selection, &corr, &format!(":escalate:{version}")).await?;
+    sqlx::query("UPDATE tickets SET version=version+1 WHERE workspace_id=$1 AND id=$2")
+        .bind(ws).bind(id).execute(&mut *tx).await?;
+    ticket_list::audit(&mut tx,&access,"ticket.escalate",id,
+        serde_json::json!({"jira":selection.jira_mode,"lark":selection.lark_destination_id.is_some()}),corr.clone()).await?;
     tx.commit().await?;
-    tracing::info!(workspace_id = %ws, ticket_id = %ticket_id, number, "ticket created");
-
-    // Simulated delivery after commit: a failure here leaves honest outbox states and never
-    // touches the committed ticket.
-    sync::dispatch_ticket(&state, ws, ticket_id, access.user_id, corr).await;
-
-    let mut conn = state.pool.acquire().await?;
-    let ticket = ticket_list::reload(&mut conn, &access, ticket_id).await?;
-    let integrations = sync::for_ticket(&mut conn, ws, ticket_id).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(CreateResult {
-            ticket,
-            replayed: false,
-            integrations,
-        }),
-    ))
+    sync::dispatch_ticket(&state, ws, id, access.user_id, corr).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- intake directory ----------

@@ -6872,6 +6872,18 @@
             ]
           }
         }
+      },
+      "CustomerEmailDelivery": {
+        "type": "object",
+        "required": [
+          "paused"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       }
     },
     "responses": {
@@ -13975,6 +13987,112 @@
           },
           "503": {
             "$ref": "#/components/responses/WebhookUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/customer-email": {
+      "get": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer email delivery settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerEmailDelivery"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "getCustomerEmailDelivery"
+      },
+      "put": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer email delivery settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerEmailDelivery"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "putCustomerEmailDelivery",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerEmailDelivery"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation": {
+      "post": {
+        "operationId": "escalateTicket",
+        "summary": "Escalate an existing ticket to Jira and/or Lark",
+        "description": "move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  },
+                  "jira": {
+                    "$ref": "#/components/schemas/TicketJiraRequest"
+                  },
+                  "larkDestinationId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Escalation recorded"
           }
         }
       }

@@ -119,11 +119,12 @@ pub(crate) async fn enqueue(
     lark_destination: Option<Uuid>,
     requested_issue_key: Option<&str>,
     corr: &Option<String>,
+    suffix: &str,
 ) -> Result<Uuid, AppError> {
     Ok(sqlx::query_scalar(
         "INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, operation, \
            related_work_id, lark_destination_id, idempotency_key, correlation_id, requested_issue_key) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $2::text || ':' || $4, $8, $9) RETURNING id",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $2::text || ':' || $4 || $10, $8, $9) RETURNING id",
     )
     .bind(ws)
     .bind(ticket)
@@ -134,6 +135,7 @@ pub(crate) async fn enqueue(
     .bind(lark_destination)
     .bind(corr)
     .bind(requested_issue_key)
+    .bind(suffix)
     .fetch_one(&mut *conn)
     .await?)
 }

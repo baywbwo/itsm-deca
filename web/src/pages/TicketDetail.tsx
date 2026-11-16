@@ -1,3 +1,4 @@
+import { EscalationDialog } from './EscalationDialog';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ApiError, SESSION_RELOAD_TITLE, isSessionReloadNeeded, rateLimitText, sessionReloadText, isAbort, type Api } from '../api/client';
 import type {
@@ -63,7 +64,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [audit, setAudit] = useState(0);
-  const [escalate, setEscalate] = useState(0);
+  const [escalate, setEscalate] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
 
   useEffect(() => {
@@ -113,14 +114,15 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
                 </p>
               </div>
               <div className="acts">
-                {canAssign && open && <Button onClick={() => onAssign(t)}><Icon name="user" size={16} /> Penugasan</Button>}
-                {canEscalate && <Button onClick={() => setEscalate((n) => n + 1)}><Icon name="chevron" size={16} /> Eskalasi</Button>}
+                {canEscalate && <Button onClick={() => setEscalate(true)}><Icon name="chevron" size={16} /> Eskalasi</Button>}
                 {open && t.allowedActions.length > 0 && (
                   <Button variant="primary" onClick={() => onTransition(t)}><Icon name="check" size={16} /> Ubah status</Button>
                 )}
                 {!full && <Button variant="ghost" onClick={onToggleFull}>↗ Halaman penuh</Button>}
               </div>
             </header>
+            {canEscalate && escalate && <EscalationDialog api={api} workspace={workspace} detail={detail}
+              onClose={() => setEscalate(false)} onSaved={() => { setEscalate(false); reload(); }} />}
             {detail.can.readOnly && (
               <p className="banner" role="note">Tiket ditutup adalah arsip historis read-only. Tidak ada perubahan yang dapat disimpan.</p>
             )}
@@ -170,7 +172,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
                   <Owner api={api} workspace={workspace} detail={detail} canAssign={canAssign && open} onAssign={() => onAssign(t)} />
                 </Card>
                 <Card id={`work-${t.id}`} title="Pekerjaan terkait" sub={`${num(detail.relatedWork.length)} item`}>
-                  <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={reload} openSignal={escalate} />
+                  <Work api={api} workspace={workspace} detail={detail} onSaved={applied} onReload={reload} />
                 </Card>
               </div>
             </div>
@@ -439,14 +441,12 @@ function Activity({ api, workspace, ticketId, version, refresh }: { api: Api; wo
   );
 }
 
-function Work({ api, workspace, detail, onSaved, onReload, openSignal }: {
+function Work({ api, workspace, detail, onSaved, onReload }: {
   api: Api;
   workspace: Workspace;
   detail: TicketDetail;
   onSaved: (d: TicketDetail) => void;
   onReload: () => void;
-  /** CP-UI2 "Eskalasi": each increment opens the add form and moves focus to its title field. */
-  openSignal: number;
 }) {
   const id = useId();
   const t = detail.ticket;
@@ -461,18 +461,6 @@ function Work({ api, workspace, detail, onSaved, onReload, openSignal }: {
   // One key per opened form: a resend after a lost answer replays instead of creating twice.
   const key = useRef(newKey());
   const resolvedOrClosed = t.status.code === 'resolved' || t.status.archived;
-  useEffect(() => {
-    if (!openSignal || !detail.can.manageRelatedWork || resolvedOrClosed) return;
-    if (!adding) key.current = newKey();
-    setAdding(true);
-    setNotice(null);
-    window.setTimeout(() => {
-      const el = document.getElementById(`${id}-title`);
-      el?.scrollIntoView({ block: 'center' });
-      el?.focus();
-    }, 0);
-  }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
-
   async function add() {
     if (busy) return;
     if (!title.trim()) { setFieldErr('Judul pekerjaan wajib diisi.'); document.getElementById(`${id}-title`)?.focus(); return; }
@@ -804,7 +792,7 @@ function Owner({ api, workspace, detail, canAssign, onAssign }: {
           <span className="cell-av" aria-hidden="true">{initials(t.owner.label)}</span>
           <span><b>{t.owner.label}</b><span className="tiny muted"> · PIC saat ini</span></span>
         </p>
-      ) : <p className="muted tiny">Belum ditugaskan. Gunakan Penugasan untuk menetapkan PIC.</p>}
+      ) : <p className="muted tiny">Belum ditugaskan.</p>}
       {canAssign && <div className="row"><Button className="btn-small" onClick={onAssign}>{t.owner ? 'Ubah PIC' : 'Tetapkan PIC'}</Button></div>}
       <h4 className="eyebrow-h">Riwayat PIC</h4>
       {assign === null ? <p className="muted tiny" role="status">Memuat riwayat…</p>
