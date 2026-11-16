@@ -1,3 +1,4 @@
+import type { components } from './schema';
 import type { WorkflowStage, WorkflowStages } from './types';
 import {
   isActivityPage,
@@ -690,6 +691,11 @@ export function createApi(transport: Transport) {
       }, isMemberResult),
     getWorkflowStages: (id: string, signal?: AbortSignal) => get(`${ws(id)}/stages`, isWorkflowStages, signal),
     saveWorkflowStage: (id: string, body: WorkflowStage) => call({method:'PUT',path:`${ws(id)}/stages`,headers:csrf(),body},isWorkflowStage),
+    customerSmtp: (id: string, signal?: AbortSignal) =>
+      get(`${ws(id)}/customer-email/smtp`, isCustomerSmtp, signal),
+    saveCustomerSmtp: async (id: string, body: components['schemas']['CustomerSmtpInput']) => {
+      await call({method:'PUT',path:`${ws(id)}/customer-email/smtp`,headers:csrf(),body},isEmpty,204);
+    },
     customerEmail: (id: string, signal?: AbortSignal) =>
       get(`${ws(id)}/customer-email`, isCustomerEmailDelivery, signal),
     setCustomerEmail: (id: string, paused: boolean) =>
@@ -845,4 +851,15 @@ function isWorkflowStage(v: unknown): v is WorkflowStage {
 function isWorkflowStages(v: unknown): v is WorkflowStages {
  return typeof v === 'object' && v !== null && 'items' in v && Array.isArray(v.items) && v.items.every(isWorkflowStage) &&
    'canEdit' in v && typeof v.canEdit === 'boolean';
+}
+
+function isCustomerSmtp(value: unknown): value is components['schemas']['CustomerSmtpSettings'] {
+  if (typeof value !== 'object' || value === null || !('relay' in value)) return false;
+  const relay = value.relay;
+  return 'hasPassword' in value && typeof value.hasPassword === 'boolean' &&
+    'canEdit' in value && typeof value.canEdit === 'boolean' &&
+    'keyringConfigured' in value && typeof value.keyringConfigured === 'boolean' &&
+    (relay === null || (typeof relay === 'object' && relay !== null &&
+      'host' in relay && typeof relay.host === 'string' && 'port' in relay && (relay.port === 465 || relay.port === 587) &&
+      'sender' in relay && typeof relay.sender === 'string' && 'username' in relay && typeof relay.username === 'string'));
 }

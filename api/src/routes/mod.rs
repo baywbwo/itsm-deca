@@ -38,6 +38,18 @@ pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/customer-email"),
     ("put", "/api/v1/workspaces/{workspace_id}/customer-email"),
     (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/customer-email/smtp",
+    ),
+    (
+        "put",
+        "/api/v1/workspaces/{workspace_id}/customer-email/smtp",
+    ),
+    (
+        "get",
+        "/api/v1/workspaces/{workspace_id}/customer-email/worker",
+    ),
+    (
         "post",
         "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation",
     ),
@@ -302,6 +314,8 @@ pub fn ai_router() -> Router<AppState> {
 pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/workspaces/{workspace_id}/customer-email", get(customer_email::read).put(customer_email::update))
+        .route("/api/v1/workspaces/{workspace_id}/customer-email/smtp", get(customer_email::read_relay).put(customer_email::save_relay))
+        .route("/api/v1/workspaces/{workspace_id}/customer-email/worker", get(customer_email::worker_relay))
         .route("/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation", post(intake::escalate))
         .route("/api/v1/workspaces/{workspace_id}/stages", get(stages::list).put(stages::save))
         .route("/api/v1/login", post(password::login))

@@ -6933,6 +6933,78 @@
             "type": "boolean"
           }
         }
+      },
+      "CustomerSmtpRelay": {
+        "type": "object",
+        "required": [
+          "host",
+          "port",
+          "sender",
+          "username"
+        ],
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "enum": [
+              465,
+              587
+            ]
+          }
+        }
+      },
+      "CustomerSmtpSettings": {
+        "type": "object",
+        "required": [
+          "relay",
+          "hasPassword",
+          "canEdit",
+          "keyringConfigured"
+        ],
+        "properties": {
+          "relay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CustomerSmtpRelay"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hasPassword": {
+            "type": "boolean"
+          },
+          "canEdit": {
+            "type": "boolean"
+          },
+          "keyringConfigured": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CustomerSmtpInput": {
+        "type": "object",
+        "required": [
+          "relay"
+        ],
+        "properties": {
+          "relay": {
+            "$ref": "#/components/schemas/CustomerSmtpRelay"
+          },
+          "password": {
+            "type": "string",
+            "writeOnly": true
+          }
+        }
       }
     },
     "responses": {
@@ -14215,6 +14287,123 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkflowStage"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/customer-email/smtp": {
+      "get": {
+        "operationId": "readCustomerSmtp",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSmtpSettings"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveCustomerSmtp",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful response"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerSmtpInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/customer-email/worker": {
+      "get": {
+        "operationId": "readCustomerSmtpForWorker",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-ITSM-SMTP-Worker",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "relay": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/CustomerSmtpRelay"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "password": {
+                      "type": "string"
+                    }
+                  }
                 }
               }
             }

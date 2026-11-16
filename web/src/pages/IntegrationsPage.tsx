@@ -634,10 +634,67 @@ function CustomerEmail({api, workspace}: {api: Api; workspace: Workspace}) {
   return <section className="pcard int-card">
     <div className="hd"><h2>Email pelanggan</h2></div>
     <div className="bd">
+      <CustomerSmtp api={api} workspace={workspace} />
       <p>Worker portal mengantrekan email saat tiket dibuat dan ketika CS mengubah statusnya. Saat dijeda, email tetap berada dalam antrean.</p>
       {settings.data && <Button disabled={busy} onClick={() => void toggle()}>{settings.data.paused ? 'Lanjutkan pengiriman' : 'Jeda pengiriman'}</Button>}
       {settings.error != null && <p role="status">Pengaturan email belum dapat dimuat. <button onClick={settings.reload}>Coba lagi</button></p>}
       {error && <p role="alert">{error}</p>}
     </div>
   </section>;
+}
+
+function CustomerSmtp({api, workspace}: {api: Api; workspace: Workspace}) {
+  const settings = useLoad(signal => api.customerSmtp(workspace.id, signal), workspace.id);
+  const [open, setOpen] = useState(false);
+  return <>
+    {settings.error != null && <p role="status">Konfigurasi SMTP tidak dapat dimuat. <Button onClick={settings.reload}>Coba lagi</Button></p>}
+    {settings.data && <>
+      <p>{settings.data.relay ? `Pengirim ${settings.data.relay.sender} · ${settings.data.relay.host}:${settings.data.relay.port}` : 'SMTP belum dikonfigurasi.'}</p>
+      {settings.data.canEdit && settings.data.keyringConfigured && <Button onClick={() => setOpen(true)}>Konfigurasi SMTP</Button>}
+      {!settings.data.keyringConfigured && <p>Kunci enkripsi server diperlukan untuk menyimpan kredensial SMTP.</p>}
+      {open && <SmtpDialog api={api} workspace={workspace} settings={settings.data}
+        onClose={() => setOpen(false)} onSaved={() => {setOpen(false); settings.reload();}} />}
+    </>}
+  </>;
+}
+
+function SmtpDialog({api, workspace, settings, onClose, onSaved}: {
+  api: Api; workspace: Workspace; settings: Awaited<ReturnType<Api['customerSmtp']>>;
+  onClose: () => void; onSaved: () => void;
+}) {
+  const [relay, setRelay] = useState(settings.relay ?? {host:'',port:465 as const,sender:'cs@deca.co.id',username:''});
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const id = useId();
+  const formId = id + '-smtp';
+  const requiresPassword = !settings.hasPassword || relay.host !== settings.relay?.host ||
+    relay.username !== settings.relay?.username || relay.port !== settings.relay?.port;
+  return <Dialog open title="Konfigurasi SMTP" onClose={() => {if (!busy) onClose();}}
+    footer={<><Button disabled={busy} onClick={onClose}>Batal</Button>
+      <Button type="submit" form={formId} variant="primary" disabled={busy}>{busy ? 'Menyimpan…' : 'Simpan SMTP'}</Button></>}>
+    <form id={formId} className="formgrid" onSubmit={async event => {
+      event.preventDefault();
+      if (busy) return;
+      setBusy(true);
+      setError('');
+      try {
+        await api.saveCustomerSmtp(workspace.id, {relay, ...(password ? {password} : {})});
+        onSaved();
+      } catch (e) {
+        setError(e instanceof ApiError && e.status === 422 ? 'Periksa host yang diizinkan, alamat pengirim, username, dan kata sandi.' :
+          e instanceof Error ? e.message : 'Konfigurasi gagal tersimpan.');
+      } finally {setBusy(false);}
+    }}>
+      <TextField label="Host SMTP" required value={relay.host} onChange={e => setRelay({...relay,host:e.target.value})} />
+      <SelectField label="Port dan enkripsi" value={relay.port} onChange={e => setRelay({...relay,port:e.target.value === '587' ? 587 : 465})}>
+        <option value="465">465 · TLS</option><option value="587">587 · STARTTLS</option>
+      </SelectField>
+      <TextField label="Alamat pengirim" type="email" required value={relay.sender} onChange={e => setRelay({...relay,sender:e.target.value})} />
+      <TextField label="Username SMTP" required value={relay.username} onChange={e => setRelay({...relay,username:e.target.value})} />
+      <TextField label="Kata sandi SMTP" type="password" required={requiresPassword} autoComplete="new-password"
+        value={password} onChange={e => setPassword(e.target.value)} hint={requiresPassword ? 'Masukkan kata sandi SMTP atau App Password.' : 'Kosongkan untuk memakai kredensial yang tersimpan.'} />
+      {error && <p className="full" role="alert">{error}</p>}
+    </form>
+  </Dialog>;
 }

@@ -44,20 +44,27 @@ export function notifications(api, ticketsPath) {
     });
   }
   async function deliver() {
-    if (!process.env.SMTP_HOST) return;
-    if (process.env.SMTP_USERNAME && !process.env.SMTP_PASSWORD &&
-        !(await readFile(process.env.SMTP_PASSWORD_FILE, 'utf8').catch(() => '')).trim()) return;
+    const path = ticketsPath.replace(/\/tickets$/, '/customer-email');
+    if (!process.env.ITSM_SMTP_WORKER_TOKEN) {
+      if (!process.env.SMTP_HOST) return;
+      if (process.env.SMTP_USERNAME && !process.env.SMTP_PASSWORD &&
+          !(await readFile(process.env.SMTP_PASSWORD_FILE, 'utf8').catch(() => '')).trim()) return;
+    }
     const rows = db.prepare(`SELECT m.*, c.email, c.number FROM messages m JOIN contacts c ON c.id=m.ticket
       WHERE m.sent=0 AND m.retry_at<=unixepoch() AND NOT EXISTS
       (SELECT 1 FROM messages older WHERE older.ticket=m.ticket AND older.seq<m.seq AND older.sent=0)
       ORDER BY m.seq LIMIT 30`).all();
     if (!rows.length) return;
+    let smtp;
     try {
-      const settings = await api(ticketsPath.replace(/\/tickets$/, '/customer-email'));
-      if (settings.paused !== false) return;
+      if (process.env.ITSM_SMTP_WORKER_TOKEN) {
+        smtp = await api(path + '/worker', null, {'X-ITSM-SMTP-Worker': process.env.ITSM_SMTP_WORKER_TOKEN});
+        if (!smtp.relay) return;
+      } else if ((await api(path)).paused !== false) {
+        return;
+      }
     } catch (error) {
-      // The live API predates workspace email settings. Only the local installation opts in.
-      if (error.message !== 'ITSM HTTP 404' || process.env.EMAIL_LEGACY_API !== '1') return;
+      if (process.env.ITSM_SMTP_WORKER_TOKEN || error.message !== 'ITSM HTTP 404' || process.env.EMAIL_LEGACY_API !== '1') return;
     }
     for (const row of rows) {
       try {
@@ -67,7 +74,7 @@ export function notifications(api, ticketsPath) {
           child.on('error',reject);
           child.on('close',code => code === 0 ? resolve() : reject(new Error('SMTP delivery failed')));
           child.stdin.on('error',reject);
-          child.stdin.end(JSON.stringify(row));
+          child.stdin.end(JSON.stringify({...row, smtp}));
         });
         db.prepare('UPDATE messages SET sent=1 WHERE seq=?').run(row.seq);
       } catch {

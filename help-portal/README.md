@@ -19,3 +19,11 @@ Gunakan Node.js 24 dan Python 3. Worker menyimpan penerima dan antrean di SQLite
 Atur SMTP_HOST, SMTP_PORT, SMTP_FROM, SMTP_USERNAME dan SMTP_PASSWORD_FILE di environment privat service. File password hanya perlu dapat dibaca pemilik service. Port 465 memakai TLS langsung dan port lain memerlukan STARTTLS. Untuk Gmail gunakan smtp.gmail.com, port 465, alamat Gmail sebagai SMTP_USERNAME dan SMTP_FROM, serta App Password dari akun itu. Sender resmi DECA dapat digunakan setelah relay mengizinkan alamat cs@deca.co.id. SMTP dan konfigurasi ITSM tetap berada di server.
 
 Migrasi 0033 dan API/UI terkait menambahkan kontrol jeda dan lanjutkan pada menu Integrasi per workspace. Email tetap diantrekan saat dijeda. Instalasi lokal yang masih memakai API ITSM lama dapat memakai EMAIL_LEGACY_API=1 untuk mengirim ketika endpoint pengaturan belum tersedia. Setelah API baru dipasang, hapus opsi transisi itu.
+
+### Konfigurasi SMTP dari ITSM
+
+Saat handover, pasang API dan web ITSM beserta migrasi 0035, lalu pasang versi portal dan worker dari repo yang sama. Siapkan keyring ITSM dan isi ITSM_SMTP_WORKER_TOKEN dengan nilai acak minimal 32 karakter yang sama pada environment server ITSM dan worker portal. Worker tetap menggunakan akun ITSM untuk mengakses workspace. Gunakan HTTPS untuk komunikasi tersebut.
+
+Set ITSM_SMTP_HOSTS di server ITSM untuk daftar host SMTP yang diizinkan, dipisahkan dengan koma. Default-nya smtp.gmail.com. Masukkan host relay resmi DECA di daftar sebelum handover. Setelah bootstrap ini, admin DECA dengan grant integration.manage dan integration.credentials dapat membuka Integrasi → Email pelanggan → Konfigurasi SMTP dan mengisi host, port TLS, alamat pengirim, username serta kata sandi. Worker mengambil konfigurasi saat ada email dalam antrean. Perubahan di UI berlaku tanpa restart.
+
+Uji dengan tiket dari portal dan alamat penerima yang dapat diperiksa. Cocokkan nomor ITSM pada tanda terima, lalu ubah status tiket sekali dan periksa email pembaruan. Pengiriman memakai relay yang telah dikonfigurasi pada workspace.

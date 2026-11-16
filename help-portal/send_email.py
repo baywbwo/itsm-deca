@@ -8,7 +8,11 @@ from email.message import EmailMessage
 from email.utils import formatdate
 
 def send(row):
-    sender = os.environ.get('SMTP_FROM', 'cs@deca.co.id')
+    smtp_settings = row.get('smtp') or {}
+    relay = smtp_settings.get('relay') or {}
+    sender = relay.get('sender') or os.environ.get('SMTP_FROM', 'cs@deca.co.id')
+    host = relay.get('host') or os.environ['SMTP_HOST']
+    username = relay.get('username') or os.environ.get('SMTP_USERNAME')
     message = EmailMessage()
     message['From'] = sender
     message['To'] = row['email']
@@ -18,19 +22,19 @@ def send(row):
     message['Subject'] = f"{title} • {row['number']}"
     message.set_content(f"Halo,\n\nNomor tiket: {row['number']}\n{row['body']}\n\nSalam,\nTim CS DECA")
     context = ssl.create_default_context()
-    port = int(os.environ.get('SMTP_PORT', '465'))
-    options = dict(host=os.environ['SMTP_HOST'], port=port, timeout=20)
+    port = int(relay.get('port') or os.environ.get('SMTP_PORT', '465'))
+    options = dict(host=host, port=port, timeout=20)
     connection = smtplib.SMTP_SSL(context=context, **options) if port == 465 else smtplib.SMTP(**options)
     with connection as smtp:
         if port != 465:
             smtp.starttls(context=context)
-        if os.environ.get('SMTP_USERNAME'):
-            password = os.environ.get('SMTP_PASSWORD')
+        if username:
+            password = smtp_settings.get('password') or os.environ.get('SMTP_PASSWORD')
             if not password:
                 password = Path(os.environ['SMTP_PASSWORD_FILE']).read_text().strip()
-            if os.environ['SMTP_HOST'] == 'smtp.gmail.com':
+            if host == 'smtp.gmail.com':
                 password = password.replace(' ', '')
-            smtp.login(os.environ['SMTP_USERNAME'], password)
+            smtp.login(username, password)
         smtp.send_message(message, from_addr=sender, to_addrs=[row['email']])
 
 if __name__ == '__main__':

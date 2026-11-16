@@ -16,6 +16,7 @@
 		output stdout
 		format filter {
 			request>headers>X-Csrf-Token delete
+			request>headers>X-Itsm-Smtp-Worker delete
 			wrap json
 		}
 	}
@@ -42,6 +43,7 @@
 		output stdout
 		format filter {
 			request>headers>X-Csrf-Token delete
+			request>headers>X-Itsm-Smtp-Worker delete
 			wrap json
 		}
 	}

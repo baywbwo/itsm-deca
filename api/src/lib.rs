@@ -137,6 +137,7 @@ pub fn app(state: AppState) -> Router {
             header::SET_COOKIE,
             header::AUTHORIZATION,
             HeaderName::from_static(session::CSRF_HEADER),
+            HeaderName::from_static("x-itsm-smtp-worker"),
             HeaderName::from_static("x-hub-signature"),
         ]))
         .layer(SetRequestIdLayer::new(request_id, MakeRequestUuid))
