@@ -205,7 +205,7 @@ export function isDashboard(v: unknown): v is Dashboard {
 
 const STATUS_CODES = ['new', 'open', 'pending_customer', 'pending_engineering', 'resolved', 'closed'];
 const isTicketStatus = (v: unknown) =>
-  isObj(v) && STATUS_CODES.includes(v.code as string) && isStr(v.label) &&
+  isObj(v) && isStr(v.code) && (STATUS_CODES.includes(v.code) || /^stage_[a-z0-9_]+$/.test(v.code)) && isStr(v.label) &&
   typeof v.selectable === 'boolean' && typeof v.archived === 'boolean';
 const isRefOrNull = (v: unknown) => v === null || (isObj(v) && isStr(v.id) && isStr(v.label));
 const isAction = (a: unknown) =>

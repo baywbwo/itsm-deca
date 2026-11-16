@@ -760,7 +760,9 @@
                   "integration_mode_mismatch",
                   "idp_not_ready",
                   "subject_linked",
-                  "user_linked"
+                  "user_linked",
+                  "stage_in_use",
+                  "required_stage"
                 ]
               },
               "message": {
@@ -1174,15 +1176,7 @@
         ],
         "properties": {
           "code": {
-            "type": "string",
-            "enum": [
-              "new",
-              "open",
-              "pending_customer",
-              "pending_engineering",
-              "resolved",
-              "closed"
-            ]
+            "$ref": "#/components/schemas/TicketStatusCode"
           },
           "label": {
             "type": "string",
@@ -1195,6 +1189,17 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "lifecycleCode": {
+            "type": "string",
+            "enum": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering",
+              "resolved",
+              "closed"
+            ]
           }
         }
       },
@@ -1923,14 +1928,8 @@
       },
       "TicketStatusCode": {
         "type": "string",
-        "enum": [
-          "new",
-          "open",
-          "pending_customer",
-          "pending_engineering",
-          "resolved",
-          "closed"
-        ]
+        "minLength": 1,
+        "maxLength": 64
       },
       "DashboardPeriod": {
         "type": "object",
@@ -6870,6 +6869,68 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CustomerEmailDelivery": {
+        "type": "object",
+        "required": [
+          "paused"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowStage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label",
+          "lifecycle",
+          "sortOrder",
+          "active",
+          "version"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkflowStages": {
+        "type": "object",
+        "required": [
+          "items",
+          "canEdit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStage"
+            }
+          },
+          "canEdit": {
+            "type": "boolean"
           }
         }
       }
@@ -13975,6 +14036,191 @@
           },
           "503": {
             "$ref": "#/components/responses/WebhookUnavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/customer-email": {
+      "get": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer email delivery settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerEmailDelivery"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "getCustomerEmailDelivery"
+      },
+      "put": {
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer email delivery settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerEmailDelivery"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "putCustomerEmailDelivery",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerEmailDelivery"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation": {
+      "post": {
+        "operationId": "escalateTicket",
+        "summary": "Escalate an existing ticket to Jira and/or Lark",
+        "description": "move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.",
+        "security": [
+          {
+            "sessionCookie": [],
+            "csrfHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WorkspaceId"
+          },
+          {
+            "$ref": "#/components/parameters/TicketId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "integer"
+                  },
+                  "jira": {
+                    "$ref": "#/components/schemas/TicketJiraRequest"
+                  },
+                  "larkDestinationId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Escalation recorded"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/stages": {
+      "get": {
+        "operationId": "getWorkflowStages",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace stages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStages"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveWorkflowStage",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowStage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved stage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStage"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }

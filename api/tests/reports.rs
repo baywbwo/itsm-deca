@@ -1092,10 +1092,7 @@ async fn xlsx_export_matches_preview_typed_and_safe(pool: PgPool) {
     assert_eq!(sheet.height(), rows.len() + 1);
     for (i, row) in rows.iter().enumerate() {
         let r = i + 1;
-        assert_eq!(
-            text(&sheet, r, 0),
-            "Rekap operasional"
-        );
+        assert_eq!(text(&sheet, r, 0), "Rekap operasional");
         assert_eq!(text(&sheet, r, 1), "DUMA");
         assert_eq!(when(&sheet, r, 4, "YYYY-MM-DD"), "2026-10-01");
         assert_eq!(when(&sheet, r, 5, "YYYY-MM-DD"), "2026-10-31");

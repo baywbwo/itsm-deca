@@ -296,21 +296,19 @@ async fn transient_jira(pool: &PgPool, fx: &Fx, key: &str) -> Uuid {
     simulate(pool, fx.a, &admin, "jira", "transient").await;
     let dir = directory(pool, fx.a, &lead).await;
     assert_eq!(dir["jira"]["simulatedOutcome"], "transient");
-    let r = create(
-        pool,
-        fx.a,
-        &lead,
-        key,
-        &full(&dir, channel(pool, fx.a).await),
-    )
-    .await;
+    let mut request = full(&dir, channel(pool, fx.a).await);
+    // These worker tests exercise Jira retries independently of dependent Lark delivery.
+    if let Some(body) = request.as_object_mut() {
+        body.remove("larkDestinationId");
+    }
+    let r = create(pool, fx.a, &lead, key, &request).await;
     assert_eq!(r.status, StatusCode::CREATED, "{}", r.json);
     let jira = sync_of(&r.json, "jira");
     assert_eq!(jira["state"], "pending", "{jira}");
     assert_eq!(jira["autoAttempts"], 1);
     assert_eq!(jira["inFlight"], false);
     assert!(jira["nextAttemptAt"].is_string(), "{jira}");
-    assert_eq!(sync_of(&r.json, "lark")["state"], "success");
+    assert_eq!(r.json["integrations"].as_array().map(Vec::len), Some(1));
     ok(Uuid::parse_str(&s(&jira["id"])), "id")
 }
 
@@ -807,4 +805,59 @@ async fn cp7b_worker_tick_holds_one_claim_at_a_time(pool: PgPool) {
     for id in &ids {
         assert_eq!(row(&pool, *id).await.state, "success");
     }
+}
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn lark_waits_for_the_jira_link_before_delivery(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let admin = tok(&pool, fx.admin).await;
+    let lead = tok(&pool, fx.lead).await;
+    simulate(&pool, fx.a, &admin, "jira", "transient").await;
+    let dir = directory(&pool, fx.a, &lead).await;
+    let created = create(
+        &pool,
+        fx.a,
+        &lead,
+        "lark-depends-on-jira",
+        &full(&dir, channel(&pool, fx.a).await),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.json);
+    let jira = ok(
+        Uuid::parse_str(&s(&sync_of(&created.json, "jira")["id"])),
+        "jira",
+    );
+    let lark = ok(
+        Uuid::parse_str(&s(&sync_of(&created.json, "lark")["id"])),
+        "lark",
+    );
+    assert_eq!(sync_of(&created.json, "lark")["state"], "pending");
+    let st = state(&pool);
+    {
+        let mut conn = ok(pool.acquire().await, "connection");
+        assert!(
+            ok(
+                outbox::claim_one(&mut conn, fx.a, lark).await,
+                "blocked claim"
+            )
+            .is_none()
+        );
+    }
+    simulate(&pool, fx.a, &admin, "jira", "success").await;
+    make_due(&pool, jira).await;
+    ok(outbox::run_once(&st).await, "jira retry");
+    assert_eq!(row(&pool, jira).await.state, "success");
+    let claim = {
+        let mut conn = ok(pool.acquire().await, "connection");
+        ok(outbox::claim_one(&mut conn, fx.a, lark).await, "lark claim")
+    };
+    let claim = claim.unwrap_or_else(|| panic!("Lark should be available after Jira settles"));
+    assert_eq!(
+        ok(
+            outbox::settle(&st, claim, None, &None).await,
+            "lark delivery"
+        ),
+        Settled::Success
+    );
+    assert_eq!(row(&pool, lark).await.state, "success");
 }

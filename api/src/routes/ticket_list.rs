@@ -33,6 +33,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, Postgres, QueryBuilder};
 use uuid::Uuid;
 
+use super::stages::{self, Stage};
 use crate::AppState;
 use crate::authz::{self, AssignmentKind, Permission, WorkspaceAccess};
 use crate::domain::{TicketStatus, TicketStatusView};
@@ -171,6 +172,7 @@ pub struct TicketQuery {
     pub q: Option<String>,
     /// `None` = every status (including the closed archive).
     pub status: Option<Vec<TicketStatus>>,
+    pub stages: Option<Vec<String>>,
     pub owner: Dim,
     pub channel: Dim,
     pub category: Dim,
@@ -220,17 +222,29 @@ impl TicketQuery {
             Some(s) if s.chars().count() > MAX_QUERY_CHARS => return Err(bad()),
             Some(s) => Some(s.to_owned()),
         };
+        let mut stage_codes = Vec::new();
         let status = match non_empty(q.status.as_deref()) {
             None => None,
             Some(raw) => {
                 let mut v = Vec::new();
                 for code in raw.split(',') {
-                    let s = TicketStatus::from_code(code).ok_or_else(bad)?;
+                    let Some(s) = TicketStatus::from_code(code) else {
+                        if code.starts_with("stage_")
+                            && code.len() <= 64
+                            && code
+                                .bytes()
+                                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+                        {
+                            stage_codes.push(code.to_owned());
+                            continue;
+                        }
+                        return Err(bad());
+                    };
                     if !v.contains(&s) {
                         v.push(s);
                     }
                 }
-                Some(v)
+                (!v.is_empty()).then_some(v)
             }
         };
         let (priority, priority_unset) = match non_empty(q.priority.as_deref()) {
@@ -252,6 +266,7 @@ impl TicketQuery {
             }
         };
         Ok(TicketQuery {
+            stages: (!stage_codes.is_empty()).then_some(stage_codes),
             q: search,
             status,
             owner: Dim::parse(non_empty(q.owner.as_deref()), UNASSIGNED).ok_or_else(bad)?,
@@ -266,35 +281,6 @@ impl TicketQuery {
             sort: SortKey::parse(non_empty(q.sort.as_deref())).ok_or_else(bad)?,
             order: Order::parse(non_empty(q.order.as_deref())).ok_or_else(bad)?,
         })
-    }
-
-    /// True when `push_scope(.., false)` selects every ticket of the workspace, i.e. only
-    /// the status filter (if any) narrows the result. Every field is named so that a new
-    /// filter does not compile until it is classified here.
-    fn whole_workspace(&self) -> bool {
-        let TicketQuery {
-            q,
-            status: _,
-            owner,
-            channel,
-            category,
-            priority,
-            priority_unset,
-            received_from,
-            received_before,
-            resolved_from,
-            resolved_before,
-            sort: _,
-            order: _,
-        } = self;
-        q.is_none()
-            && [*owner, *channel, *category].iter().all(|d| *d == Dim::Any)
-            && priority.is_none()
-            && !priority_unset
-            && received_from.is_none()
-            && received_before.is_none()
-            && resolved_from.is_none()
-            && resolved_before.is_none()
     }
 
     fn resolved_filter(&self) -> bool {
@@ -354,6 +340,7 @@ impl TicketQuery {
             workspace_id,
             self.q,
             self.status.as_ref().map(|_| status),
+            self.stages,
             self.owner.wire(UNASSIGNED),
             self.channel.wire(NONE),
             self.category.wire(NONE),
@@ -370,10 +357,18 @@ impl TicketQuery {
         URL_SAFE_NO_PAD.encode(&digest[..16])
     }
 
-    fn with_status(&self, s: TicketStatus) -> TicketQuery {
-        TicketQuery {
-            status: Some(vec![s]),
-            ..self.clone()
+    fn with_stage(&self, code: &str) -> TicketQuery {
+        match TicketStatus::from_code(code) {
+            Some(status) => TicketQuery {
+                status: Some(vec![status]),
+                stages: None,
+                ..self.clone()
+            },
+            None => TicketQuery {
+                status: None,
+                stages: Some(vec![code.to_owned()]),
+                ..self.clone()
+            },
         }
     }
 
@@ -381,8 +376,9 @@ impl TicketQuery {
     /// the List/Board wire format. Search text is never part of it (free text may hold PII).
     pub(crate) fn saved_params(&self) -> BTreeMap<&'static str, String> {
         let mut out = BTreeMap::new();
-        if let Some(v) = &self.status {
-            let codes: Vec<&str> = v.iter().map(|s| s.code()).collect();
+        let mut codes: Vec<&str> = self.status.iter().flatten().map(|s| s.code()).collect();
+        codes.extend(self.stages.iter().flatten().map(String::as_str));
+        if !codes.is_empty() {
             out.insert("status", codes.join(","));
         }
         for (key, value) in [
@@ -418,10 +414,18 @@ impl TicketQuery {
     pub fn applied(&self) -> AppliedTicketFilters {
         AppliedTicketFilters {
             q: self.q.clone(),
-            status: self
-                .status
-                .as_ref()
-                .map(|v| v.iter().map(|s| s.code()).collect()),
+            status: if self.status.is_some() || self.stages.is_some() {
+                Some(
+                    self.status
+                        .iter()
+                        .flatten()
+                        .map(|s| s.code().to_owned())
+                        .chain(self.stages.iter().flatten().cloned())
+                        .collect(),
+                )
+            } else {
+                None
+            },
             owner: self.owner.wire(UNASSIGNED),
             channel: self.channel.wire(NONE),
             category: self.category.wire(NONE),
@@ -496,11 +500,19 @@ pub(crate) fn parse_limit(raw: Option<&str>, default: i64, max: i64) -> Result<i
 /// the status filter (for `countsByStatus`).
 fn push_scope(b: &mut QueryBuilder<'_, Postgres>, ws: Uuid, f: &TicketQuery, with_status: bool) {
     b.push(" WHERE t.workspace_id = ").push_bind(ws);
-    if with_status && let Some(status) = &f.status {
-        let codes: Vec<String> = status.iter().map(|s| s.code().to_owned()).collect();
-        b.push(" AND t.workflow_status = ANY(")
+    if with_status && (f.status.is_some() || f.stages.is_some()) {
+        let codes: Vec<String> = f
+            .status
+            .iter()
+            .flatten()
+            .map(|s| s.code().to_owned())
+            .collect();
+        let stages: Vec<String> = f.stages.iter().flatten().cloned().collect();
+        b.push(" AND ((CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END) = ANY(")
             .push_bind(codes)
-            .push(")");
+            .push(") OR (CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END) = ANY(")
+            .push_bind(stages)
+            .push("))");
     }
     let dims = [
         ("t.owner_user_id", f.owner),
@@ -572,7 +584,7 @@ fn push_event_range(b: &mut QueryBuilder<'_, Postgres>, f: &TicketQuery) {
 }
 
 const ITEM_COLUMNS: &str = concat!(
-    "SELECT t.id, t.number, t.number_prefix, t.subject, t.workflow_status, t.cycle_no, t.version, ",
+    "SELECT t.id, t.number, t.number_prefix, t.subject, t.workflow_status, (CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END) AS stage_code, t.cycle_no, t.version, ",
     utc!("t.received_at"),
     " AS received_at, ",
     utc!("t.updated_at"),
@@ -601,6 +613,7 @@ struct ItemRow {
     number_prefix: String,
     subject: String,
     workflow_status: String,
+    stage_code: String,
     cycle_no: i32,
     version: i32,
     received_at: String,
@@ -694,7 +707,7 @@ pub struct TicketListItem {
 #[serde(rename_all = "camelCase")]
 pub struct AppliedTicketFilters {
     q: Option<String>,
-    status: Option<Vec<&'static str>>,
+    status: Option<Vec<String>>,
     owner: Option<String>,
     channel: Option<String>,
     category: Option<String>,
@@ -819,18 +832,56 @@ pub fn allowed_actions(
     }
 }
 
-fn item(access: &WorkspaceAccess, r: ItemRow) -> Result<(TicketListItem, String), AppError> {
+fn item(
+    access: &WorkspaceAccess,
+    r: ItemRow,
+    catalog: &[Stage],
+) -> Result<(TicketListItem, String), AppError> {
     let status = TicketStatus::from_code(&r.workflow_status)
         .ok_or_else(|| AppError::internal(UnknownStatus))?;
     let reference = |id: Option<Uuid>, code: Option<String>, label: Option<String>| {
         id.zip(label).map(|(id, label)| Ref { id, code, label })
     };
+    let stage = catalog.iter().find(|c| c.code == r.stage_code);
+    let mut actions = Vec::new();
+    if access.allows(Permission::TicketTransition) && status != TicketStatus::Closed {
+        for target in catalog
+            .iter()
+            .filter(|c| c.active && c.code != r.stage_code && c.lifecycle != "closed")
+        {
+            let target_status =
+                TicketStatus::from_code(&target.lifecycle).ok_or(AppError::InvalidRequest)?;
+            if status == TicketStatus::Resolved && target_status != TicketStatus::Open {
+                continue;
+            }
+            let (kind, requires, blocked_by) = if status == TicketStatus::Resolved {
+                (ActionKind::Reopen, Requires::Reason, None)
+            } else if target_status == TicketStatus::Resolved {
+                if !access.allows(Permission::TicketResolve) {
+                    continue;
+                }
+                (
+                    ActionKind::Resolve,
+                    Requires::Summary,
+                    (r.related_blocking_open > 0).then_some("blocking_related_work"),
+                )
+            } else {
+                (ActionKind::Move, Requires::None, None)
+            };
+            actions.push(AllowedAction {
+                to: target.status(),
+                kind,
+                requires,
+                blocked_by,
+            });
+        }
+    }
     let item = TicketListItem {
         id: r.id,
         number: r.number,
         display_number: format!("{}-{}", r.number_prefix, r.number),
         subject: r.subject,
-        status: status.into(),
+        status: stage.map(Stage::status).unwrap_or_else(|| status.into()),
         cycle_no: r.cycle_no,
         version: r.version,
         priority: reference(r.priority_id, r.priority_code, r.priority_label),
@@ -844,7 +895,7 @@ fn item(access: &WorkspaceAccess, r: ItemRow) -> Result<(TicketListItem, String)
             open: r.related_open,
             blocking_open: r.related_blocking_open,
         },
-        allowed_actions: allowed_actions(access, status, r.related_blocking_open),
+        allowed_actions: actions,
     };
     Ok((item, r.sort_key))
 }
@@ -865,6 +916,15 @@ pub(crate) async fn validate(
     ws: Uuid,
     f: &TicketQuery,
 ) -> Result<(), AppError> {
+    if let Some(codes) = &f.stages {
+        let known = stages::load(conn, ws).await?;
+        if codes
+            .iter()
+            .any(|code| !known.iter().any(|stage| &stage.code == code))
+        {
+            return Err(AppError::InvalidRequest);
+        }
+    }
     let mut b = QueryBuilder::<Postgres>::new("SELECT true");
     if let Some(id) = f.owner.id() {
         b.push(" AND EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.workspace_id = ")
@@ -923,46 +983,6 @@ pub(crate) async fn validate(
 /// The filtered total and the board column totals are sums of these, read in the same
 /// snapshot, so no second count over the same rows is needed (CP7c: at 500k tickets per
 /// workspace each extra count cost a full index pass per request).
-struct StatusCounts(BTreeMap<String, i64>);
-
-impl StatusCounts {
-    async fn load(conn: &mut PgConnection, ws: Uuid, f: &TicketQuery) -> Result<Self, AppError> {
-        if f.whole_workspace() {
-            let rows = workspace_status_counts(conn, ws).await?;
-            return Ok(StatusCounts(rows.into_iter().collect()));
-        }
-        let mut b =
-            QueryBuilder::<Postgres>::new("SELECT t.workflow_status, count(*) FROM tickets t");
-        push_scope(&mut b, ws, f, false);
-        b.push(" GROUP BY t.workflow_status");
-        let rows: Vec<(String, i64)> = b.build_query_as().fetch_all(&mut *conn).await?;
-        Ok(StatusCounts(rows.into_iter().collect()))
-    }
-
-    fn of(&self, s: TicketStatus) -> i64 {
-        self.0.get(s.code()).copied().unwrap_or(0)
-    }
-
-    /// Tickets matching `f` including its status filter.
-    fn total(&self, f: &TicketQuery) -> i64 {
-        match &f.status {
-            Some(selected) => selected.iter().map(|s| self.of(*s)).sum(),
-            None => self.0.values().sum(),
-        }
-    }
-
-    fn views(&self) -> Vec<StatusCountView> {
-        TicketStatus::ALL
-            .into_iter()
-            .filter(|s| *s != TicketStatus::Closed || self.0.contains_key(s.code()))
-            .map(|s| StatusCountView {
-                status: s.into(),
-                count: self.of(s),
-            })
-            .collect()
-    }
-}
-
 /// Tickets per status of the whole workspace from the trigger-maintained counters
 /// (migration 0030), in the caller's snapshot. Statuses without tickets are omitted, as in
 /// a `GROUP BY` over the tickets.
@@ -1039,8 +1059,9 @@ async fn page(
     rows.truncate(limit as usize);
     let mut items = Vec::with_capacity(rows.len());
     let mut last = None;
+    let catalog = stages::load(conn, ws).await?;
     for r in rows {
-        let (it, key) = item(access, r)?;
+        let (it, key) = item(access, r, &catalog)?;
         last = Some((key, it.id));
         items.push(it);
     }
@@ -1055,6 +1076,45 @@ async fn as_of(conn: &mut PgConnection) -> Result<String, AppError> {
     Ok(sqlx::query_scalar(concat!("SELECT ", utc!("now()")))
         .fetch_one(&mut *conn)
         .await?)
+}
+
+async fn stage_counts(
+    conn: &mut PgConnection,
+    ws: Uuid,
+    f: &TicketQuery,
+) -> Result<Vec<StatusCountView>, AppError> {
+    let catalog = stages::load(conn, ws).await?;
+    let mut b = QueryBuilder::<Postgres>::new(
+        "SELECT (CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END),count(*) FROM tickets t",
+    );
+    push_scope(&mut b, ws, f, false);
+    b.push(" GROUP BY (CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END)");
+    let counts: BTreeMap<String, i64> = b
+        .build_query_as::<(String, i64)>()
+        .fetch_all(&mut *conn)
+        .await?
+        .into_iter()
+        .collect();
+    Ok(catalog
+        .into_iter()
+        .filter(|stage| {
+            (stage.active && stage.lifecycle != "closed")
+                || counts.get(&stage.code).copied().unwrap_or(0) > 0
+        })
+        .map(|stage| StatusCountView {
+            count: counts.get(&stage.code).copied().unwrap_or(0),
+            status: stage.status(),
+        })
+        .collect())
+}
+async fn filtered_total(
+    conn: &mut PgConnection,
+    ws: Uuid,
+    f: &TicketQuery,
+) -> Result<i64, AppError> {
+    let mut b = QueryBuilder::<Postgres>::new("SELECT count(*) FROM tickets t");
+    push_scope(&mut b, ws, f, true);
+    Ok(b.build_query_scalar().fetch_one(conn).await?)
 }
 
 // ---------- handlers ----------
@@ -1077,9 +1137,8 @@ pub async fn list(
 
     let mut tx = snapshot(&state).await?;
     validate(&mut tx, ws, &f).await?;
-    let by_status = StatusCounts::load(&mut tx, ws, &f).await?;
-    let total = by_status.total(&f);
-    let counts = by_status.views();
+    let total = filtered_total(&mut tx, ws, &f).await?;
+    let counts = stage_counts(&mut tx, ws, &f).await?;
     let events = resolution_events(&mut tx, ws, &f).await?;
     let (items, next_cursor) = page(&mut tx, &access, &f, after, limit).await?;
     let as_of = as_of(&mut tx).await?;
@@ -1115,28 +1174,21 @@ pub async fn board(
 
     let mut tx = snapshot(&state).await?;
     validate(&mut tx, ws, &f).await?;
-    let by_status = StatusCounts::load(&mut tx, ws, &f).await?;
-    let counts = by_status.views();
-    let selected: Vec<TicketStatus> = match &f.status {
-        Some(v) => TicketStatus::ALL
-            .into_iter()
-            .filter(|s| v.contains(s))
-            .collect(),
-        None => counts
-            .iter()
-            .filter_map(|c| TicketStatus::from_code(c.status.code))
-            .collect(),
-    };
-    let mut columns = Vec::with_capacity(selected.len());
+    let counts = stage_counts(&mut tx, ws, &f).await?;
+    let selected = counts.into_iter().filter(|c| {
+        (f.status.is_none() && f.stages.is_none())
+            || f.status.iter().flatten().any(|s| s.code() == c.status.code)
+            || f.stages.iter().flatten().any(|s| s == &c.status.code)
+    });
+    let mut columns = Vec::new();
     let mut total = 0;
-    for s in selected {
-        let cf = f.with_status(s);
-        let n = by_status.of(s);
+    for c in selected {
+        let cf = f.with_stage(&c.status.code);
         let (items, next_cursor) = page(&mut tx, &access, &cf, None, limit).await?;
-        total += n;
+        total += c.count;
         columns.push(BoardColumn {
-            status: s.into(),
-            total: n,
+            status: c.status,
+            total: c.count,
             items,
             next_cursor,
         });
@@ -1278,7 +1330,8 @@ pub(crate) async fn reload(
         .push(" AND t.id = ")
         .push_bind(id);
     let row: ItemRow = b.build_query_as().fetch_one(&mut *conn).await?;
-    Ok(item(access, row)?.0)
+    let catalog = stages::load(conn, access.workspace_id).await?;
+    Ok(item(access, row, &catalog)?.0)
 }
 
 pub async fn transition(
@@ -1292,7 +1345,7 @@ pub async fn transition(
     let ticket_id = parse_id(&raw_ticket)?;
     access.require(Permission::TicketRead)?;
     let b = body(payload)?;
-    let to = TicketStatus::from_code(&b.to).ok_or(AppError::InvalidRequest)?;
+
     if b.version < 1 {
         return Err(AppError::InvalidRequest);
     }
@@ -1301,21 +1354,42 @@ pub async fn transition(
     access.require(Permission::TicketTransition)?;
 
     let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE")
+        .bind(access.workspace_id)
+        .execute(&mut *tx)
+        .await?;
+    let target = stages::load(&mut tx, access.workspace_id)
+        .await?
+        .into_iter()
+        .find(|c| c.code == b.to && c.active)
+        .ok_or(AppError::InvalidRequest)?;
+    let to = TicketStatus::from_code(&target.lifecycle).ok_or(AppError::InvalidRequest)?;
+
     let (t, from) = lock(&mut tx, access.workspace_id, ticket_id).await?;
     // The archive refuses first; then a stale client gets 409 (reload) before any rule
     // about the requested move, so a replayed request never reads as a rule error.
     if from == TicketStatus::Closed {
         return Err(AppError::RuleViolation);
     }
+    let current_stage: String = sqlx::query_scalar(
+        "SELECT coalesce(stage_code,workflow_status) FROM tickets WHERE id=$1 AND workspace_id=$2",
+    )
+    .bind(ticket_id)
+    .bind(access.workspace_id)
+    .fetch_one(&mut *tx)
+    .await?;
     if t.version != b.version {
         return Err(AppError::VersionConflict);
+    }
+    if current_stage == target.code {
+        return Err(AppError::RuleViolation);
     }
     let kind = match (from, to) {
         // Closed is an archive and never a target (close final is held).
         (TicketStatus::Closed, _) | (_, TicketStatus::Closed) => {
             return Err(AppError::RuleViolation);
         }
-        (a, b) if a == b => return Err(AppError::RuleViolation),
+        (a, b) if a == b && a == TicketStatus::Resolved => return Err(AppError::RuleViolation),
         (TicketStatus::Resolved, TicketStatus::Open) => ActionKind::Reopen,
         (TicketStatus::Resolved, _) => return Err(AppError::RuleViolation),
         (_, TicketStatus::Resolved) => ActionKind::Resolve,
@@ -1360,7 +1434,7 @@ pub async fn transition(
         None => None,
     };
     sqlx::query(
-        "UPDATE tickets SET workflow_status = $3, cycle_no = $4, version = $5 \
+        "UPDATE tickets SET workflow_status = $3, cycle_no = $4, version = $5, stage_code=$6 \
          WHERE workspace_id = $1 AND id = $2",
     )
     .bind(access.workspace_id)
@@ -1368,11 +1442,15 @@ pub async fn transition(
     .bind(to.code())
     .bind(cycle)
     .bind(b.version + 1)
+    .bind(&target.code)
     .execute(&mut *tx)
     .await?;
     // CP6a: move every linked Jira issue whose connection maps the new status, in the same
     // transaction (the outbox worker delivers; Jira never changes the ticket status back).
-    let jira_intents = sqlx::query_scalar::<_, i64>(
+    let jira_intents = if from == to {
+        0
+    } else {
+        sqlx::query_scalar::<_, i64>(
         "WITH q AS (INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, \
            operation, related_work_id, idempotency_key, correlation_id, target_ticket_status) \
          SELECT r.workspace_id, r.ticket_id, ji.connection_id, 'jira', 'jira_transition_issue', r.id, \
@@ -1391,7 +1469,13 @@ pub async fn transition(
     .bind(correlation(&headers))
     .bind(state.config.integrations.mode.as_str())
     .fetch_one(&mut *tx)
-    .await?;
+    .await?
+    };
+    let from_stage_label = stages::load(&mut tx, access.workspace_id)
+        .await?
+        .iter()
+        .find(|s| s.code == current_stage)
+        .map(|s| s.label.clone());
     let audit_id = audit(
         &mut tx,
         &access,
@@ -1401,6 +1485,8 @@ pub async fn transition(
             "kind": kind,
             "from": from.code(),
             "to": to.code(),
+            "toStage": target.label,
+            "fromStage": from_stage_label,
             "cycleNo": cycle,
             "version": b.version + 1,
             "resolutionEventId": event_id,

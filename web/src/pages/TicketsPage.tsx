@@ -153,7 +153,7 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
       return next;
     });
   }, [data]);
-  const statusLabel = (c: TicketStatusCode) => labels[c] ?? STATUS_FALLBACK[c];
+  const statusLabel = (c: TicketStatusCode) => labels[c] ?? STATUS_FALLBACK[c] ?? c;
 
   const go = (next: TicketParams, replace = false) =>
     navigate(toHash({ workspaceId: workspace.id, page: 'tickets', query: ticketQuery(next) }), replace);
@@ -231,7 +231,7 @@ export function TicketsPage({ api, workspace, userId, permissions, query = '' }:
   const boardMode = params.view === 'board';
   const newButton = canCreate ? <Button variant="primary" onClick={openCreate}><Icon name="plus" size={16} /> Tiket baru</Button> : null;
   const toolbar = (
-      <Toolbar api={api} workspaceId={workspace.id} params={params} options={options} tz={tz} statusLabel={statusLabel}
+      <Toolbar api={api} workspaceId={workspace.id} params={params} options={options} tz={tz} statusLabel={statusLabel} statusCodes={Object.keys(labels).length ? Object.keys(labels) : STATUS_ORDER}
         searchRef={searchRef} onFilter={setFilter}
         onClear={(keys) => go({ ...params, filters: { ...params.filters, ...Object.fromEntries(keys.map((k) => [k, null])) } })}
         onSort={(sort, order) => go({ ...params, sort, order })}
@@ -324,13 +324,14 @@ const POPOVER_FILTERS: readonly TicketFilterKey[] = [
  * (PIC/kanal/kategori/prioritas/tanggal, with an active-count badge and its own reset), sort, C32
  * saved view and one reset for everything. Active popover filters stay visible as removable chips.
  */
-function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef, onFilter, onClear, onSort, onApply, activeCount, onReset }: {
+function Toolbar({ api, workspaceId, params, options, tz, statusLabel, statusCodes, searchRef, onFilter, onClear, onSort, onApply, activeCount, onReset }: {
   api: Api;
   workspaceId: string;
   params: TicketParams;
   options: TicketOptions | null;
   tz: string;
   statusLabel: (c: TicketStatusCode) => string;
+  statusCodes: readonly string[];
   searchRef: React.RefObject<HTMLInputElement | null>;
   onFilter: (k: TicketFilterKey, v: string | null, replace?: boolean) => void;
   onClear: (keys: readonly TicketFilterKey[]) => void;
@@ -358,7 +359,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
   }, [text, applied]);
 
   const status = params.filters.status;
-  const statusKnown = !status || STATUS_ORDER.includes(status as TicketStatusCode);
+  const statusKnown = !status || statusCodes.includes(status as TicketStatusCode);
   const statusSet = status && !statusKnown ? status.split(',') : [];
   const recvFrom = params.filters.receivedFrom ? localDate(params.filters.receivedFrom, tz) : null;
   const recvTo = params.filters.receivedBefore ? localDate(params.filters.receivedBefore, tz, true) : null;
@@ -379,7 +380,7 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
     // List shows status as chips with counts; a combined status (dashboard drilldown) gets its own chip.
     ...(list && statusSet.length ? [{
       key: 'status',
-      text: `Status: ${statusSet.map((c) => STATUS_ORDER.includes(c as TicketStatusCode) ? statusLabel(c as TicketStatusCode) : c).join(' + ')}`,
+      text: `Status: ${statusSet.map((c) => statusCodes.includes(c as TicketStatusCode) ? statusLabel(c as TicketStatusCode) : c).join(' + ')}`,
       clear: ['status'] as const,
     }] : []),
     ...DIMENSIONS.filter((d) => params.filters[d.key] && !INLINE_DIMS.includes(d.key)).map((d) => ({
@@ -432,9 +433,9 @@ function Toolbar({ api, workspaceId, params, options, tz, statusLabel, searchRef
           <span className="sr-only">Status</span>
           <select className="field-control" value={status ?? ''} onChange={(e) => onFilter('status', e.target.value || null)}>
             <option value="">Semua status</option>
-            {STATUS_ORDER.map((c) => <option key={c} value={c}>{statusLabel(c)}</option>)}
+            {statusCodes.map((c) => <option key={c} value={c}>{statusLabel(c)}</option>)}
             {!statusKnown && status && (
-              <option value={status}>{statusSet.map((c) => STATUS_ORDER.includes(c as TicketStatusCode)
+              <option value={status}>{statusSet.map((c) => statusCodes.includes(c as TicketStatusCode)
                 ? statusLabel(c as TicketStatusCode) : c).join(' + ')}</option>
             )}
           </select>

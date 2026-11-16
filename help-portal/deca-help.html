@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pusat Bantuan DECA</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--sap:#003571;--qg:#58EA60;--eco:#04CA02;--mint:#D5FDC8;--ink:#0B1B2B;--mut:#5b6b7c;--line:#E3E8EF;--bg:#F6F8FB;--volt:#0077FF}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Nunito,system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{background:var(--sap);color:#fff;padding:16px 0}
+header .wrap{display:flex;align-items:center;justify-content:space-between}
+.logo{font-weight:800;font-size:20px}.logo span{color:var(--qg)}
+nav a{color:#cfe0f5;text-decoration:none;font-size:14px;margin-left:20px}
+.hero{background:linear-gradient(160deg,#003571,#004a9c 60%,#0057b8);color:#fff;padding:44px 0 58px}
+.heroWrap{display:flex;align-items:center;gap:26px}
+.heroTxt{flex:1 1 auto;min-width:0}
+.hero h1{font-size:32px;font-weight:800;letter-spacing:-.6px;margin-bottom:8px}
+.hero p{color:#cfe0f5;font-size:15px;margin-bottom:18px}
+.heroBot{flex:0 0 180px;text-align:center;filter:drop-shadow(0 16px 32px rgba(0,0,0,.28))}
+.search{display:flex;background:#fff;border-radius:12px;padding:5px;max-width:520px}
+.search input{flex:1;border:0;outline:0;padding:11px;font-family:inherit;font-size:14px;border-radius:8px}
+.search button{background:var(--eco);color:#fff;border:0;border-radius:8px;padding:11px 18px;font-weight:800;font-family:inherit;cursor:pointer}
+.aiCta{display:inline-flex;align-items:center;gap:12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.3);
+border-radius:14px;padding:11px 16px;margin-top:14px;cursor:pointer;max-width:520px}
+.aiCta .txt b{display:block;font-size:14px}.aiCta .txt small{color:#cfe0f5;font-size:12px}
+.aiCta .arrow{margin-left:auto;font-weight:800;color:var(--qg);font-size:18px}
+.pulse{width:10px;height:10px;border-radius:50%;background:var(--qg);flex:0 0 auto;box-shadow:0 0 0 0 rgba(88,234,96,.7);animation:p 2s infinite}
+@keyframes p{0%{box-shadow:0 0 0 0 rgba(88,234,96,.55)}70%{box-shadow:0 0 0 12px rgba(88,234,96,0)}100%{box-shadow:0 0 0 0 rgba(88,234,96,0)}}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:-28px 0 24px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px;cursor:pointer;transition:.15s}
+.card:hover{border-color:var(--eco);box-shadow:0 8px 22px rgba(0,53,113,.09)}
+.card h3{font-size:14px;margin-bottom:4px}.card p{font-size:12.5px;color:var(--mut);line-height:1.45}
+.two{display:grid;grid-template-columns:1.05fr .95fr;gap:18px;margin-bottom:26px}
+h2{font-size:18px;margin-bottom:12px}
+.acc{background:#fff;border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+.acc summary{padding:13px 15px;font-size:14px;font-weight:700;cursor:pointer;list-style:none;display:flex;gap:10px;justify-content:space-between}
+.acc summary::-webkit-details-marker{display:none}
+.acc summary:after{content:"+";color:var(--volt);font-weight:800}
+.acc[open] summary:after{content:"–"}
+.acc .bd{padding:0 15px 13px;font-size:13.5px;line-height:1.6;color:#33475b}
+.acc .bd ul{margin:6px 0 0 17px}.acc .bd li{margin-bottom:4px}
+.tag{display:inline-block;background:var(--mint);color:#0b5f18;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:800;margin-bottom:6px}
+form{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px}
+label{display:block;font-size:11px;font-weight:800;color:var(--mut);margin:9px 0 4px;text-transform:uppercase;letter-spacing:.4px}
+input,select,textarea{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-family:inherit;font-size:14px;outline:0}
+input:focus,select:focus,textarea:focus{border-color:var(--volt)}
+.btn{background:var(--eco);color:#fff;border:0;border-radius:9px;padding:12px;font-weight:800;font-family:inherit;cursor:pointer;margin-top:13px;width:100%}
+.btn.wa{background:#25D366;margin-top:8px;display:block;box-sizing:border-box;text-align:center;text-decoration:none}
+.btn:disabled{opacity:.65;cursor:wait}
+.note{font-size:12px;color:var(--mut);margin-top:9px;line-height:1.5}
+.ok{background:var(--mint);border:1px solid #bfe9bf;color:#0b5f18;border-radius:10px;padding:11px;font-size:13px;margin-top:11px;display:none}
+.contact{background:#fff;border:1px solid var(--line);border-radius:14px;padding:15px;font-size:13px;line-height:1.75}
+#fab{position:fixed;right:22px;bottom:22px;background:var(--sap);color:#fff;border:0;border-radius:50%;width:56px;height:56px;font-size:23px;cursor:pointer;box-shadow:0 10px 24px rgba(0,53,113,.32);z-index:50}
+#chat{position:fixed;right:22px;bottom:90px;width:340px;max-height:460px;background:#fff;border:1px solid var(--line);border-radius:16px;display:none;flex-direction:column;overflow:hidden;box-shadow:0 16px 40px rgba(0,53,113,.2);z-index:50}
+#chat.on{display:flex}
+#chat .hd{background:var(--sap);color:#fff;padding:11px 14px;font-weight:800;font-size:14px;display:flex;align-items:center;gap:8px}
+#chat .bd{padding:12px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:8px}
+.msg{font-size:13px;line-height:1.5;padding:9px 11px;border-radius:10px;max-width:88%}
+.msg.bot{background:var(--bg);border:1px solid var(--line)}
+.msg.me{background:var(--mint);align-self:flex-end}
+#chat .ft{display:flex;border-top:1px solid var(--line)}
+#chat input{border:0;border-radius:0;flex:1}
+#chat .ft button{border:0;background:var(--eco);color:#fff;padding:0 15px;font-weight:800;cursor:pointer}
+footer{padding:22px 0;color:var(--mut);font-size:12px;text-align:center}
+@media(max-width:900px){.grid{grid-template-columns:1fr 1fr}.two{grid-template-columns:1fr}.heroBot{display:none}}
+@media(max-width:520px){header .wrap{flex-direction:column;align-items:flex-start;gap:6px}nav a{margin:0 14px 0 0}
+.hero h1{font-size:22px}.hero{padding:30px 0 50px}.grid{grid-template-columns:1fr;gap:9px}.wrap{padding:0 14px}
+#chat{right:10px;left:10px;width:auto;bottom:82px;max-height:72vh}#fab{right:14px;bottom:14px;width:52px;height:52px}}
+#ticket-dialog{position:fixed;inset:0;margin:auto;width:min(90vw,26rem);padding:24px;border:1px solid var(--line);border-radius:14px;color:var(--ink)}
+#ticket-dialog::backdrop{background:rgba(11,27,43,.5)}
+#ticket-dialog p{margin:10px 0;line-height:1.5}
+</style></head><body>
+<header><div class="wrap"><div class="logo">deca<span>.</span> support</div>
+<nav><a href="#faq">Kendala</a><a href="#tiket">Ajukan Tiket</a><a href="https://itsm.scowork.my.id:8443/">Portal Agen</a></nav></div></header>
+
+<section class="hero"><div class="wrap heroWrap">
+<div class="heroTxt">
+<h1>Ada kendala? Tanya asisten AI kami.</h1>
+<p>Jawaban instan untuk masalah transaksi — atau buat tiket kalau butuh dicek tim kami.</p>
+<div class="search"><input id="q" placeholder="Contoh: QRIS gagal scan, settlement belum masuk"><button onclick="cari()">Cari</button></div>
+<div class="aiCta" onclick="bukaChat()">
+<span class="pulse"></span>
+<span class="txt"><b>Tanya Asisten AI DECA</b><small>Online 24 jam · jawab dalam hitungan detik</small></span>
+<span class="arrow">→</span>
+</div>
+</div>
+<div class="heroBot" onclick="bukaChat()">
+<svg viewBox="0 0 200 200" width="180" height="180">
+<defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#58EA60"/><stop offset="1" stop-color="#04CA02"/></linearGradient></defs>
+<rect x="42" y="64" width="116" height="92" rx="28" fill="url(#g1)"/>
+<circle cx="79" cy="106" r="10" fill="#003571"/><circle cx="121" cy="106" r="10" fill="#003571"/>
+<circle cx="82" cy="103" r="3.4" fill="#fff"/><circle cx="124" cy="103" r="3.4" fill="#fff"/>
+<rect x="86" y="128" width="28" height="7" rx="3.5" fill="#003571" opacity=".7"/>
+<rect x="94" y="36" width="12" height="26" rx="6" fill="#D5FDC8"/><circle cx="100" cy="31" r="7" fill="#D5FDC8"/>
+<rect x="22" y="98" width="13" height="32" rx="6.5" fill="#D5FDC8" opacity=".85"/>
+<rect x="165" y="98" width="13" height="32" rx="6.5" fill="#D5FDC8" opacity=".85"/>
+</svg>
+</div>
+</div></section>
+
+<div class="wrap">
+<div class="grid">
+<div class="card" onclick="ke('k1')"><h3>QRIS gagal</h3><p>Tidak bisa scan / transaksi gagal</p></div>
+<div class="card" onclick="ke('k2')"><h3>Settlement</h3><p>Dana belum masuk rekening</p></div>
+<div class="card" onclick="ke('k3')"><h3>Top up</h3><p>Sudah bayar, saldo belum masuk</p></div>
+<div class="card" onclick="ke('k4')"><h3>Akses akun</h3><p>OTP tidak masuk, akun terkunci</p></div>
+</div>
+
+<div class="two">
+<div>
+<h2 id="faq">Kendala yang sering masuk</h2>
+
+<details class="acc" id="k1"><summary>QRIS di toko saya gagal dipindai pelanggan</summary>
+<div class="bd"><span class="tag">Kendala transaksi</span>
+<p>Penyebab tersering: QR kedaluwarsa, nominal tidak sesuai, atau koneksi perangkat merchant terputus.</p>
+<ul><li>Muat ulang QR di aplikasi merchant, minta pelanggan scan ulang</li>
+<li>Pastikan nominal di layar sama dengan yang ditagihkan</li>
+<li>Coba ganti ke data seluler bila memakai WiFi</li>
+<li>Cek riwayat: kalau terbentuk dua transaksi untuk satu pembayaran, ajukan tiket dengan waktu & nominal</li>
+<li>Gagal lebih dari 15 menit → ajukan tiket kategori QRIS, sertakan ID merchant</li></ul></div></details>
+
+<details class="acc" id="k2"><summary>Dana settlement belum masuk ke rekening</summary>
+<div class="bd"><span class="tag">Kendala settlement</span>
+<p>Settlement normalnya masuk <b>H+1 hari kerja</b> setelah transaksi settle. Bila lewat:</p>
+<ul><li>Pastikan rekening settlement terdaftar masih aktif dan atas nama merchant</li>
+<li>Cek apakah ada perubahan rekening yang masih dalam verifikasi</li>
+<li>Hari libur menggeser pencairan ke hari kerja berikutnya</li>
+<li>Lewat 2 hari kerja → ajukan tiket dengan tanggal transaksi, nominal, dan ID merchant</li></ul></div></details>
+
+<details class="acc" id="k3"><summary>Top up sudah dibayar tapi saldo tidak bertambah</summary>
+<div class="bd"><span class="tag">Kendala top up</span>
+<ul><li>Bank transfer: pastikan dana masuk ke nomor rekening yang tertera di aplikasi</li>
+<li>VA Permata: nominal harus tepat sampai digit terakhir</li>
+<li>Beri jeda 5–10 menit untuk verifikasi bank</li>
+<li>Lewat 30 menit → ajukan tiket dengan bukti transfer dan waktu bayar</li></ul></div></details>
+
+<details class="acc" id="k4"><summary>Saya tidak menerima kode OTP</summary>
+<div class="bd"><span class="tag">Kendala akses</span>
+<ul><li>Pastikan nomor terdaftar aktif dan tidak memblokir SMS pengirim</li>
+<li>Tunggu 60 detik sebelum minta ulang</li>
+<li>Coba matikan WiFi, gunakan data seluler</li>
+<li>Tiga kali gagal → akun terkunci sementara, ajukan tiket untuk pembukaan</li></ul></div></details>
+
+<details class="acc"><summary>Akun saya terkunci / tidak bisa masuk</summary>
+<div class="bd"><span class="tag">Kendala akses</span>
+<p>Umumnya karena PIN/OTP salah berulang. Pembukaan dilakukan lewat verifikasi identitas: siapkan <b>E-KTP</b> dan akses ke <b>email terdaftar</b>. Ajukan tiket kategori Akun & Verifikasi.</p></div></details>
+
+<details class="acc"><summary>Pengajuan upgrade akun ditolak</summary>
+<div class="bd"><span class="tag">Kendala verifikasi</span>
+<ul><li>Foto E-KTP buram/terpotong/terlalu memantulkan cahaya</li>
+<li>Data tidak sama dengan KTP (nama, NIK, tanggal lahir)</li>
+<li>Selfie tanpa KTP atau wajah tidak jelas</li>
+<li>Perbaiki lalu ajukan ulang — verifikasi maksimal <b>1×24 jam</b></li></ul></div></details>
+
+<details class="acc"><summary>Transaksi tercatat dua kali (double charge)</summary>
+<div class="bd"><span class="tag">Kendala transaksi</span>
+<p>Jangan ulangi pembayaran. Catat waktu, nominal, dan nomor referensi kedua transaksi, lalu ajukan tiket kategori QRIS — tim kami menelusuri dan mengajukan pembatalan salah satunya (P1: respons 4 jam).</p></div></details>
+
+<details class="acc"><summary>Dana refund belum diterima</summary>
+<div class="bd"><span class="tag">Kendala refund</span>
+<p>Refund diproses setelah pembatalan disetujui; waktu pengembalian tergantung kanal pembayaran. Ajukan tiket dengan nomor transaksi asal dan tanggal pembatalan.</p></div></details>
+</div>
+
+<div>
+<h2 id="tiket">Ajukan tiket</h2>
+<form id="f">
+<label>Nama merchant / usaha</label><input id="m" maxlength="120" required placeholder="Contoh: Toko Kopdes2">
+<label>Email (akun DECA terdaftar)</label><input id="e" maxlength="254" type="email" required placeholder="nama@email.com">
+<label>Nama Anda</label><input id="n" maxlength="120" required placeholder="Nama PIC">
+<label>No. WhatsApp (opsional)</label><input id="w" maxlength="32" placeholder="08xx">
+<label>Kategori</label>
+<select id="k"><option>QRIS</option><option>Settlement</option><option>Top up</option><option>Akun & Verifikasi</option><option>Refund</option><option>Lainnya</option></select>
+<label>Ceritakan kendalanya</label><textarea id="d" maxlength="4000" rows="4" required placeholder="Waktu transaksi, nominal, ID merchant"></textarea>
+<button class="btn" type="submit" id="send-ticket">Kirim tiket</button>
+<a class="btn wa" id="wa-chat" href="https://wa.me/628138250629" target="_blank" rel="noopener noreferrer">Chat via WhatsApp</a>
+<div class="note">Setelah laporan masuk ke ITSM, simpan nomor tiket untuk tindak lanjut dengan CS.</div>
+<div class="ok" id="ok" role="status" aria-live="polite"></div>
+</form>
+<dialog id="ticket-dialog" aria-labelledby="ticket-title" aria-describedby="ticket-message">
+<h3 id="ticket-title"></h3><p id="ticket-message" role="status"></p>
+<button type="button" class="btn" id="close-result">Tutup</button>
+</dialog>
+<h2 style="margin-top:20px">Kontak CS</h2>
+<div class="contact">📧 <b>cs@deca.co.id</b><br>💬 WhatsApp <b>+62 813 8250 629</b><br>🕐 Sen–Jum 08.00–20.00 · Sab–Min 09.00–18.00</div>
+</div>
+</div>
+<footer>PT Delta Omega Beta · Pusat Bantuan DECA</footer>
+</div>
+
+<button id="fab" onclick="bukaChat()">💬</button>
+<div id="chat"><div class="hd"><span class="pulse"></span> Asisten AI DECA</div>
+<div class="bd" id="cb"><div class="msg bot">Halo! Ceritakan kendala Anda — QRIS, settlement, top up, atau akses akun.</div></div>
+<div class="ft"><input id="ci" placeholder="Tulis kendala…" onkeydown="if(event.key==='Enter')kirimChat()"><button onclick="kirimChat()">➤</button></div></div>
+
+<script>
+const KB=[
+ {k:["qris","scan","gagal","double","ganda"],a:"Untuk QRIS gagal: muat ulang QR, cocokkan nominal, dan coba data seluler. Kalau terbentuk dua transaksi, jangan ulangi bayar — catat waktu, nominal, dan nomor referensi lalu ajukan tiket kategori QRIS."},
+ {k:["settlement","cair","pencairan","dana belum"],a:"Settlement masuk H+1 hari kerja. Kalau lewat 2 hari kerja, ajukan tiket dengan tanggal transaksi, nominal, dan ID merchant — tim Settlement cek rekening & batch pencairan."},
+ {k:["top up","topup","saldo","va","virtual account"],a:"Kalau sudah bayar tapi saldo belum masuk: untuk VA Permata nominal harus tepat sampai digit terakhir, beri jeda 5–10 menit. Lewat 30 menit, ajukan tiket dengan bukti transfer."},
+ {k:["otp","login","masuk","terkunci","pin"],a:"OTP tidak masuk: pastikan nomor aktif, tunggu 60 detik, coba data seluler. Tiga kali gagal akun terkunci sementara — ajukan tiket untuk pembukaan dengan verifikasi E-KTP."},
+ {k:["upgrade","verifikasi","ktp","selfie","ditolak"],a:"Upgrade ditolak biasanya karena foto E-KTP buram atau data tidak sama dengan KTP. Perbaiki lalu ajukan ulang; verifikasi maksimal 1×24 jam."},
+ {k:["refund","pengembalian","batal"],a:"Refund diproses setelah pembatalan disetujui; waktunya tergantung kanal pembayaran. Ajukan tiket dengan nomor transaksi asal dan tanggal pembatalan."},
+ {k:["cs","kontak","telepon","email","whatsapp","jam"],a:"CS DECA: cs@deca.co.id · WhatsApp +62 813 8250 629. Jam layanan Senin–Jumat 08.00–20.00, Sabtu–Minggu 09.00–18.00."}
+];
+function bukaChat(){document.getElementById('chat').classList.add('on')}
+function add(t,c){const d=document.createElement('div');d.className='msg '+c;d.textContent=t;const b=document.getElementById('cb');b.appendChild(d);b.scrollTop=b.scrollHeight}
+function jawab(t){const q=t.toLowerCase();const f=KB.find(x=>x.k.some(k=>q.includes(k)));return f?f.a:"Saya belum punya jawaban pastinya. Boleh dijelaskan lebih detail? Kalau soal transaksi merchant, ajukan tiket di halaman ini agar dicek tim kami."}
+function kirimChat(){const i=document.getElementById('ci'),v=i.value.trim();if(!v)return;add(v,'me');i.value='';setTimeout(()=>add(jawab(v),'bot'),420)}
+function cari(){const v=document.getElementById('q').value.trim();if(!v)return;bukaChat();add(v,'me');setTimeout(()=>add(jawab(v),'bot'),380)}
+function ke(id){const e=document.getElementById(id);e.open=true;e.scrollIntoView({behavior:'smooth',block:'center'})}
+const form = document.getElementById('f');
+const button = document.getElementById('send-ticket');
+const statusBox = document.getElementById('ok');
+const waLink = document.getElementById('wa-chat');
+const field = id => document.getElementById(id).value.trim();
+function ticketData() {
+  return {merchant: field('m'), name: field('n'), email: field('e'), wa: field('w'),
+    category: field('k'), body: field('d')};
+}
+const dialog = document.getElementById('ticket-dialog');
+function showResult(title, message) {
+  document.getElementById('ticket-title').textContent = title;
+  document.getElementById('ticket-message').textContent = message;
+  statusBox.textContent = message;
+  if (!dialog.open) dialog.showModal();
+}
+document.getElementById('close-result').addEventListener('click', () => dialog.close());
+let receipt;
+let sending = false;
+let attempt;
+function updateActions() {
+  const data = ticketData();
+  const submitted = receipt && receipt.payload === JSON.stringify(data);
+  button.disabled = sending || Boolean(submitted);
+  button.textContent = sending ? 'Mengirim…' : submitted ? 'Tiket terkirim' : 'Kirim tiket';
+  const lines = [submitted ? 'Halo CS DECA, saya ingin menanyakan tiket ' + receipt.number + '.' :
+    'Halo CS DECA, saya ingin melaporkan kendala.',
+    data.merchant && 'Merchant: ' + data.merchant, data.name && 'Nama PIC: ' + data.name,
+    data.email && 'Email: ' + data.email, data.wa && 'WhatsApp: ' + data.wa,
+    'Kategori: ' + data.category, data.body && 'Kendala: ' + data.body];
+  waLink.href = 'https://wa.me/628138250629?text=' + encodeURIComponent(lines.filter(Boolean).join('\n'));
+}
+form.addEventListener('input', updateActions);
+waLink.addEventListener('click', updateActions);
+updateActions();
+if (location.protocol === 'file:') {
+  const link = document.createElement('a');
+  link.className = 'btn wa';
+  link.href = 'http://103.159.199.42:3000/help/#tiket';
+  link.textContent = 'Buka formulir resmi untuk kirim tiket';
+  button.replaceWith(link);
+}
+form.addEventListener('submit', async ev => {
+  ev.preventDefault();
+  if (location.protocol === 'file:' || sending || button.disabled) return;
+  const body = ticketData();
+  const payload = JSON.stringify(body);
+  if (attempt?.payload !== payload) {
+    const random = crypto.getRandomValues(new Uint8Array(16));
+    attempt = {payload, key: Array.from(random, byte => byte.toString(16).padStart(2, '0')).join(''),
+      receivedAt: new Date().toISOString()};
+  }
+  sending = true;
+  statusBox.style.display = 'block';
+  updateActions();
+  showResult('Mengirim tiket…', 'Menunggu nomor tiket dari ITSM.');
+  try {
+    const response = await fetch('/help/api/itsm-tickets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': attempt.key },
+      body: JSON.stringify({...body, receivedAt: attempt.receivedAt}),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ticket) {
+      showResult(result.code === 'intake_unconfigured' ? 'Koneksi ITSM belum aktif' : 'Pengiriman belum terkonfirmasi',
+        result.error || 'Isian Anda masih tersedia. Silakan coba lagi.');
+      return;
+    }
+    showResult('Tiket berhasil dibuat', 'Nomor tiket ITSM Anda ' + result.ticket + '. Simpan nomor ini untuk tindak lanjut dengan CS.');
+    receipt = {number: result.ticket, payload: JSON.stringify(body)};
+  } catch {
+    showResult('Pengiriman belum terkonfirmasi', 'Isian Anda masih tersedia. Silakan coba lagi.');
+  } finally {
+    sending = false;
+    updateActions();
+  }
+});
+</script></body></html>

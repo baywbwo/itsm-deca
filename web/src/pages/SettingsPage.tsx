@@ -1,3 +1,4 @@
+import { WorkflowStagesTab } from './WorkflowStagesTab';
 import { useId, useState } from 'react';
 import { ApiError, type Api } from '../api/client';
 import type {
@@ -19,7 +20,7 @@ import {
   ConfirmDialog, GRANT_LABEL, ROLE_LABEL, Tabs, TZ_LABEL, useLoad, WriteAlert, writeError, type WriteError,
 } from './adminKit';
 
-type TabId = 'catalogs' | 'members' | 'companies' | 'ai';
+type TabId = 'catalogs' | 'members' | 'companies' | 'ai' | 'stages';
 
 /**
  * O07/O09 Pengaturan (prototype 08: Katalog | Anggota & Grant; the Workspace tab was taken down in CP5a, the company comes from the server). Every tab reads its own server answer; edit controls appear only when the
@@ -36,7 +37,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
 }) {
   // Katalog reads with catalog.read; writes are decided by the server's `canEdit`.
   const tabs: { id: TabId; label: string }[] = [
-    ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Katalog' }] : []),
+    ...(permissions.includes('catalog.read') ? [{ id: 'catalogs' as const, label: 'Katalog' }, {id: 'stages' as const,label:'Status & stage'}] : []),
     ...(permissions.includes('member.read') ? [{ id: 'members' as const, label: 'Anggota & Grant' }] : []),
     ...(uat ? [{ id: 'companies' as const, label: 'Perusahaan' }] : []),
     ...(permissions.includes('integration.manage') ? [{ id: 'ai' as const, label: 'AI & MCP' }] : []),
@@ -54,6 +55,7 @@ export function SettingsPage({ api, workspace, uat, permissions, onNotice, onWor
         {tab === 'catalogs' && <CatalogTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'members' && <MembersTab api={api} workspace={workspace} onNotice={onNotice} />}
         {tab === 'companies' && <CompaniesTab api={api} workspace={workspace} onNotice={onNotice} onChanged={onWorkspacesChanged} />}
+        {tab === 'stages' && <WorkflowStagesTab api={api} workspace={workspace} />}
         {tab === 'ai' && <AiSettingsTab api={api} workspace={workspace} onNotice={onNotice} />}
       </div>
       </section>

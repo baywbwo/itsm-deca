@@ -1,0 +1,4 @@
+notifications.sqlite*
+intake.env
+gmail-app-password.txt
+__pycache__/

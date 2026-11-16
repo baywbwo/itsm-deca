@@ -17,7 +17,7 @@ export interface BrandPreset {
 }
 
 export const BRAND_PRESETS: Record<Exclude<BrandKey, null>, BrandPreset> = {
-  deca: { key: 'deca', label: 'DOB / DECA (Qash)', logo: decaLogo, logoAlt: 'Qash' },
+  deca: { key: 'deca', label: 'PT Delta Omega Beta', logo: decaLogo, logoAlt: 'Qash' },
   bmt: { key: 'bmt', label: 'BMT', logo: bmtLogo, logoAlt: 'BMT' },
   ajr: { key: 'ajr', label: 'AJR', logo: ajrLogo, logoAlt: 'AJR' },
 };

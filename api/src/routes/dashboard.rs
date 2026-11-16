@@ -260,7 +260,7 @@ struct Args<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct TicketFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<Vec<&'static str>>,
+    status: Option<Vec<String>>,
     /// A member user ID, or `unassigned`.
     #[serde(skip_serializing_if = "Option::is_none")]
     owner: Option<String>,
@@ -901,6 +901,7 @@ pub async fn load(
     .fetch_all(&mut *tx)
     .await?;
     let filter_options = filter_options(&mut tx, wid).await?;
+    let stages = super::stages::load(&mut tx, wid).await?;
     tx.commit().await?;
 
     // Every status code in the table must be known; an unknown one is a server fault.
@@ -922,12 +923,26 @@ pub async fn load(
         resolved_before: Some(p.end_at.clone()),
         ..shared.clone()
     };
+    let stage_codes = |status: TicketStatus| {
+        stages
+            .iter()
+            .filter(|s| s.lifecycle == status.code())
+            .map(|s| s.code.clone())
+            .collect::<Vec<_>>()
+    };
+    let active_stage_codes = || {
+        stages
+            .iter()
+            .filter(|s| active_codes().contains(&s.lifecycle.as_str()))
+            .map(|s| s.code.clone())
+            .collect::<Vec<_>>()
+    };
     let status_filter = |s: TicketStatus| TicketFilter {
-        status: Some(vec![s.code()]),
+        status: Some(stage_codes(s)),
         ..shared.clone()
     };
     let owner_filter = |owner: String| TicketFilter {
-        status: Some(active_codes()),
+        status: Some(active_stage_codes()),
         owner: Some(owner),
         ..shared.clone()
     };
@@ -938,7 +953,7 @@ pub async fn load(
         .map(Uuid::to_string)
         .collect();
     let attention_filter = (!attention_priorities.is_empty()).then(|| TicketFilter {
-        status: Some(active_codes()),
+        status: Some(active_stage_codes()),
         priority: Some(attention_priorities),
         ..shared.clone()
     });
@@ -949,7 +964,11 @@ pub async fn load(
         // The archive state only appears when historical rows exist.
         .filter(|s| *s != TicketStatus::Closed || by_status.contains_key(s.code()))
         .map(|s| StatusCount {
-            status: s.into(),
+            status: stages
+                .iter()
+                .find(|stage| stage.code == s.code())
+                .map(super::stages::Stage::status)
+                .unwrap_or_else(|| s.into()),
             active: ACTIVE.contains(&s),
             count: by_status.get(s.code()).copied().unwrap_or(0),
             filter: status_filter(s),
@@ -1050,7 +1069,7 @@ pub async fn load(
         },
         drilldown: Drilldowns {
             active: TicketFilter {
-                status: Some(active_codes()),
+                status: Some(active_stage_codes()),
                 ..shared.clone()
             },
             unassigned: unassigned_visible.then(|| owner_filter(UNASSIGNED.to_owned())),

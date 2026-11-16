@@ -1723,6 +1723,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/customer-email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getCustomerEmailDelivery"];
+        put: operations["putCustomerEmailDelivery"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Escalate an existing ticket to Jira and/or Lark
+         * @description move between active statuses (ticket.transition); resolve with `summary` (ticket.resolve; open blocking related work = 422); reopen a resolved ticket to `open` with `reason` (next cycle). `closed` is a read-only archive and never a target (422). Stale `version` = 409 and nothing changes. Resolution event, status/version and audit entry commit atomically.
+         */
+        post: operations["escalateTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/stages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getWorkflowStages"];
+        put: operations["saveWorkflowStage"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1865,7 +1917,7 @@ export interface components {
         Error: {
             error: {
                 /** @enum {string} */
-                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company" | "keyring_missing" | "integration_not_live" | "provider_error" | "integration_not_configured" | "integration_mode_mismatch" | "idp_not_ready" | "subject_linked" | "user_linked";
+                code: "unauthenticated" | "forbidden" | "csrf_failed" | "not_found" | "version_conflict" | "rule_violation" | "invalid_request" | "uat_not_available" | "dependency_unavailable" | "internal" | "validation_failed" | "idempotency_conflict" | "attachment_too_large" | "attachment_type_refused" | "attachment_infected" | "scan_failed" | "scanner_unavailable" | "regulator_mapping_unavailable" | "report_expired" | "rate_limited" | "username_taken" | "email_taken" | "user_inactive" | "last_admin" | "mfa_required" | "mfa_invalid" | "mfa_challenge_expired" | "mfa_enrollment_expired" | "mfa_already_enrolled" | "mfa_not_enrolled" | "step_up_required" | "mfa_required_for_role" | "self_mfa_reset" | "user_in_other_company" | "keyring_missing" | "integration_not_live" | "provider_error" | "integration_not_configured" | "integration_mode_mismatch" | "idp_not_ready" | "subject_linked" | "user_linked" | "stage_in_use" | "required_stage";
                 message: string;
                 /** @description validation_failed only: the request field to fix (camelCase, `jira.title` style for nested fields). */
                 field?: string;
@@ -1988,12 +2040,13 @@ export interface components {
         };
         /** @description Internal code + UI label. `closed` is a read-only historical archive state: never selectable, never mapped to resolved. Close final is not available. */
         TicketStatus: {
-            /** @enum {string} */
-            code: "new" | "open" | "pending_customer" | "pending_engineering" | "resolved" | "closed";
+            code: components["schemas"]["TicketStatusCode"];
             /** @example Menunggu pekerjaan eksternal */
             label: string;
             selectable: boolean;
             archived: boolean;
+            /** @enum {string} */
+            lifecycleCode?: "new" | "open" | "pending_customer" | "pending_engineering" | "resolved" | "closed";
         };
         CatalogItem: {
             /** Format: uuid */
@@ -2221,8 +2274,7 @@ export interface components {
             /** Format: date-time */
             resolvedBefore?: string;
         };
-        /** @enum {string} */
-        TicketStatusCode: "new" | "open" | "pending_customer" | "pending_engineering" | "resolved" | "closed";
+        TicketStatusCode: string;
         /** @description Period bounds. Which date each number uses is given per metric in Dashboard.metricBasis. */
         DashboardPeriod: {
             key: components["schemas"]["DashboardPeriodKey"];
@@ -3518,6 +3570,21 @@ export interface components {
             secret: string;
             path: string;
             url: string | null;
+        };
+        CustomerEmailDelivery: {
+            paused: boolean;
+        };
+        WorkflowStage: {
+            code: string;
+            label: string;
+            lifecycle: string;
+            sortOrder: number;
+            active: boolean;
+            version: number;
+        };
+        WorkflowStages: {
+            items: components["schemas"]["WorkflowStage"][];
+            canEdit: boolean;
         };
     };
     responses: {
@@ -7677,6 +7744,141 @@ export interface operations {
                 content?: never;
             };
             503: components["responses"]["WebhookUnavailable"];
+        };
+    };
+    getCustomerEmailDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Customer email delivery settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerEmailDelivery"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    putCustomerEmailDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CustomerEmailDelivery"];
+            };
+        };
+        responses: {
+            /** @description Customer email delivery settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerEmailDelivery"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    escalateTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Unknown, malformed or foreign IDs all return 404. */
+                workspace_id: components["parameters"]["WorkspaceId"];
+                /** @description Scoped to workspace_id; a ticket of another workspace returns 404. */
+                ticket_id: components["parameters"]["TicketId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    version: number;
+                    jira?: components["schemas"]["TicketJiraRequest"];
+                    /** Format: uuid */
+                    larkDestinationId?: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Escalation recorded */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    getWorkflowStages: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Workspace stages */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowStages"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    saveWorkflowStage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowStage"];
+            };
+        };
+        responses: {
+            /** @description Saved stage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowStage"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
         };
     };
 }

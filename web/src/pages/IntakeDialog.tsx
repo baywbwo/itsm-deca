@@ -81,7 +81,6 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const [draft, setDraftState] = useState<IntakeDraft>(() => drafts.get(userId, workspace.id) ?? fresh(tz));
   const [errors, setErrors] = useState<IntakeFieldError[]>([]);
   const [assist, setAssist] = useState(false);
-  const [found, setFound] = useState<DirectoryEntry[]>([]);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -187,29 +186,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
   const canSelf = permissions.permissions.includes('ticket.assign_self');
   const activeMembers = (data?.members ?? []).filter((m) => m.active);
   const ownerChoices = canAny ? activeMembers : canSelf ? activeMembers.filter((m) => m.userId === userId) : [];
-  const jira = data?.directory.jira ?? null;
-  const lark = data?.directory.lark ?? null;
-  const jiraUsable = !!jira?.usable;
-  const larkUsable = !!lark?.usable;
-  const live = data?.directory.integrationsMode === 'live';
-  const assigneeChoices = mergeEntries(jira?.options ?? [], found);
-
-  const select = (k: keyof IntakeForm, label: string, items: { id: string; label: string }[], opts: {
-    required?: boolean; empty?: string; hint?: ReactNode; disabled?: boolean; full?: boolean;
-  } = {}) => (
-    <div className={opts.full ? 'field full' : 'field'}>
-      <label htmlFor={fid(k)}>{label}{opts.required && <Req />}</label>
-      <select id={fid(k)} className="field-control" value={f[k]} disabled={locked || opts.disabled}
-        aria-required={opts.required || undefined} aria-invalid={errorOf(k) ? true : undefined}
-        aria-describedby={[opts.hint ? `${fid(k)}-hint` : '', errorOf(k) ? `${fid(k)}-error` : ''].filter(Boolean).join(' ') || undefined}
-        onChange={(e) => set(k, e.target.value as never)}>
-        <option value="">{opts.empty ?? 'Tidak diisi'}</option>
-        {items.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-      </select>
-      {opts.hint && <span id={`${fid(k)}-hint`} className="field-hint">{opts.hint}</span>}
-      {errorOf(k) && <span id={`${fid(k)}-error`} className="field-error">{errorOf(k)}</span>}
-    </div>
-  );
+  const select = selectField(f, fid, set, errorOf, locked);
   const catalog = (l: CatalogItem[] | undefined) => active(l).map((c) => ({ id: c.id, label: c.label }));
 
   const text = (key: 'subject' | 'merchantName' | 'reporterEmail' | 'reporterPhone' | 'reporterName', label: string, placeholder: string, opts: {
@@ -350,7 +327,87 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
               </div>
             </details>
           </fieldset>
-          <details className="intake-operations full" open={f.jiraMode !== 'none' || providerError || undefined}>
+          <AssignmentFields api={api} workspace={workspace} directory={data.directory} id={id} f={f} set={set}
+            errorOf={errorOf} locked={locked} expanded={providerError} />
+          <button type="submit" hidden tabIndex={-1} aria-hidden="true" />
+        </form>
+      )}
+    </>
+  );
+
+  if (asPage) {
+    return (
+      <section className="pcard intake-page" aria-labelledby={`${id}-title`}>
+        <div className="hd"><h2 id={`${id}-title`}>Data tiket</h2><span className="sub"><span className="req" aria-hidden="true">*</span> wajib diisi</span></div>
+        <div className="bd">
+          {body}
+          <div className="intake-foot">
+            {primaryButton}
+            {cancelButton}
+            {discardButton}
+            <span className="foot-note">Nomor tiket dibuat otomatis per perusahaan</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <Dialog open onClose={busy ? () => undefined : onClose} title="Buat tiket baru" initialFocus={`#${CSS.escape(fid('subject'))}`}
+      footer={<>{discardButton}{cancelButton}{primaryButton}</>}>
+      {body}
+    </Dialog>
+  );
+}
+
+const OPERATION_FIELDS: readonly string[] = ['receivedLocal', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'];
+const PROVIDER_FIELDS: readonly string[] = ['jiraMode', 'jiraIssueKey', 'jiraTitle', 'jiraAssigneeId', 'larkDestinationId'];
+
+/** Required marker: red, hidden from screen readers (the control already carries aria-required). */
+const Req = () => <span className="req" aria-hidden="true">*</span>;
+
+function fresh(tz: string): IntakeDraft {
+  const form = emptyForm(wallTime(Date.now(), tz));
+  return { form, initial: form, key: newKey(), inFlight: null };
+}
+
+type SetField = <K extends keyof IntakeForm>(key: K, value: IntakeForm[K]) => void;
+function selectField(f: IntakeForm, fid: (key: keyof IntakeForm) => string, set: SetField,
+  errorOf: (key: keyof IntakeForm) => string | undefined, locked: boolean) {
+  return (k: keyof IntakeForm, label: string, items: { id: string; label: string }[], opts: {
+    required?: boolean; empty?: string; hint?: ReactNode; disabled?: boolean; full?: boolean;
+  } = {}) => (
+    <div className={opts.full ? 'field full' : 'field'}>
+      <label htmlFor={fid(k)}>{label}{opts.required && <Req />}</label>
+      <select id={fid(k)} className="field-control" value={f[k]} disabled={locked || opts.disabled}
+        aria-required={opts.required || undefined} aria-invalid={errorOf(k) ? true : undefined}
+        aria-describedby={[opts.hint ? `${fid(k)}-hint` : '', errorOf(k) ? `${fid(k)}-error` : ''].filter(Boolean).join(' ') || undefined}
+        onChange={(e) => set(k, e.target.value as never)}>
+        <option value="">{opts.empty ?? 'Tidak diisi'}</option>
+        {items.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      {opts.hint && <span id={`${fid(k)}-hint`} className="field-hint">{opts.hint}</span>}
+      {errorOf(k) && <span id={`${fid(k)}-error`} className="field-error">{errorOf(k)}</span>}
+    </div>
+  );
+}
+
+export function AssignmentFields({api, workspace, directory, id, f, set, locked, expanded, errorOf}: {
+  api: Api; workspace: Workspace; directory: IntakeDirectory; id: string; f: IntakeForm;
+  set: SetField; locked: boolean; expanded: boolean; errorOf: (key: keyof IntakeForm) => string | undefined;
+}) {
+  const fid = (key: keyof IntakeForm) => `${id}-${key}`;
+  const select = selectField(f, fid, set, errorOf, locked);
+  const [found, setFound] = useState<DirectoryEntry[]>([]);
+  const jira = directory.jira ?? null;
+  const lark = directory.lark ?? null;
+  const jiraUsable = !!jira?.usable;
+  const larkUsable = !!lark?.usable;
+  const live = directory.integrationsMode === 'live';
+  const assigneeChoices = mergeEntries(jira?.options ?? [], found);
+
+  return (
+          <details className="intake-operations full" open={expanded || f.jiraMode !== 'none' || undefined}>
             <summary>Assignment & notifikasi <span>Pekerjaan Jira dan channel Lark (opsional)</span></summary>
             <fieldset className="plain-fieldset formgrid spaced" disabled={locked}>
               <legend className="sr-only">Assignment & notifikasi</legend>
@@ -412,46 +469,7 @@ export function IntakeDialog({ api, workspace, userId, permissions, onClose, onC
               })}
             </fieldset>
           </details>
-          <button type="submit" hidden tabIndex={-1} aria-hidden="true" />
-        </form>
-      )}
-    </>
   );
-
-  if (asPage) {
-    return (
-      <section className="pcard intake-page" aria-labelledby={`${id}-title`}>
-        <div className="hd"><h2 id={`${id}-title`}>Data tiket</h2><span className="sub"><span className="req" aria-hidden="true">*</span> wajib diisi</span></div>
-        <div className="bd">
-          {body}
-          <div className="intake-foot">
-            {primaryButton}
-            {cancelButton}
-            {discardButton}
-            <span className="foot-note">Nomor tiket dibuat otomatis per perusahaan</span>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <Dialog open onClose={busy ? () => undefined : onClose} title="Buat tiket baru" initialFocus={`#${CSS.escape(fid('subject'))}`}
-      footer={<>{discardButton}{cancelButton}{primaryButton}</>}>
-      {body}
-    </Dialog>
-  );
-}
-
-const OPERATION_FIELDS: readonly string[] = ['receivedLocal', 'receivingUnitId', 'regionId', 'ownerUserId', 'merchantId'];
-const PROVIDER_FIELDS: readonly string[] = ['jiraMode', 'jiraIssueKey', 'jiraTitle', 'jiraAssigneeId', 'larkDestinationId'];
-
-/** Required marker: red, hidden from screen readers (the control already carries aria-required). */
-const Req = () => <span className="req" aria-hidden="true">*</span>;
-
-function fresh(tz: string): IntakeDraft {
-  const form = emptyForm(wallTime(Date.now(), tz));
-  return { form, initial: form, key: newKey(), inFlight: null };
 }
 
 function providerHint(p: IntakeDirectory['jira'], name: string): string {

@@ -51,7 +51,6 @@ const STATUS_LABEL: Record<string, string> = {
 /** Channels with no adapter in this build: shown honestly, nothing to configure. */
 const UNAVAILABLE: readonly { name: string; body: string }[] = [
   { name: 'WhatsApp', body: 'Adapter kanal belum dibangun; percakapan hanya tampil baca saja di detail tiket dan tidak ada pengiriman.' },
-  { name: 'Email', body: 'Adapter kanal belum dibangun; tidak ada pengiriman atau penerimaan email dari aplikasi ini.' },
   { name: 'Website', body: 'Adapter formulir/website belum dibangun; tiket masuk lewat intake manual.' },
 ];
 
@@ -143,6 +142,7 @@ export function IntegrationsPage({ api, workspace, onNotice }: { api: Api; works
         </section>
       )}
       <div className="int-grid">
+        <CustomerEmail key={workspace.id} api={api} workspace={workspace} />
         {list.items.map((c) => {
           const badge = connectionBadge(c, live);
           return (
@@ -617,4 +617,27 @@ function ConnectionDialog({ api, workspace, list, connection: c, onClose, onChan
       )}
     </>
   );
+}
+
+function CustomerEmail({api, workspace}: {api: Api; workspace: Workspace}) {
+  const settings = useLoad(signal => api.customerEmail(workspace.id, signal), workspace.id);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  async function toggle() {
+    if (!settings.data || busy) return;
+    setBusy(true);
+    setError('');
+    try { settings.set(await api.setCustomerEmail(workspace.id, !settings.data.paused)); }
+    catch { setError('Pengaturan belum tersimpan. Coba lagi.'); }
+    finally { setBusy(false); }
+  }
+  return <section className="pcard int-card">
+    <div className="hd"><h2>Email pelanggan</h2></div>
+    <div className="bd">
+      <p>Worker portal mengantrekan email saat tiket dibuat dan ketika CS mengubah statusnya. Saat dijeda, email tetap berada dalam antrean.</p>
+      {settings.data && <Button disabled={busy} onClick={() => void toggle()}>{settings.data.paused ? 'Lanjutkan pengiriman' : 'Jeda pengiriman'}</Button>}
+      {settings.error != null && <p role="status">Pengaturan email belum dapat dimuat. <button onClick={settings.reload}>Coba lagi</button></p>}
+      {error && <p role="alert">{error}</p>}
+    </div>
+  </section>;
 }

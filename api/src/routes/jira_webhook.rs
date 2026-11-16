@@ -459,10 +459,14 @@ fn actor_name(payload: &Value) -> String {
 
 fn inbound_status<'a>(config: &'a Value, id: Option<&str>) -> Option<&'a str> {
     let id = id?;
-    let mut matches = config.get("statusMap")?.as_object()?.iter()
+    let mut matches = config
+        .get("statusMap")?
+        .as_object()?
+        .iter()
         .filter(|(_, value)| value.as_str() == Some(id));
     let (target, _) = matches.next()?;
-    if matches.next().is_none() && matches!(target.as_str(), "new" | "open" | "pending_engineering") {
+    if matches.next().is_none() && matches!(target.as_str(), "new" | "open" | "pending_engineering")
+    {
         Some(target.as_str())
     } else {
         None
@@ -550,7 +554,6 @@ async fn apply_issue(
                         serde_json::json!({"from": from, "to": target, "source": "jira", "issueKey": key}), &None).await?;
                 }
             }
-
         }
         if assignee_changed {
             let body = match (&assignee_name, &assignee_ref) {

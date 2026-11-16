@@ -739,7 +739,7 @@ async fn cp6a_webhook_is_signed_idempotent_and_applied_in_jira_order(pool: PgPoo
     let r = deliver(&st, &conn, None, Some(sign(&secret, b"\"x\"")), &json!("x")).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.raw);
 
-    // Status + assignee change: two timeline entries, written by Jira, ticket status unchanged.
+    // A mapped status advances the ticket once and records both Jira timeline entries.
     let t1 = now_ms();
     let ev = issue_updated(
         issue_id,
@@ -765,8 +765,8 @@ async fn cp6a_webhook_is_signed_idempotent_and_applied_in_jira_order(pool: PgPoo
         && s(&x["body"]).contains("Budi Jira (sintetis)")));
     assert_eq!(
         ticket_status(&pool, ticket).await,
-        before,
-        "Jira never moves the ticket"
+        ("open".to_owned(), before.1 + 1),
+        "a mapped active Jira status advances the ticket once"
     );
     let (ext, assignee): (Option<String>, Option<String>) = ok(
         sqlx::query_as(

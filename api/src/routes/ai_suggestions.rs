@@ -117,7 +117,9 @@ pub async fn suggest(
         "chronology" => {
             "Rapikan kronologi pengaduan menjadi paragraf singkat dan runtut. Pertahankan sudut pandang pelapor."
         }
-        "handover" => "Ringkas untuk serah terima CS. Buat tiga bagian singkat: masalah, tindakan yang sudah dilakukan, dan hal yang masih perlu diperiksa. Tandai informasi yang belum tersedia.",
+        "handover" => {
+            "Ringkas untuk serah terima CS. Buat tiga bagian singkat: masalah, tindakan yang sudah dilakukan, dan hal yang masih perlu diperiksa. Tandai informasi yang belum tersedia."
+        }
         "reply" => {
             "Susun draf balasan CS yang sopan dan empatik berdasarkan catatan petugas. Jangan mengaku sudah memeriksa atau menyelesaikan masalah."
         }
@@ -177,8 +179,10 @@ pub async fn suggest(
         client(&CLIENT, true, 12)?
             .post("https://api.openai.com/v1/responses")
             .bearer_auth(key)
-            .json(&json!({"model": model, "store": false, "max_output_tokens": 1200,
-                "instructions": instructions, "input": input}))
+            .json(
+                &json!({"model": model, "store": false, "max_output_tokens": 1200,
+                "instructions": instructions, "input": input}),
+            )
     };
     let mut response = request.send().await.map_err(|_| AppError::Unavailable)?;
     if !response.status().is_success() {

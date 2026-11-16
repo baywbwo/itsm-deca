@@ -157,3 +157,6 @@ export type AiProviderInput = S['AiProviderInput'];
 export type McpServerView = S['McpServerView'];
 export type McpServerInput = S['McpServerInput'];
 export type McpServerPatch = S['McpServerPatch'];
+
+export type WorkflowStage = S['WorkflowStage'];
+export type WorkflowStages = S['WorkflowStages'];

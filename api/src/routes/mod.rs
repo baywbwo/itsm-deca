@@ -3,6 +3,7 @@ pub mod ai_settings;
 pub mod ai_suggestions;
 pub mod attachments;
 pub mod catalogs;
+pub mod customer_email;
 pub mod dashboard;
 pub mod followup;
 pub mod health;
@@ -18,6 +19,7 @@ pub mod saved_views;
 pub mod session;
 pub mod settings;
 pub mod sso_admin;
+pub mod stages;
 pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
@@ -33,6 +35,14 @@ use crate::AppState;
 /// All `/api/v1` routes, declared with full paths so the session layer sees them as-is.
 /// Keep in sync with `openapi/openapi.json` (checked by `tests/contract.rs`).
 pub const API_ROUTES: &[(&str, &str)] = &[
+    ("get", "/api/v1/workspaces/{workspace_id}/customer-email"),
+    ("put", "/api/v1/workspaces/{workspace_id}/customer-email"),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/stages"),
+    ("put", "/api/v1/workspaces/{workspace_id}/stages"),
     ("post", jira_webhook::PATH),
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("get", "/api/v1/workspaces/{workspace_id}/ai-settings"),
@@ -291,6 +301,9 @@ pub fn ai_router() -> Router<AppState> {
 
 pub fn api_router() -> Router<AppState> {
     Router::new()
+        .route("/api/v1/workspaces/{workspace_id}/customer-email", get(customer_email::read).put(customer_email::update))
+        .route("/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation", post(intake::escalate))
+        .route("/api/v1/workspaces/{workspace_id}/stages", get(stages::list).put(stages::save))
         .route("/api/v1/login", post(password::login))
         .route("/api/v1/login/mfa", post(mfa::login_mfa))
         .route(
