@@ -34,6 +34,7 @@ struct TicketRow {
     chronology: String,
     received_at: String,
     workflow_status: String,
+    stage_code: Option<String>,
     cycle_no: i32,
     intake_channel_id: Option<Uuid>,
     priority_id: Option<Uuid>,
@@ -87,7 +88,7 @@ struct UnknownStatus;
 const TICKET_SELECT: &str = concat!(
     "SELECT id, number, number_prefix, subject, chronology, ",
     utc!("received_at"),
-    " AS received_at, workflow_status, cycle_no, intake_channel_id, priority_id, \
+    " AS received_at, workflow_status, stage_code, cycle_no, intake_channel_id, priority_id, \
      category_id, product_id, receiving_unit_id, region_id, merchant_id, owner_user_id, \
      transaction_activity, cause, foreign_branch_reference, version, ",
     utc!("created_at"),
@@ -112,6 +113,11 @@ pub async fn get_one(
         .ok_or(AppError::NotFound)?;
     let status = TicketStatus::from_code(&row.workflow_status)
         .ok_or_else(|| AppError::internal(UnknownStatus))?;
+    let stages = super::stages::load(&mut *state.pool.acquire().await?, ws.workspace_id).await?;
+    let stage = stages.iter().find(|s| {
+        s.code == row.stage_code.as_deref().unwrap_or(&row.workflow_status)
+            && s.lifecycle == row.workflow_status
+    });
     Ok(Json(TicketView {
         id: row.id,
         workspace_id: ws.workspace_id,
@@ -120,7 +126,9 @@ pub async fn get_one(
         subject: row.subject,
         chronology: row.chronology,
         received_at: row.received_at,
-        status: status.into(),
+        status: stage
+            .map(super::stages::Stage::status)
+            .unwrap_or_else(|| status.into()),
         cycle_no: row.cycle_no,
         intake_channel_id: row.intake_channel_id,
         priority_id: row.priority_id,

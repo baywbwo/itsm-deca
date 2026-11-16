@@ -766,7 +766,10 @@ async fn deliver(
                 .map(|p| format!(" · Prioritas {}", short(p, 60)))
                 .unwrap_or_default();
             let subject = short(&work.subject, 300);
-            let product = short(work.product_label.as_deref().unwrap_or("Belum dipilih"), 120);
+            let product = short(
+                work.product_label.as_deref().unwrap_or("Belum dipilih"),
+                120,
+            );
             let assignee = short(
                 work.jira_assignee_name
                     .as_deref()

@@ -12,8 +12,8 @@ export function Badge({ tone = 'neutral', children }: { tone?: BadgeTone; childr
  * Ticket status chip colour (owner prototype): Baru blue, Ditangani sapphire, Menunggu pelanggan
  * amber, Menunggu eksternal violet, Terselesaikan green, Ditutup grey. Unknown codes stay grey.
  */
-export function statusTone(s: Pick<TicketStatus, 'code'>): BadgeTone {
-  switch (s.code) {
+export function statusTone(s: Pick<TicketStatus, 'code' | 'lifecycleCode'>): BadgeTone {
+  switch (s.lifecycleCode ?? s.code) {
     case 'new': return 'blue';
     case 'open': return 'open';
     case 'pending_customer': return 'waiting';

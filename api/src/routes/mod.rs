@@ -19,6 +19,7 @@ pub mod saved_views;
 pub mod session;
 pub mod settings;
 pub mod sso_admin;
+pub mod stages;
 pub mod sync;
 pub mod ticket_detail;
 pub mod ticket_list;
@@ -36,7 +37,12 @@ use crate::AppState;
 pub const API_ROUTES: &[(&str, &str)] = &[
     ("get", "/api/v1/workspaces/{workspace_id}/customer-email"),
     ("put", "/api/v1/workspaces/{workspace_id}/customer-email"),
-    ("post", "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation"),
+    (
+        "post",
+        "/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation",
+    ),
+    ("get", "/api/v1/workspaces/{workspace_id}/stages"),
+    ("put", "/api/v1/workspaces/{workspace_id}/stages"),
     ("post", jira_webhook::PATH),
     ("post", "/api/v1/workspaces/{workspace_id}/ai-suggestions"),
     ("get", "/api/v1/workspaces/{workspace_id}/ai-settings"),
@@ -297,6 +303,7 @@ pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/workspaces/{workspace_id}/customer-email", get(customer_email::read).put(customer_email::update))
         .route("/api/v1/workspaces/{workspace_id}/tickets/{ticket_id}/escalation", post(intake::escalate))
+        .route("/api/v1/workspaces/{workspace_id}/stages", get(stages::list).put(stages::save))
         .route("/api/v1/login", post(password::login))
         .route("/api/v1/login/mfa", post(mfa::login_mfa))
         .route(

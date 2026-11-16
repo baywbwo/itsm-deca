@@ -1806,3 +1806,107 @@ async fn responses_conform_to_openapi(pool: PgPool) {
     .await;
     conforms(&e.json, &schemas["Error"], &root, "error");
 }
+
+#[sqlx::test(migrator = "itsm_api::db::MIGRATOR")]
+async fn workspace_stages_route_board_and_preserve_lifecycle(pool: PgPool) {
+    let fx = fixture(&pool).await;
+    let admin = tok(&pool, fx.admin).await;
+    let cs = tok(&pool, fx.cs).await;
+    let path = format!("/api/v1/workspaces/{}/stages", fx.a);
+    let custom = json!({"code":"stage_review","label":"Verifikasi internal","lifecycle":"open","sortOrder":25,"active":true,"version":0});
+    let put = |token: &Tok, value: &Value| {
+        Request::builder()
+            .method("PUT")
+            .uri(&path)
+            .header(header::COOKIE, cookie(token))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(session::CSRF_HEADER, &token.csrf)
+            .body(Body::from(value.to_string()))
+            .unwrap_or_else(|e| panic!("request: {e}"))
+    };
+    assert_eq!(
+        send(&pool, put(&cs, &custom)).await.status,
+        StatusCode::FORBIDDEN
+    );
+    let saved = send(&pool, put(&admin, &custom)).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.raw);
+    let mut custom = saved.json;
+    let id = simple(&pool, fx.a, fx.cs).await;
+    let transition = format!("/api/v1/workspaces/{}/tickets/{id}/transitions", fx.a);
+    let moved = post(
+        &pool,
+        &transition,
+        &cs,
+        &json!({"to":"stage_review","version":1}),
+    )
+    .await;
+    assert_eq!(moved.status, StatusCode::OK, "{}", moved.raw);
+    assert_eq!(
+        moved.json["ticket"]["status"]["label"],
+        "Verifikasi internal"
+    );
+    assert_eq!(moved.json["ticket"]["status"]["lifecycleCode"], "open");
+    let board = get(
+        &pool,
+        &format!("/api/v1/workspaces/{}/tickets/board", fx.a),
+        &cs,
+    )
+    .await;
+    assert_eq!(board.status, StatusCode::OK, "{}", board.raw);
+    let column = board.json["columns"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected fixture value"))
+        .iter()
+        .find(|c| c["status"]["code"] == "stage_review")
+        .unwrap_or_else(|| panic!("expected fixture value"));
+    assert!(
+        column["items"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected fixture value"))
+            .iter()
+            .any(|t| t["id"] == id.to_string())
+    );
+    custom["active"] = false.into();
+    assert_eq!(
+        send(&pool, put(&admin, &custom)).await.json["error"]["code"],
+        "stage_in_use"
+    );
+    let summary = post(
+        &pool,
+        &transition,
+        &cs,
+        &json!({"to":"resolved","version":2,"summary":"Diverifikasi (uji)"}),
+    )
+    .await;
+    assert_eq!(summary.status, StatusCode::OK, "{}", summary.raw);
+    assert_eq!(
+        send(&pool, put(&admin, &custom)).await.status,
+        StatusCode::OK
+    );
+    let ended = get(
+        &pool,
+        &format!("/api/v1/workspaces/{}/tickets/board", fx.a),
+        &cs,
+    )
+    .await;
+    assert!(
+        !ended.json["columns"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected fixture value"))
+            .iter()
+            .any(|c| c["status"]["code"] == "stage_review")
+    );
+    let other = get(
+        &pool,
+        &format!("/api/v1/workspaces/{}/stages", fx.b),
+        &admin,
+    )
+    .await;
+    assert!(
+        !other.json["items"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected fixture value"))
+            .iter()
+            .any(|c| c["code"] == "stage_review")
+    );
+}

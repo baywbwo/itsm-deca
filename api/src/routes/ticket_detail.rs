@@ -455,8 +455,8 @@ pub(crate) fn activity_label(action: &str, c: &serde_json::Value) -> String {
         "ticket.create" => "Membuat tiket".to_owned(),
         "ticket.transition" => format!(
             "Mengubah status {} → {}",
-            status_label(s("from")),
-            status_label(s("to"))
+            s("fromStage").unwrap_or_else(|| status_label(s("from"))),
+            s("toStage").unwrap_or_else(|| status_label(s("to")))
         ),
         "ticket.assign" => match (s("kind"), c.get("to").is_some_and(|v| v.is_null())) {
             (Some("take_for_self"), _) => "Mengambil tiket sebagai PIC".to_owned(),

@@ -59,8 +59,10 @@ impl TicketStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TicketStatusView {
-    pub code: &'static str,
-    pub label: &'static str,
+    pub code: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle_code: Option<String>,
     pub selectable: bool,
     pub archived: bool,
 }
@@ -68,8 +70,9 @@ pub struct TicketStatusView {
 impl From<TicketStatus> for TicketStatusView {
     fn from(s: TicketStatus) -> Self {
         TicketStatusView {
-            code: s.code(),
-            label: s.label(),
+            code: s.code().to_owned(),
+            label: s.label().to_owned(),
+            lifecycle_code: None,
             selectable: s.selectable(),
             archived: !s.selectable(),
         }

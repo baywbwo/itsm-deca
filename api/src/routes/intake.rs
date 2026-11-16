@@ -182,7 +182,10 @@ fn normalize(b: CreateBody, received_at: String) -> Result<Normalized, AppError>
     })
 }
 
-fn assignment(jira: Option<JiraBody>, lark_destination_id: Option<Uuid>) -> Result<Assignment, AppError> {
+fn assignment(
+    jira: Option<JiraBody>,
+    lark_destination_id: Option<Uuid>,
+) -> Result<Assignment, AppError> {
     let (jira_mode, jira_title, jira_issue_key, jira_assignee_id) = match jira {
         None => (JiraMode::None, None, None, None),
         Some(j) => match j.mode {
@@ -208,7 +211,12 @@ fn assignment(jira: Option<JiraBody>, lark_destination_id: Option<Uuid>) -> Resu
             }
         },
     };
-    Ok(Assignment { jira_mode, jira_title, jira_issue_key, jira_assignee_id, lark_destination_id
+    Ok(Assignment {
+        jira_mode,
+        jira_title,
+        jira_issue_key,
+        jira_assignee_id,
+        lark_destination_id,
     })
 }
 
@@ -341,6 +349,10 @@ pub async fn create(
     let corr = correlation(&headers);
 
     let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM workspaces WHERE id=$1 FOR SHARE")
+        .bind(ws)
+        .execute(&mut *tx)
+        .await?;
     // Serializes concurrent submits of the same key; the unique key is the backstop.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(format!("ticket-create:{ws}:{}:{key}", access.user_id))
@@ -445,7 +457,16 @@ pub async fn create(
     .fetch_one(&mut *tx)
     .await?;
 
-    enqueue_assignment(&mut tx, &state, &access, ticket_id, &n.assignment, &corr, "").await?;
+    enqueue_assignment(
+        &mut tx,
+        &state,
+        &access,
+        ticket_id,
+        &n.assignment,
+        &corr,
+        "",
+    )
+    .await?;
     // Ids and flags only: subject, chronology and merchant data stay out of the audit row.
     ticket_list::audit(
         &mut tx,
@@ -487,8 +508,15 @@ pub async fn create(
     ))
 }
 
-async fn enqueue_assignment(tx: &mut PgConnection, state: &AppState, access: &WorkspaceAccess,
-    ticket_id: Uuid, n: &Assignment, corr: &Option<String>, suffix: &str) -> Result<(), AppError> {
+async fn enqueue_assignment(
+    tx: &mut PgConnection,
+    state: &AppState,
+    access: &WorkspaceAccess,
+    ticket_id: Uuid,
+    n: &Assignment,
+    corr: &Option<String>,
+    suffix: &str,
+) -> Result<(), AppError> {
     let ws = access.workspace_id;
     // Jira: connection, assignee and (link) the existing issue, all in this workspace. Only a
     // connection active in the server's mode is used; live mode never takes a dummy entry.
@@ -631,9 +659,13 @@ pub struct EscalationBody {
     lark_destination_id: Option<Uuid>,
 }
 
-pub async fn escalate(State(state): State<AppState>, session: Session, headers: HeaderMap,
-    Path((raw_ws, raw_ticket)): Path<(String,String)>, payload: Result<Json<EscalationBody>, JsonRejection>)
-    -> Result<StatusCode, AppError> {
+pub async fn escalate(
+    State(state): State<AppState>,
+    session: Session,
+    headers: HeaderMap,
+    Path((raw_ws, raw_ticket)): Path<(String, String)>,
+    payload: Result<Json<EscalationBody>, JsonRejection>,
+) -> Result<StatusCode, AppError> {
     let ws = parse_id(&raw_ws)?;
     let id = parse_id(&raw_ticket)?;
     let access = authz::resolve(&state, &session, ws).await?;
@@ -645,14 +677,35 @@ pub async fn escalate(State(state): State<AppState>, session: Session, headers: 
     }
     let corr = correlation(&headers);
     let mut tx = state.pool.begin().await?;
-    let (version, status): (i32,String) = sqlx::query_as(
-        "SELECT version, workflow_status FROM tickets WHERE workspace_id=$1 AND id=$2 FOR UPDATE")
-        .bind(ws).bind(id).fetch_optional(&mut *tx).await?.ok_or(AppError::NotFound)?;
-    if version != b.version { return Err(AppError::VersionConflict); }
-    if status == "closed" || status == "resolved" { return Err(AppError::RuleViolation); }
-    enqueue_assignment(&mut tx, &state, &access, id, &selection, &corr, &format!(":escalate:{version}")).await?;
+    let (version, status): (i32, String) = sqlx::query_as(
+        "SELECT version, workflow_status FROM tickets WHERE workspace_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(ws)
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    if version != b.version {
+        return Err(AppError::VersionConflict);
+    }
+    if status == "closed" || status == "resolved" {
+        return Err(AppError::RuleViolation);
+    }
+    enqueue_assignment(
+        &mut tx,
+        &state,
+        &access,
+        id,
+        &selection,
+        &corr,
+        &format!(":escalate:{version}"),
+    )
+    .await?;
     sqlx::query("UPDATE tickets SET version=version+1 WHERE workspace_id=$1 AND id=$2")
-        .bind(ws).bind(id).execute(&mut *tx).await?;
+        .bind(ws)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     ticket_list::audit(&mut tx,&access,"ticket.escalate",id,
         serde_json::json!({"jira":selection.jira_mode,"lark":selection.lark_destination_id.is_some()}),corr.clone()).await?;
     tx.commit().await?;

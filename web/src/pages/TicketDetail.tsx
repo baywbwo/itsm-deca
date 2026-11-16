@@ -94,7 +94,7 @@ export function TicketDetailView({ api, workspace, ticketId, full, refresh, canA
       {detail && t && (() => {
         const p = detail.properties;
         const open = !t.status.archived;
-        const canEscalate = detail.can.manageRelatedWork && open && t.status.code !== 'resolved';
+        const canEscalate = detail.can.manageRelatedWork && open && (t.status.lifecycleCode ?? t.status.code) !== 'resolved';
         return (
           <>
             <header className="dhead">
@@ -460,7 +460,7 @@ function Work({ api, workspace, detail, onSaved, onReload }: {
   const [notice, setNotice] = useState<string | null>(null);
   // One key per opened form: a resend after a lost answer replays instead of creating twice.
   const key = useRef(newKey());
-  const resolvedOrClosed = t.status.code === 'resolved' || t.status.archived;
+  const resolvedOrClosed = (t.status.lifecycleCode ?? t.status.code) === 'resolved' || t.status.archived;
   async function add() {
     if (busy) return;
     if (!title.trim()) { setFieldErr('Judul pekerjaan wajib diisi.'); document.getElementById(`${id}-title`)?.focus(); return; }

@@ -760,7 +760,9 @@
                   "integration_mode_mismatch",
                   "idp_not_ready",
                   "subject_linked",
-                  "user_linked"
+                  "user_linked",
+                  "stage_in_use",
+                  "required_stage"
                 ]
               },
               "message": {
@@ -1174,15 +1176,7 @@
         ],
         "properties": {
           "code": {
-            "type": "string",
-            "enum": [
-              "new",
-              "open",
-              "pending_customer",
-              "pending_engineering",
-              "resolved",
-              "closed"
-            ]
+            "$ref": "#/components/schemas/TicketStatusCode"
           },
           "label": {
             "type": "string",
@@ -1195,6 +1189,17 @@
           },
           "archived": {
             "type": "boolean"
+          },
+          "lifecycleCode": {
+            "type": "string",
+            "enum": [
+              "new",
+              "open",
+              "pending_customer",
+              "pending_engineering",
+              "resolved",
+              "closed"
+            ]
           }
         }
       },
@@ -1923,14 +1928,8 @@
       },
       "TicketStatusCode": {
         "type": "string",
-        "enum": [
-          "new",
-          "open",
-          "pending_customer",
-          "pending_engineering",
-          "resolved",
-          "closed"
-        ]
+        "minLength": 1,
+        "maxLength": 64
       },
       "DashboardPeriod": {
         "type": "object",
@@ -6884,6 +6883,56 @@
           }
         },
         "additionalProperties": false
+      },
+      "WorkflowStage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label",
+          "lifecycle",
+          "sortOrder",
+          "active",
+          "version"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lifecycle": {
+            "type": "string"
+          },
+          "sortOrder": {
+            "type": "integer"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          }
+        }
+      },
+      "WorkflowStages": {
+        "type": "object",
+        "required": [
+          "items",
+          "canEdit"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStage"
+            }
+          },
+          "canEdit": {
+            "type": "boolean"
+          }
+        }
       }
     },
     "responses": {
@@ -14093,6 +14142,70 @@
         "responses": {
           "204": {
             "description": "Escalation recorded"
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/stages": {
+      "get": {
+        "operationId": "getWorkflowStages",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Workspace stages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStages"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "saveWorkflowStage",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowStage"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved stage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowStage"
+                }
+              }
+            }
           }
         }
       }
