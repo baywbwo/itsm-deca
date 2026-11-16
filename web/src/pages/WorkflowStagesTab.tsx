@@ -23,13 +23,13 @@ export function WorkflowStagesTab({api,workspace}: {api:Api;workspace:Workspace}
    e instanceof Error?e.message:'Pengaturan belum tersimpan.');}
   finally{setBusy(false);}
  }
- return <section>
+ return <section className="bd">
   <h2>Status &amp; stage tiket</h2>
-  <p>Atur nama dan urutan kolom board. Fungsi stage menentukan alur penanganan, ringkasan penyelesaian, dan pembukaan kembali tiket.</p>
+  <p className="hintline spaced-bottom">Atur nama dan urutan kolom board. Fungsi stage menentukan alur penanganan, ringkasan penyelesaian, dan pembukaan kembali tiket.</p>
   {state.error!=null&&<p role="alert">Pengaturan gagal dimuat. <Button onClick={state.reload}>Coba lagi</Button></p>}
   {!state.data&&!state.error&&<p>Memuat stage…</p>}
   {state.data&&<>
-   {state.data.canEdit&&<Button onClick={()=>edit({code:'stage_'+crypto.randomUUID().replaceAll('-',''),label:'',lifecycle:'open',sortOrder:Math.min(10000,Math.max(0,...state.data!.items.map(x=>x.sortOrder))+10),active:true,version:0})}>Tambah stage</Button>}
+   {state.data.canEdit&&<div className="row spaced-bottom"><Button onClick={()=>edit({code:'stage_'+crypto.randomUUID().replaceAll('-',''),label:'',lifecycle:'open',sortOrder:Math.min(10000,Math.max(0,...state.data!.items.map(x=>x.sortOrder))+10),active:true,version:0})}>Tambah stage</Button></div>}
    <DataTable caption="Stage tiket perusahaan" rows={state.data.items} rowKey={stage=>stage.code}
      empty={{title:'Belum ada stage',body:'Tambahkan stage untuk alur tiket.'}}
      columns={[
