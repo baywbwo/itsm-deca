@@ -1379,11 +1379,11 @@ pub async fn transition(
     .bind(access.workspace_id)
     .fetch_one(&mut *tx)
     .await?;
-    if current_stage == target.code {
-        return Err(AppError::RuleViolation);
-    }
     if t.version != b.version {
         return Err(AppError::VersionConflict);
+    }
+    if current_stage == target.code {
+        return Err(AppError::RuleViolation);
     }
     let kind = match (from, to) {
         // Closed is an archive and never a target (close final is held).
