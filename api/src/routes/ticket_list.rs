@@ -1447,7 +1447,10 @@ pub async fn transition(
     .await?;
     // CP6a: move every linked Jira issue whose connection maps the new status, in the same
     // transaction (the outbox worker delivers; Jira never changes the ticket status back).
-    let jira_intents = sqlx::query_scalar::<_, i64>(
+    let jira_intents = if from == to {
+        0
+    } else {
+        sqlx::query_scalar::<_, i64>(
         "WITH q AS (INSERT INTO integration_outbox (workspace_id, ticket_id, connection_id, provider, \
            operation, related_work_id, idempotency_key, correlation_id, target_ticket_status) \
          SELECT r.workspace_id, r.ticket_id, ji.connection_id, 'jira', 'jira_transition_issue', r.id, \
@@ -1466,7 +1469,8 @@ pub async fn transition(
     .bind(correlation(&headers))
     .bind(state.config.integrations.mode.as_str())
     .fetch_one(&mut *tx)
-    .await?;
+    .await?
+    };
     let from_stage_label = stages::load(&mut tx, access.workspace_id)
         .await?
         .iter()
