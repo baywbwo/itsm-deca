@@ -23,7 +23,7 @@ export function WorkflowStagesTab({api,workspace}: {api:Api;workspace:Workspace}
    e instanceof Error?e.message:'Pengaturan belum tersimpan.');}
   finally{setBusy(false);}
  }
- return <section className="bd">
+ return <section className="set-sec"><div className="bd">
   <h2>Status &amp; stage tiket</h2>
   <p className="hintline spaced-bottom">Atur nama dan urutan kolom board. Fungsi stage menentukan alur penanganan, ringkasan penyelesaian, dan pembukaan kembali tiket.</p>
   {state.error!=null&&<p role="alert">Pengaturan gagal dimuat. <Button onClick={state.reload}>Coba lagi</Button></p>}
@@ -51,5 +51,5 @@ export function WorkflowStagesTab({api,workspace}: {api:Api;workspace:Workspace}
     {error&&<p role="alert" className="full">{error}</p>}
    </form>
   </Dialog>}
- </section>;
+ </div></section>;
 }
