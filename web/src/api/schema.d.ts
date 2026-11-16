@@ -3982,8 +3982,6 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque `nextCursor` of the previous page. A cursor from another workspace, filter or sort is 400. */
                 cursor?: string;
-                /** @description Exact workspace stage code, used to continue a board column. */
-                stage?: string;
             };
             header?: never;
             path: {
@@ -4085,8 +4083,6 @@ export interface operations {
                 order?: components["schemas"]["SortOrder"];
                 /** @description Items per column 1–50. */
                 limit?: number;
-                /** @description Exact workspace stage code, used to continue a board column. */
-                stage?: string;
             };
             header?: never;
             path: {

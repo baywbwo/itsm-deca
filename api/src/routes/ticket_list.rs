@@ -69,7 +69,6 @@ macro_rules! utc {
 pub struct ListQuery {
     pub(crate) q: Option<String>,
     pub(crate) status: Option<String>,
-    pub(crate) stage: Option<String>,
     pub(crate) owner: Option<String>,
     pub(crate) channel: Option<String>,
     pub(crate) category: Option<String>,
@@ -267,11 +266,7 @@ impl TicketQuery {
             }
         };
         Ok(TicketQuery {
-            stages: q
-                .stage
-                .as_ref()
-                .map(|s| vec![s.clone()])
-                .or_else(|| (!stage_codes.is_empty()).then_some(stage_codes)),
+            stages: (!stage_codes.is_empty()).then_some(stage_codes),
             q: search,
             status,
             owner: Dim::parse(non_empty(q.owner.as_deref()), UNASSIGNED).ok_or_else(bad)?,
@@ -363,10 +358,17 @@ impl TicketQuery {
     }
 
     fn with_stage(&self, code: &str) -> TicketQuery {
-        TicketQuery {
-            status: None,
-            stages: Some(vec![code.to_owned()]),
-            ..self.clone()
+        match TicketStatus::from_code(code) {
+            Some(status) => TicketQuery {
+                status: Some(vec![status]),
+                stages: None,
+                ..self.clone()
+            },
+            None => TicketQuery {
+                status: None,
+                stages: Some(vec![code.to_owned()]),
+                ..self.clone()
+            },
         }
     }
 
@@ -1175,10 +1177,7 @@ pub async fn board(
     let counts = stage_counts(&mut tx, ws, &f).await?;
     let selected = counts.into_iter().filter(|c| {
         (f.status.is_none() && f.stages.is_none())
-            || f.status
-                .iter()
-                .flatten()
-                .any(|s| s.code() == c.status.lifecycle_code.as_deref().unwrap_or(&c.status.code))
+            || f.status.iter().flatten().any(|s| s.code() == c.status.code)
             || f.stages.iter().flatten().any(|s| s == &c.status.code)
     });
     let mut columns = Vec::new();

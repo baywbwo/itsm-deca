@@ -763,8 +763,7 @@ function BoardView({ api, workspace, board, apiQuery, filtered, canCreate, onOpe
     ctls.current.set(code, c);
     setCols((s) => ({ ...s, [code]: { ...s[code]!, status: 'loading' } }));
     const q = new URLSearchParams(apiQuery);
-    q.delete('status');
-    q.set('stage', code);
+    q.set('status', code);
     try {
       const page = await api.listTickets(workspace.id, q.toString(), col.cursor, c.signal);
       setCols((s) => {
