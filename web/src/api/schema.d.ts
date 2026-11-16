@@ -7771,6 +7771,7 @@ export interface operations {
                     "application/json": components["schemas"]["CustomerEmailDelivery"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     putCustomerEmailDelivery: {
@@ -7798,6 +7799,7 @@ export interface operations {
                     "application/json": components["schemas"]["CustomerEmailDelivery"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     escalateTicket: {
@@ -7830,6 +7832,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     getWorkflowStages: {
@@ -7852,6 +7855,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkflowStages"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
     saveWorkflowStage: {
@@ -7878,6 +7882,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkflowStage"];
                 };
             };
+            429: components["responses"]["RateLimited"];
         };
     };
 }

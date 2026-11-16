@@ -14075,6 +14075,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "operationId": "getCustomerEmailDelivery"
@@ -14095,6 +14098,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         },
         "operationId": "putCustomerEmailDelivery",
@@ -14160,6 +14166,9 @@
         "responses": {
           "204": {
             "description": "Escalation recorded"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }
@@ -14188,6 +14197,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       },
@@ -14224,6 +14236,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           }
         }
       }

@@ -506,7 +506,7 @@ fn push_scope(b: &mut QueryBuilder<'_, Postgres>, ws: Uuid, f: &TicketQuery, wit
             .map(|s| s.code().to_owned())
             .collect();
         let stages: Vec<String> = f.stages.iter().flatten().cloned().collect();
-        b.push(" AND (t.workflow_status = ANY(")
+        b.push(" AND ((CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END) = ANY(")
             .push_bind(codes)
             .push(") OR (CASE WHEN t.workflow_status='closed' THEN 'closed' ELSE coalesce(t.stage_code,t.workflow_status) END) = ANY(")
             .push_bind(stages)
